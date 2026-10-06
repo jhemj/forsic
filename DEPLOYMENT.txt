@@ -1,0 +1,226 @@
+Forsic Linux deployment / release checklist
+=========================================
+
+Scope
+-----
+This is the source release of the local Hermes-based Forsic web workspace, not a
+self-contained appliance. The target is Linux with a system Python bootstrap,
+an existing trusted Ollama endpoint/model, and the pinned Hermes PM toolchain.
+Docker and libewf utilities (ewfinfo/ewfverify) are needed for image analysis;
+user systemd is optional for persistent operation. Windows/macOS-native deployment
+is not validated. Setup success does not establish forensic analytical correctness.
+
+Default UI binding is 127.0.0.1:8860; authentication remains Hermes native. Never
+expose it by changing to 0.0.0.0 without a separate TLS/auth/network deployment
+review. Use a local browser or an operator-controlled SSH tunnel. Start as a normal
+user, not root. Docker access is host-level privilege: grant it only to the service
+operator, not to the model. Only Dissect filesystem access (image_files) uses the
+Docker container with read-only evidence mounts and no network/capabilities.
+ewfinfo and ewfverify run as host subprocesses, outside that container isolation.
+Allocated-image file access is not deleted-file carving. Removing upstream admin
+UI does not remove authenticated native backend administration routes. This remains
+a local single-operator deployment, not a reduced-privilege multi-user service.
+
+Release contents
+----------------
+For a clean directory suitable for a new public repository, from the maintained
+source checkout (use a NEW path outside the operational checkout):
+  python3 deploy_forsic.py export /ABS/NEW/forsic-source
+
+The directory itself contains the source, without a second forsic subdirectory.
+Existing destinations are refused. No Git repository is created or pushed. Never
+publish the working installation by running an indiscriminate git add there.
+
+For a distributable source archive:
+  python3 deploy_forsic.py bundle /tmp/forsic-source-VERSION.tar.gz
+
+Both commands are offline. They use the same Linux-web source profile: explicit
+Forsic source trees, pinned Hermes sources with local changes, original license
+notices, and three harmless synthetic fixture files. The archive has a forsic/
+top-level directory. source-manifest.json (schema forsic.source-release.v2) records
+file SHA-256 values and modes, changed upstream files and omitted paths/reasons.
+
+The public profile omits standalone desktop/installer product assets, upstream
+documentation-site assets, benchmarks, contributor media, upstream-only CI and
+unmodified unrelated Python tests. Shared app sources, npm workspace manifests,
+the runtime model catalog, web/TUI, PM/lock/build support and required runtime
+modules remain. Changed product tests and shared test fixtures are retained; the
+complete upstream suite belongs in the original pinned checkout. This is source
+distribution trimming, not removal of the runtime dependency graph.
+
+state/, real evidence, operational config/services, keys, Git history, installed
+runtimes/dependencies and historical monitor documents are NOT included. Review
+the export and manifest for sensitive content before publishing. An allowlist is
+not a guarantee that a future source edit is free of secrets. Forsic-specific code
+uses the root MIT LICENSE. Keep it, THIRD_PARTY_NOTICES.txt and the unchanged
+upstream license notices in the public source. Built runtimes and parser images
+also require the notices and terms of their actual installed dependencies.
+
+An unmodified exported tree can run bundle without Git: its manifest is verified
+before packaging. The same selected source produces a deterministic archive. A
+hash mismatch refuses re-bundling; do not edit the manifest to hide local changes.
+Maintained source changes need a new reviewed release manifest. No helper command
+uploads source or installs runtime dependencies.
+
+New installation (explicit operator actions; not run by the helper)
+----------------------------------------------------------------
+1. Clone the public source into a new operator-owned directory:
+     git clone https://github.com/jhemj/forsic.git
+     cd forsic
+   Alternatively, verify a source archive SHA-256 and extract it into a new
+   directory. Do not overwrite a running installation. Keep the source root
+   as the working directory for the following steps.
+
+2. Generate NEW local state (refuses any existing state directory):
+     python3 deploy_forsic.py init --ollama-url http://127.0.0.1:11434/v1 --model YOUR_INSTALLED_MODEL
+   Replace the URL only with the approved private Ollama IP if it is remote.
+   Replace YOUR_INSTALLED_MODEL with the exact existing model name. Init neither
+   downloads a model nor verifies its tool-call/context support. The initial
+   context setting is 65536; validate available memory and model behavior before
+   using real evidence. Do not infer compatibility from an OpenAI-shaped API alone.
+   This writes owner-only JSON-as-YAML configuration, relative native plugin/SOUL/
+   theme links, a harmless synthetic case manifest and an uninstalled systemd
+   user unit at state/deployment/forsic-web.service. It calls no APIs, does not load
+   a model, and does not enable Telegram, GTI, JEV or external fallback. The initial
+   URL/model are operator configuration, not proof of availability or identity.
+
+3. Prepare dependencies using PINNED HERMES PM, not global pip, a second venv or
+   an edited upstream lockfile. This step may download tools/packages and therefore
+   requires the operator's network/install approval:
+     export HERMES_HOME="$PWD/state/hermes"
+     export HERMES_RUNTIME_DIR="$PWD/state/tools"
+     export PYTHONPATH="$PWD/upstream/hermes:$PWD"
+     python3 -m pm.cli install python node npm ffmpeg ripgrep
+     python3 -m pm.cli install --extra web
+   The native plugin.yaml python_dependencies declares the pinned Word/XML/Telegram
+   packages, allowing PM to build one dependency environment. requirements-forsic.txt
+   remains an audit list, not a separate install instruction. Do not activate upstream
+   features beyond the explicit web extra. The first command prepares tools and the
+   second selects web plus the enabled native plugin dependencies for a fresh home.
+   The pinned upstream requires ffmpeg and ripgrep before environment activation,
+   even though Forsic does not expose media/shell tools to the investigation model.
+   They are PM-managed runtime prerequisites, not permissions to use extra tools.
+   Do not activate upstream test/all extras merely to run the product. The upstream
+   setup-hermes.sh is a developer setup that also prepares all/test and optional
+   tools; it is not this
+   lean product's bootstrap command. Follow pinned PM diagnostics if the
+   existing environment must be rebuilt; do not silently keep an incompatible one.
+
+4. Build the two native source frontends through Hermes's existing builder after
+   approved Node/npm dependencies are prepared:
+     python3 run.py -c "from pathlib import Path; from hermes_cli.source_build import source_build_env, prepare_source_dependencies, build_source_tui, build_source_web; p=Path('upstream/hermes').resolve(); e=source_build_env(explicit=True); prepare_source_dependencies(p, ('ui-tui','web'), env=e, explicit=True); build_source_tui(p, env=e); build_source_web(p, env=e)"
+   run.py deliberately uses --skip-build; missing/stale frontend output must be
+   built before launch. There is no separate Forsic web build framework.
+
+5. For E01 access, prepare the existing isolated parser image only with operator
+   approval (Docker build may download its base and packages):
+     docker build -f Dockerfile.tools -t forsic-dissect:3.25.1 .
+   Have ewfinfo/ewfverify installed on the host through the OS package manager.
+   These steps were not silently performed by this deployment helper.
+
+6. Run the read-only doctor with the PM-selected application Python, NOT arbitrary
+   system Python: python3 run.py deploy_forsic.py doctor
+   It checks local files, dependency versions, links, private configuration and
+   permission modes; it does not call Ollama/Telegram/GTI/Docker or load a model.
+   It explicitly lists unverified items. Passing is a prerequisite, not acceptance.
+   Then start with python3 run.py. Open http://127.0.0.1:8860/chat and authenticate
+   using the native dashboard flow. Enter secrets only in the connection settings
+   or the private state/hermes/.env (0600), never command arguments/source files.
+
+7. Optional persistent user service: inspect and copy the GENERATED unit to the
+   operator's ~/.config/systemd/user/forsic-web.service, then daemon-reload/enable/
+   start it explicitly. It uses loopback run.py, UMask=0077 and Restart=no so a crash
+   is not treated as authority to repeat an uncertain investigation request. Keep
+   service lifecycle under the operator's control. No unit is installed by init.
+
+Telegram and other integrations
+------------------------------
+Telegram mirroring requires both the assistant bot and a distinct user-mirror bot,
+the chosen trusted group, enabled forum topics and appropriate bot permissions.
+Do not put token values in a unit or arguments. Refer to the current README for
+the native case-topic mirror and optional --mentions switch; incoming mentions
+are limited to the configured group and an existing bound case topic. They do
+not authorize new evidence paths, tools or external destinations. Test one real
+mention/reply in the chosen group before declaring this feature accepted. New
+installations do not inherit the developer's group, sessions or cursors.
+After configuring the private credentials and selecting a real case, run exactly
+one mirror for that assistant bot (replace the placeholders with existing IDs):
+  python3 run.py telegram_mirror.py --cases --state state/telegram-cases.json --session EXISTING_SESSION_ID --chat-id GROUP_NUMERIC_ID --group GROUP_LABEL --mentions
+Alternatively save the group ID or public @username/t.me URL in Connection
+Settings, then omit --chat-id when explicitly starting the mirror in that same
+profile. Private invite URLs (t.me/+... or joinchat) are not group identifiers.
+--group is an optional title check; an explicit --chat-id overrides the saved
+address. Saving settings does not move existing case topics or restart a mirror.
+The resolved numeric group must still match the existing state file; changing
+destinations requires a separately authorized setup, not reuse of old cursors.
+Omit --mentions for outgoing mirroring only. To persist this process, reuse the
+generated unit structure with this exact command and the same WorkingDirectory;
+do not copy the development machine's old unit with its group/session identifiers.
+Add --reports when this group is also the intended report recipient. Only a future
+bundle explicitly selected by forsic_reporting(finalize) is sent: executive and
+practitioner HTML/Word, four files. Rendering drafts does not send attachments;
+old bundles are not backfilled and uncertain document delivery is not resent.
+Material corrections hold unsent old reports; a newer selected final copy replaces
+older queued copies. Turn bookkeeping alone does not stale a report. Sent/unknown
+receipts remain intact. Reports may contain sensitive findings: recipients must
+be approved for those contents, not just for harmless progress notifications.
+VT/GTI is optional and requires an explicitly configured key/lookup policy. JEV
+is inactive. Do not enable extra gateways or poll the same bot from two processes.
+An active native turn with matching case activity displays Telegram's ephemeral
+typing indicator, refreshed about every four seconds. Actual report-file transfers
+take precedence with upload_document. Waiting/finished turns stop refreshing; the
+last indicator expires within Telegram's five-second window. These are not messages
+or evidence of investigation completion, and indicator failure cannot block replies.
+
+Acceptance / smoke
+------------------
+Offline check with the selected runtime (no model/API calls):
+  python3 run.py -m unittest test_evidence test_workflow test_case_library test_intake test_improvements test_investigations test_telegram_mirror test_telegram_mentions test_telegram_reports test_telegram_actions test_report_driven test_timeline_recovery test_connections test_note_revision_recovery test_harness_guidance test_report_review_projection test_reporting_pages test_deployment
+Use the PM Node interpreter for: node test_dashboard.cjs.
+Additional offline product regressions:
+  python3 run.py -m unittest test_indicators test_indicator_integration test_search_resume test_log_timeline
+These use synthetic temporary evidence only. They do not call a model, query VT,
+send Telegram messages, start image containers or resume an investigation.
+After updating plugin code, apply it at a confirmed idle boundary with an explicit
+service restart; an old running process is not proof the new tools/UI are active.
+Use the explicit list rather than broad discovery: local development checkouts
+may also contain live-image probes that are intentionally absent from the release.
+test_deployment runs only synthetic temporary fixtures and never starts a service.
+After explicit local-model consent, a bounded synthetic four-file workflow is:
+  python3 run.py smoke.py --live --workflow
+The --live flag is required; no live smoke is run by doctor/init/bundle. Smoke uses
+the configured private model/endpoint, the generated synthetic fixture, existing
+Hermes client and current forsic_reporting route. It is not forensic E01 acceptance.
+Verify assistant messages, tool receipts, note citations and both HTML/Word reports;
+file creation and native goal completion alone do not prove a correct conclusion.
+
+Safe update, backup and rollback
+-------------------------------
+Never hot-replace code or restart during an investigation turn or EWF verification.
+Prevent new web/Telegram inputs, use native /goal pause, and allow the current turn
+to finish. Run python3 deploy_forsic.py idle; it reads SQLite with mode=ro/query_only
+and verification receipts. Any goal/lease/running verification or unreadable state
+blocks an idle result. It does not expire a lease, kill a PID or resolve unknown
+delivery. This snapshot is NOT a lock; keep inputs disabled and recheck immediately
+before stopping the service. If activity is uncertain, wait or ask the operator.
+
+After confirmed idle, stop the exact Forsic services. Back up state/ and source to
+an operator-private destination, preserving modes/symlinks, with all processes stopped
+so SQLite DB/WAL and filesystem artifacts are consistent. Keep evidence roots in
+place; no source release contains them. Record backup hashes, prior source manifest,
+PM selection and service units. Store secrets with the same restricted access.
+Do not upload this recovery backup. Deploy the new source without overwriting state,
+prepare PM/build only after approval, and run doctor/offline tests before launch.
+If rollback is necessary, stop safely again and restore the matching source AND
+matching pre-update state backup. Do not overwrite newer investigation work: preserve
+it separately for review first. Restoring an old database alone is not a valid
+schema/data rollback. Do not automatically resume paused goals or resend uncertain
+Telegram/model requests. Resume explicitly in the original case after validation.
+
+Known release boundary
+----------------------
+This helper supplies portable preparation and checks, not an installer daemon,
+model adapter, gateway or recovery scheduler. A clean-machine install/build,
+browser behavior, group mention round-trip and corrected real-case report quality
+must be measured separately. Existing-machine offline tests are not evidence that
+all those acceptance tests have passed. No semantic-completion claim is made here.

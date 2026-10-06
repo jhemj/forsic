@@ -1,0 +1,44 @@
+# Documentation/test template only; init generates the location-specific private copy.
+model:
+  provider: custom
+  default: qwen3.8:latest
+  base_url: http://127.0.0.1:11434/v1
+  context_length: 65536
+  ollama_num_ctx: 65536
+_config_version: 49
+fallback_model: {}
+providers:
+  custom: {request_timeout_seconds: 900, stale_timeout_seconds: 900}
+tools:
+  tool_search: {enabled: 'off'}
+reasoning: {enabled: false}
+auxiliary:
+  report_review: {timeout: 900}
+  goal_judge: {provider: custom, model: 'qwen3.8:latest', base_url: 'http://127.0.0.1:11434/v1', api_key: ollama, timeout: 120, max_tokens: 1024}
+  title: {provider: custom, model: 'qwen3.8:latest', base_url: 'http://127.0.0.1:11434/v1', api_key: ollama}
+  compression: {provider: custom, model: 'qwen3.8:latest', base_url: 'http://127.0.0.1:11434/v1', api_key: ollama}
+platform_toolsets:
+  cli: [forsic]
+  api: [forsic]
+  web: [forsic]
+  desktop: [forsic]
+  telegram: [forsic]
+agent:
+  max_turns: 20
+  api_max_retries: 1
+  auto_recovery_cycles: 0
+  run_budget_seconds: 3600
+  local_stream_stale_timeout: 900
+memory: {memory_enabled: false, user_profile_enabled: false, nudge_interval: 0}
+curator: {enabled: false}
+background_review: {enabled: false}
+security: {allow_lazy_installs: false}
+dashboard: {theme: forsic}
+display: {skin: forsic, language: ko, tui_compact: true}
+updates: {check: false}
+plugins:
+  enabled: [forsic]
+  entries:
+    forsic:
+      enabled: true
+      settings: {}

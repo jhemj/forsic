@@ -1,0 +1,4 @@
+FROM python:3.12-slim
+RUN pip install --no-cache-dir dissect.target==3.25.1 dissect.xfs==3.13
+ENV PYTHONDONTWRITEBYTECODE=1
+WORKDIR /tmp

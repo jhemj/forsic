@@ -1,0 +1,29 @@
+{
+  "version": "forsic-template-manifest-1",
+  "templates": [
+    {
+      "reader": "executive",
+      "data_mode": "template",
+      "view_source": "executive.view.json",
+      "view_sha256": "a8eda3837a34ef34582b8d4156311cd36d43ac4e4287fc34e427869d568741d7",
+      "outputs": {
+        "html": "8503b20d16f7dfe485b2a0b911da42e6eec0bb1abe212f0ec28ae89fca70fcf3",
+        "docx": "6377210bb3fa6175693067c74f7d936bb3cca68e3b388cede2a580f3ea64a155"
+      },
+      "rendered_page_count": 3,
+      "scope": "Provided blank guided template only; not an incident judgment snapshot"
+    },
+    {
+      "reader": "practitioner",
+      "data_mode": "template",
+      "view_source": "practitioner.view.json",
+      "view_sha256": "294f3e4f2a2bd1b5531094d206058bdbc6a29a0ce77fb7a3d9114d52eb6d955a",
+      "outputs": {
+        "html": "6f5c33e967605dfea90ff6f7462ddd72595ca5f4df1afb9d668d5cefbe7cca9a",
+        "docx": "e5866b6d52a0310b3a867ba6a26f1884e7a8a9daa79dc876cb11137394bb391c"
+      },
+      "rendered_page_count": 12,
+      "scope": "Provided blank guided template only; not an incident judgment snapshot"
+    }
+  ]
+}

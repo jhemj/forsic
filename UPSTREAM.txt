@@ -1,0 +1,55 @@
+Forsic upstream attribution and maintained changes
+=================================================
+
+Hermes Agent
+------------
+Project: Nous Research / Hermes Agent
+Source: https://github.com/NousResearch/hermes-agent
+Pinned commit: bafb42b431fca313471958fdf77f9c30e455f86b
+Location: upstream/hermes
+License: MIT; copyright (c) 2025 Nous Research
+Authoritative license text: upstream/hermes/LICENSE
+
+Forsic reuses the Hermes runtime rather than implementing a second agent loop.
+This is a maintained, locally adapted source distribution, not an unmodified
+upstream release and not an independently authored agent engine. Preserve original
+copyright/license notices when redistributing source or substantial portions.
+Product branding does not change attribution or internal technical provenance.
+Forsic-specific additions are MIT-licensed in the root LICENSE. Third-party
+copyrights and license terms remain applicable; see THIRD_PARTY_NOTICES.txt.
+
+Maintained integration areas
+----------------------------
+- The native plugin supplies read-only evidence tools, case intake, notes,
+  report-driven investigation skills, reader-specific reports and case-library UI.
+- Existing TUI message/session components support distinct user/assistant
+  alignment and an optional generated greeting only for a fresh conversation.
+- Existing skin, theme, locale and plugin slots provide Forsic presentation in
+  browser and CLI. Authentication and diagnostic engine identity are retained.
+- Transcript projection hides native automatic goal scaffolding without deleting
+  model context, changing goal execution, or deduplicating ordinary user messages.
+- Web chat reuses the launch profile's in-process gateway for its explicit
+  aliases; other profiles remain isolated. Existing streaming/session behavior
+  supplies live updates rather than a second polling conversation store.
+- The native owner-pinned mailbox accepts approved same-case Telegram input at
+  idle turn boundaries. Lazy owner wakeup is demand-driven; queued delivery may
+  follow a verified replacement owner in the same conversation lineage. Claimed
+  or uncertain deliveries are not blindly replayed. No extra agent loop is added.
+
+Use the supplied pinned source and product tests together. An upstream update
+requires reviewing these integration points and rebuilding the native frontends;
+an arbitrary upstream self-update is not a validated Forsic release. Public source
+manifests describe the files actually packaged, not runtime dependencies or an
+assertion that every upstream feature is enabled. Operator state and development
+investigation history are intentionally outside the source release.
+
+Other components
+----------------
+Dissect Target: https://github.com/fox-it/dissect.target
+The parser container pins dissect.target 3.25.1 and dissect.xfs 3.13 on Python 3.12.
+The project uses python-docx, lxml and python-telegram-bot through Hermes PM plugin
+dependencies; exact versions are in forsic_plugin/plugin.yaml and
+requirements-forsic.txt. Other transitive components retain their own notices.
+
+This attribution document does not replace any component's license or grant a
+license to model weights, external APIs, evidence, or third-party case material.

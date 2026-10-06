@@ -1,0 +1,19 @@
+/* Product layout, not overrides of the upstream administration dashboard. */
+.forsic-app{display:flex;height:100dvh;min-height:0;overflow:hidden;background:#202127;color:#e5e7eb;font-family:var(--theme-font-sans,system-ui)}
+.forsic-app-sidebar{display:flex;flex-direction:column;flex:0 0 256px;width:256px;min-height:0;border-right:1px solid #484b55;background:#202127}
+.forsic-app-brand{height:56px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid #484b55;letter-spacing:.12em}
+.forsic-app-content{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.forsic-chat-host{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;padding:12px}
+.forsic-shell-loading{padding:24px;color:#b0b5c0;font-size:13px}
+.forsic-shell-fallback{display:flex;flex-direction:column;gap:14px;padding:20px;font-size:13px}
+.forsic-shell-fallback a,.forsic-shell-fallback button{border:1px solid #484b55;border-radius:8px;padding:10px;background:#292b33;color:inherit;text-align:left}
+.forsic-shell-fallback :focus-visible,.forsic-app-brand button:focus-visible,.forsic-mobile-header button:focus-visible{outline:2px solid #a9bed9;outline-offset:3px}
+.forsic-mobile-header,.forsic-mobile-close,.forsic-menu-backdrop{display:none}
+@media(max-width:1023px){
+  .forsic-app{padding-top:56px}
+  .forsic-mobile-header{position:fixed;inset:0 0 auto;height:56px;display:flex;align-items:center;gap:16px;padding:0 16px;background:#202127;border-bottom:1px solid #484b55;z-index:40}
+  .forsic-mobile-header button,.forsic-mobile-close{display:block;padding:8px;border-radius:8px}
+  .forsic-app-sidebar{position:fixed;inset:0 auto 0 0;z-index:50;transform:translateX(-100%);visibility:hidden}
+  .forsic-app-sidebar[data-open=true]{transform:none;visibility:visible}
+  .forsic-menu-backdrop{display:block;position:fixed;inset:0;z-index:45;background:#0009}
+}

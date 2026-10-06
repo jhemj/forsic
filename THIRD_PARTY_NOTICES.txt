@@ -1,0 +1,44 @@
+Forsic third-party notices
+=========================
+
+Forsic-specific code and documentation are provided under the root MIT LICENSE.
+That license does not replace copyright notices or licenses applying to included
+third-party material. Preserve those notices with redistributions.
+
+Hermes Agent
+------------
+Copyright (c) 2025 Nous Research
+Source: https://github.com/NousResearch/hermes-agent
+Pinned commit: bafb42b431fca313471958fdf77f9c30e455f86b
+Included source: upstream/hermes/
+License: MIT. The complete original license is retained, unchanged, in
+upstream/hermes/LICENSE. UPSTREAM.txt describes the maintained Forsic adaptations.
+Other notices embedded in upstream source files continue to apply.
+
+Separately installed dependencies
+--------------------------------
+The source release contains dependency declarations, not the installed runtime
+or parser image. Installation obtains components under their own terms, including:
+
+- python-docx 1.2.0, lxml 6.1.3 and python-telegram-bot 22.8, declared in
+  forsic_plugin/plugin.yaml and requirements-forsic.txt.
+- dissect.target 3.25.1 and dissect.xfs 3.13 in the Python 3.12-based parser image,
+  declared in Dockerfile.tools.
+- Hermes-managed Python/Node tools and transitive packages, identified by the
+  pinned PM, Python and frontend lockfiles under upstream/hermes/.
+- Host utilities such as libewf, Docker and their dependencies, installed by the
+  operator rather than included as Forsic binaries.
+
+Consult each installed distribution's license and notices, including those of
+bundled libraries and container base packages. When distributing a built runtime
+or image, retain the notices and satisfy any additional obligations for the actual
+components included; the Forsic MIT license is not a substitute for those terms.
+This summary is not a full software bill of materials or a license compatibility
+certification for every possible installation.
+
+Models, services and investigation material
+------------------------------------------
+Model weights are not included. Their licenses and any provider terms apply
+separately. Telegram, VT/GTI and other configured services retain their own terms.
+The software license does not grant rights to evidence, reports containing
+third-party material, personal information or other case content.

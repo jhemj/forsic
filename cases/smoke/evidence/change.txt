@@ -1,0 +1,3 @@
+Synthetic approval ticket LAB-2026-01
+Approved: daily report export by svc_reports at 01:00 UTC.
+The ticket authorizes the attempt. It does not attest to successful export.

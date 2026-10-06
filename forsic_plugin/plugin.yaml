@@ -1,0 +1,37 @@
+name: forsic
+version: 0.1.0
+description: Read-only forensic evidence tools and investigation companion.
+python_dependencies:
+  - python-docx==1.2.0
+  - lxml==6.1.3
+  - python-telegram-bot==22.8
+provides_tools:
+  - forsic_indicators
+  - forsic_intel
+  - forsic_intake
+  - forsic_cases
+  - forsic_case
+  - forsic_list
+  - forsic_read
+  - forsic_search
+  - forsic_hash
+  - forsic_image_info
+  - forsic_image_files
+  - forsic_report
+  - forsic_reporting
+  - forsic_read_bytes
+  - forsic_verify
+  - forsic_note
+  - forsic_skill
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - pre_auxiliary_call
+  - post_auxiliary_call
+config_schema:
+  case_file: {type: str, description: Operator-selected case manifest.}
+  intake_root: {type: str, description: Session-local intake state directory.}
+  synthetic_roots: {type: list, description: Operator-designated synthetic fixture roots.}

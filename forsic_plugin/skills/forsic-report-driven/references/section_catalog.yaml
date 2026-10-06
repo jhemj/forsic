@@ -1,0 +1,222 @@
+version: forsic-section-catalog-1
+purpose: 보고 공백을 미션 후보로 투영; 실행 scheduler가 아님
+hypothesis_count_fixed: false
+template_pages_are_limits: false
+requirements:
+- id: REQ-CORE-ANSWER
+  title: 원래 조사 질문에 대한 현재 답
+  section_targets:
+  - E01
+  - A01
+  class: core
+  applicability_trigger: 사용자가 요청한 중요한 질문
+  sufficiency: 현재 답·범위·채택 근거·미확인 이유가 연결됨
+  mission_trigger: 답을 바꿀 결과가 반환됐지만 아직 평가하지 않음
+  allowed_unknown: 판별 불가의 이유·지원 범위·재개 조건을 명시
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-SCOPE
+  title: 조사·승인 범위
+  section_targets:
+  - E02
+  - A01
+  - A02
+  class: core
+  applicability_trigger: 모든 보고서
+  sufficiency: 대상·증거·기간·권한·제외 범위·범위판 명시
+  mission_trigger: 범위가 불명확하여 결과 적용 대상이 달라짐
+  allowed_unknown: 범위 미확인 자체를 중요 한계로 표시
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-EVIDENCE
+  title: 증거 보존·커버리지
+  section_targets:
+  - E02
+  - A02
+  - A03
+  class: core
+  applicability_trigger: 모든 보고서
+  sufficiency: 취득·읽기·파싱·검색·제시·평가 단계와 무결성 수준 구분
+  mission_trigger: 중요 자료가 회수 가능하나 누락됐거나 파서 상태가 불명확
+  allowed_unknown: 지원되지 않는 범위와 이유를 기록
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-FINDINGS
+  title: 현재 유효한 발견
+  section_targets:
+  - E01
+  - A05
+  class: core
+  applicability_trigger: 현재 근거로 좁은 사실 또는 해석을 제시함
+  sufficiency: 원자적 주장·정확 근거·의미 한계·반론이 연결됨
+  mission_trigger: 주장과 실제 원문·객체·결과판이 맞지 않음
+  allowed_unknown: 채택 발견이 없으면 그 사실과 미검토 범위를 명시
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-ALTERNATIVES
+  title: 경쟁 설명·반론
+  section_targets:
+  - E02
+  - A04
+  - A09
+  class: core
+  applicability_trigger: 중요한 해석이나 사건 설명을 제시함
+  sufficiency: 정상 대안·가장 강한 반론·양립관계·처리 결과가 남음
+  mission_trigger: 상충·정상 대안의 판별 기회가 실제로 있음
+  allowed_unknown: 대안을 확인할 자료가 없으면 남은 가정으로 기록
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-TIME
+  title: 시간의 의미와 사건 경과
+  section_targets:
+  - E02
+  - A03
+  - A06
+  - A07
+  class: core
+  applicability_trigger: 사건 순서·경과·발생 시점을 설명함
+  sufficiency: 기록·행위·파일시간·추정·비교 불가를 구별
+  mission_trigger: 시간 불확실성이 실제 명제·인과 판단을 바꿈
+  allowed_unknown: 미상·비교 불가 영역과 영향범위를 남김
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-IMPACT
+  title: 영향과 대상 범위
+  section_targets:
+  - E01
+  - A08
+  class: core
+  applicability_trigger: 조사 결과가 대상·데이터·업무에 영향을 말함
+  sufficiency: 확인된 영향과 미검토·추정 범위가 구분됨
+  mission_trigger: 회수 가능한 영향·확산 자료가 답을 바꿈
+  allowed_unknown: 영향 미확인은 정상·무피해로 표현하지 않음
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-ACTIONS
+  title: 실제 수행 조치 확인
+  section_targets:
+  - E03
+  - A11
+  class: core
+  applicability_trigger: 모든 보고서
+  sufficiency: 실제 수행 기록만 보고하고 수행 미확인은 명시함; 경영 판단·대응 권고는 보고하지 않음
+  mission_trigger: 실행했다는 기록이 없는데 완료로 표시됨
+  allowed_unknown: 실행 이력 없으면 수행 여부 미등록
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-GAPS
+  title: 남은 공백과 다음 미션
+  section_targets:
+  - E02
+  - E03
+  - A10
+  - A11
+  class: core
+  applicability_trigger: 모든 보고서
+  sufficiency: 미평가·미제시·예산·실패·자료부족·내부결함별 공백과 재개조건
+  mission_trigger: 중요하고 가능한 판별 미션이 남음
+  allowed_unknown: 실행 종료와 범위 종결을 분리
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-TRACEABILITY
+  title: 근거 탐색·정정
+  section_targets:
+  - E03
+  - A05
+  - A12
+  class: core
+  applicability_trigger: 모든 보고서
+  sufficiency: 같은 스냅샷의 정확 참조·변경 이력·원문 접근이 가능
+  mission_trigger: 인용·locator·판단 버전이 현재 대상과 어긋남
+  allowed_unknown: 근거 확인 불가 주장은 최신 확정 표시 제한
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-PUBLICATION
+  title: 산출물·승인·보안
+  section_targets:
+  - E03
+  - A12
+  class: core
+  applicability_trigger: 모든 배포
+  sufficiency: 네 파일·manifest·마스킹·승인·페이지 검증
+  mission_trigger: 실제 근거조사가 아니라 배포·편집 결함
+  allowed_unknown: 배포 미승인·미검증을 명시
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-ENTRY
+  title: 최초 관측·유입 가능성
+  section_targets:
+  - A06
+  - E02
+  class: conditional
+  applicability_trigger: 사용자 질문 또는 유입·초기 접근 관련 근거가 있음
+  sufficiency: 최초 관측과 실제 유입 시점을 구별
+  mission_trigger: 관련 초기 접근 자료가 실제로 회수 가능
+  allowed_unknown: 유입 경로를 증명할 자료가 없으면 미확인
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-EXECUTION
+  title: 설정·요청·실행·성공 구별
+  section_targets:
+  - A04
+  - A05
+  - A06
+  - E01
+  class: conditional
+  applicability_trigger: 설정·명령 또는 실행 관련 기록이 중요함
+  sufficiency: 설정·호출 요청·프로세스 시작·최종 성공을 각각 판별
+  mission_trigger: 반환된 실행 결과 또는 연결 가능한 세션·프로세스 기록
+  allowed_unknown: 설정이나 명령 문자열만으로 실행 성공 확정 금지
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-AUTHORIZATION
+  title: 작업 승인·정상 운영
+  section_targets:
+  - A09
+  - E02
+  - E03
+  class: conditional
+  applicability_trigger: 정상 승인 또는 승인 부재가 사건 설명에 중요함
+  sufficiency: 승인자료·사용자 진술·행위 결과를 구별
+  mission_trigger: 승인·변경 이력이 현재 제공되어 있거나 요청 가치 있음
+  allowed_unknown: 실제 사람·승인 미확인은 그대로 유지
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-NETWORK
+  title: 통신·외부성·목적
+  section_targets:
+  - A06
+  - A08
+  - E01
+  class: conditional
+  applicability_trigger: 통신·C2·유출과 관련된 주장을 함
+  sufficiency: 주소 분류·네트워크 소속·연결 시도·성공·목적 분리
+  mission_trigger: 실제 연결·결과·프로세스 귀속 자료가 필요하고 가능
+  allowed_unknown: 주소·명령·소켓 심볼만으로 통신·C2 확정 금지
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-DATA-LOSS
+  title: 데이터 유출·훼손
+  section_targets:
+  - A08
+  - E01
+  class: conditional
+  applicability_trigger: 데이터 접근·전송·삭제·훼손을 주장함
+  sufficiency: 대상 데이터·실제 결과·범위가 근거로 연결됨
+  mission_trigger: 영향을 구별할 자료가 미평가 또는 회수 가능
+  allowed_unknown: 접속·전송량·삭제 명령만으로 피해 확정 금지
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
+- id: REQ-RECOVERY
+  title: 실패·복구 원의무
+  section_targets:
+  - A10
+  - A11
+  - E03
+  class: conditional
+  applicability_trigger: 조사 또는 도구 실패가 발생함
+  sufficiency: 원의무→실제변경→유효채택→해결범위 연결
+  mission_trigger: 재시도와 다른 실행가능 접근이 원의무를 좁힐 수 있음
+  allowed_unknown: 국소 보류·안전한 재분류를 복구 성공으로 세지 않음
+  not_applicable_requires: 명시적 이유·범위 근거·관련 질문 참조; 단순 null 금지
+  scope_closure_guard: 중요한 미평가·반론·실행가능 검사·내부결함·예산 보류를 완료로 세지 않음
