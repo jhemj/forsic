@@ -137,11 +137,13 @@ export const busyIndicatorWidth = (style: IndicatorStyle, hasDuration: boolean):
 
 function FaceTicker({
   color,
+  dimColor = false,
   startedAt,
   style,
   verbOverride
 }: {
   color: string
+  dimColor?: boolean
   startedAt?: null | number
   style: IndicatorStyle
   verbOverride?: string
@@ -201,7 +203,7 @@ function FaceTicker({
   const durationSegment = startedAt ? ` · ${fmtDuration(now - startedAt)}` : ''
 
   return (
-    <Text color={color}>
+    <Text color={color} dimColor={dimColor}>
       {frame}
       {verbSegment}
       {durationSegment}
@@ -736,13 +738,14 @@ export function StatusRule({
           ) : null}
           {busy ? (
             <FaceTicker
-              color={statusColor}
+              color={compacting ? t.color.muted : statusColor}
+              dimColor={compacting}
               startedAt={turnStartedAt}
               style={indicatorStyle}
               verbOverride={compacting ? T.status.compacting : undefined}
             />
           ) : showNotice ? null : (
-            <Text color={statusColor} wrap="truncate-end">
+            <Text color={compacting ? t.color.muted : statusColor} dimColor={compacting} wrap="truncate-end">
               {displayStatus(status)}
             </Text>
           )}

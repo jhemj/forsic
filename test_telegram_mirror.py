@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from telegram_mirror import Mirror, TopicRouter, group_target, message_text, progress_text
+from telegram_mirror import Mirror, TopicRouter, assistant_plain_text, group_target, message_text, progress_text
 
 
 class MirrorTests(unittest.TestCase):
@@ -57,6 +57,67 @@ class MirrorTests(unittest.TestCase):
         self.assertNotIn('raw', progress_text(result))
         result['data'] = json.dumps(dict(tool='forsic_read', error='파일을 찾지 못했어요'))
         self.assertIn('파일을 찾지 못했어요', progress_text(result))
+
+    def test_assistant_plain_text_preserves_literals_and_link_destinations(self):
+        markdown = ('# 조사 결과\n\n**확인** 및 _검토_ · [E:abc_123]\n\n'
+                    '- `/srv/case_one/a_b.log`\n'
+                    '- [문서](https://example.test/a_b?q=x_y)\n\n'
+                    '```sh\n  grep "**literal**" /srv/case_one/a_b.log\n'
+                    '  echo [E:abc_123]\n```')
+        self.assertEqual(assistant_plain_text(markdown),
+            '조사 결과\n\n확인 및 검토 · [E:abc_123]\n\n'
+            '• /srv/case_one/a_b.log\n• 문서 (https://example.test/a_b?q=x_y)\n\n'
+            '  grep "**literal**" /srv/case_one/a_b.log\n  echo [E:abc_123]')
+        with self.subTest('tables and quoted lists remain readable'):
+            self.assertEqual(assistant_plain_text(
+                '| 경로 | 결과 |\n|---|---|\n| `/srv/a_b` | **확인** |\n\n'
+                '> 근거 [E:abc123]\n\n3. 첫째\n4. 둘째\n'),
+                '경로 | 결과\n/srv/a_b | 확인\n\n근거 [E:abc123]\n\n3. 첫째\n4. 둘째')
+        with self.subTest('unformatted paths and reference links'):
+            literal = r'/srv/case_one/a_b.log C:\case_one\a_b.log [E:abc_123]'
+            self.assertEqual(assistant_plain_text(literal), literal)
+            self.assertEqual(assistant_plain_text(
+                '[원문][source] · ![화면](/local/case_one.png)\n\n'
+                '[source]: https://example.test/a_b?q=x_y'),
+                '원문 (https://example.test/a_b?q=x_y) · 화면 (/local/case_one.png)')
+
+    def test_outbound_assistant_plaintext_after_redaction_before_chunks_user_unchanged(self):
+        from gateway.platforms.base import utf16_len
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with closing(sqlite3.connect(root / 'state.db')) as db, db:
+                db.executescript('CREATE TABLE sessions(id TEXT, parent_session_id TEXT); '
+                    'CREATE TABLE messages(id INTEGER,session_id TEXT,role TEXT,content TEXT,display_kind TEXT,'
+                    '_compressed_summary INTEGER,active INTEGER,compacted INTEGER,timestamp REAL);')
+                db.execute('INSERT INTO sessions VALUES (?,NULL)', ('chosen',))
+            mirror = Mirror(root, root / 'intake', root / 'mirror.json', 'chosen', -123)
+            mirror.initialize()
+            user = '**literal** /srv/case_one/a_b.log [E:abc_123]'
+            secret = 'sk-' + 'syntheticCredential' * 3
+            assistant = '# 결과\n\n**마스킹** ' + secret + '\n\n' + '\n'.join(
+                '- **확인** 🔎 /srv/case_one/a_b.log [E:abc_123]' for _ in range(160))
+            with closing(sqlite3.connect(root / 'state.db')) as db, db:
+                for i, (role, content) in enumerate((('user', user), ('assistant', assistant), ('assistant', '---')), 1):
+                    db.execute('INSERT INTO messages VALUES (?,?,?, ?,NULL,0,1,0,?)',
+                               (i, 'chosen', role, content, time.time()))
+            sent, users = [], []
+            async def send(text):
+                sent.append(text)
+                return len(sent)
+            async def send_user(text):
+                users.append(text)
+                return len(users)
+            asyncio.run(mirror.tick(send, send_user=send_user))
+            self.assertEqual(users, [user])
+            self.assertGreater(len(sent), 1)
+            self.assertTrue(all(text.strip() and utf16_len(text) <= 4000 for text in sent))
+            outbound = '\n'.join(sent)
+            self.assertNotIn(secret, outbound)
+            self.assertNotIn('**', outbound)
+            self.assertNotIn('# 결과', outbound)
+            self.assertIn('/srv/case_one/a_b.log [E:abc_123]', outbound)
+            self.assertEqual(mirror.state['delivered'], ['message:1', 'message:2', 'message:3'])
+            self.assertIsNone(mirror.state['pending'])
 
     def test_cursor_restart_isolation_and_unknown(self):
         with tempfile.TemporaryDirectory() as temp:

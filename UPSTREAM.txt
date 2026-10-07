@@ -31,6 +31,13 @@ Maintained integration areas
 - Web chat reuses the launch profile's in-process gateway for its explicit
   aliases; other profiles remain isolated. Existing streaming/session behavior
   supplies live updates rather than a second polling conversation store.
+- The web shell groups evidence path, current case and its conversations in one
+  left navigation, uses stable ordinal analysis titles, and removes the extra
+  right session rail. User text is red; tool/compaction/goal progress is subdued.
+- The existing context compressor has an evidence-provenance instruction patch:
+  retain observation/interpretation distinctions, source references, uncertainty
+  and superseding corrections. This does not introduce a separate compressor,
+  and its forensic semantic accuracy is not established by packaging tests.
 - The native owner-pinned mailbox accepts approved same-case Telegram input at
   idle turn boundaries. Lazy owner wakeup is demand-driven; queued delivery may
   follow a verified replacement owner in the same conversation lineage. Claimed

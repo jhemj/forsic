@@ -70,6 +70,9 @@ def register(ctx):
                       limit={'type':'integer','minimum':1,'description':'Maximum collection items (up to 25) or scalar UTF-8 bytes (up to 4096). Response may return fewer to stay within its budget.'},
                       source_version={'type':'string','description':'Exact retained source.version/source_ref.version returned by source or the source index; required for source continuation.'})
     specs['reporting'] = (description + ' state is a bounded overview, not the full inventory. Follow returned pointer/next_offset with its snapshot_id (or source_version for source). Large fields are exact UTF-8 pages; indexes/previews are not evidence. Do not read spillover/cache paths with evidence tools or repeat a whole state to recover omitted records.', properties, required)
+    _, note_properties, note_required = specs['note']
+    note_properties['include_history'] = {'type': 'boolean', 'description': 'For get only: explicitly request revision history, paginated with offset/limit (default 1, maximum 10). Omit for the complete current note only.'}
+    specs['note'] = ('Case-local question notes. list returns an index, get returns the complete CURRENT note, save returns a compact receipt. Full notes and revisions remain stored. Read history only for an explicit revision audit. Use one note per discriminating question and update when its answer/gap changes. Save with the CURRENT revision; the tool increments it. On conflict get again and preserve concurrent changes.', note_properties, note_required)
     for suffix, (description, properties, required) in specs.items():
         name = "forsic_" + suffix
         schema = {"name": name, "description": description, "parameters": {
@@ -79,7 +82,11 @@ def register(ctx):
 
         def handler(args, tool=name, task_id="", session_id="", **kwargs):
             try:
-                return session_case(session_id or task_id).invoke(tool, args, session_id or task_id)
+                raw = session_case(session_id or task_id).invoke(tool, args, session_id or task_id)
+                if tool == 'forsic_note':
+                    from .notes import model_view
+                    return json.dumps(model_view(json.loads(raw), args), ensure_ascii=False)
+                return raw
             except ValueError:
                 return json.dumps({'error': '아직 증거가 접수되지 않았어요. 분석할 파일·폴더의 전체 경로를 알려주세요.'}, ensure_ascii=False)
 

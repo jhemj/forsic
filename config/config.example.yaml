@@ -10,13 +10,19 @@ fallback_model: {}
 providers:
   custom: {request_timeout_seconds: 900, stale_timeout_seconds: 900}
 tools:
-  tool_search: {enabled: 'off'}
+  tool_search: {enabled: off}
 reasoning: {enabled: false}
 auxiliary:
   report_review: {timeout: 900}
-  goal_judge: {provider: custom, model: 'qwen3.8:latest', base_url: 'http://127.0.0.1:11434/v1', api_key: ollama, timeout: 120, max_tokens: 1024}
-  title: {provider: custom, model: 'qwen3.8:latest', base_url: 'http://127.0.0.1:11434/v1', api_key: ollama}
-  compression: {provider: custom, model: 'qwen3.8:latest', base_url: 'http://127.0.0.1:11434/v1', api_key: ollama}
+  goal_judge: {provider: custom, model: qwen3.8:latest, base_url:
+      http://127.0.0.1:11434/v1, api_key: ollama, timeout: 120, max_tokens: 1024}
+  title: {provider: custom, model: qwen3.8:latest, base_url:
+      http://127.0.0.1:11434/v1, api_key: ollama}
+  compression: {provider: custom, model: qwen3.8:latest, base_url:
+      http://127.0.0.1:11434/v1, api_key: ollama}
+  title_generation:
+    enabled: false
+    model_upgrade_enabled: false
 platform_toolsets:
   cli: [forsic]
   api: [forsic]
@@ -27,7 +33,7 @@ agent:
   max_turns: 20
   api_max_retries: 1
   auto_recovery_cycles: 0
-  run_budget_seconds: 3600
+  run_budget_seconds: 43200
   local_stream_stale_timeout: 900
 memory: {memory_enabled: false, user_profile_enabled: false, nudge_interval: 0}
 curator: {enabled: false}

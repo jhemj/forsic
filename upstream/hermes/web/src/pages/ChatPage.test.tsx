@@ -103,10 +103,10 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: FakeWebglAddon }));
 vi.mock("@xterm/xterm", () => ({ Terminal: FakeTerminal }));
 vi.mock("@/components/ChatSidebar", () => ({
-  ChatSidebar: () => null,
+  ChatSidebar: () => <div>model controls</div>,
 }));
 vi.mock("@/components/ChatSessionList", () => ({
-  ChatSessionList: () => null,
+  ChatSessionList: () => <div>session list</div>,
 }));
 vi.mock("@/components/Backdrop", () => ({ Backdrop: () => null }));
 vi.mock("@/plugins", () => ({
@@ -452,7 +452,7 @@ describe("ChatPage", () => {
     expect(labels).toContain("Start new session");
   });
 
-  it("offers Start new session and Open logs when the agent process ended", async () => {
+  it("offers a new session without obsolete admin links when the agent process ended", async () => {
     const { default: ChatPage } = await import("./ChatPage");
     await render(
       <MemoryRouter initialEntries={["/chat"]}>
@@ -467,10 +467,10 @@ describe("ChatPage", () => {
 
     const labels = Array.from(container.querySelectorAll("button")).map((b) => b.textContent?.trim());
     expect(labels).toContain("Start new session");
-    expect(labels).toContain("Open logs");
+    expect(labels).not.toContain("Open logs");
   });
 
-  it("stops retrying after the ladder is spent and offers Check server status", async () => {
+  it("stops automatic retries while retaining manual reconnect without obsolete admin links", async () => {
     vi.useFakeTimers();
     try {
       const { default: ChatPage } = await import("./ChatPage");
@@ -494,7 +494,7 @@ describe("ChatPage", () => {
 
       const labels = Array.from(container.querySelectorAll("button")).map((b) => b.textContent?.trim());
       expect(labels).toContain("Reconnect now");
-      expect(labels).toContain("Check server status");
+      expect(labels).not.toContain("Check server status");
     } finally {
       vi.useRealTimers();
     }
@@ -573,51 +573,22 @@ describe("ChatPage", () => {
   });
 });
 
-describe("ChatPage side panel collapse", () => {
-  async function renderChat() {
+describe("ChatPage unified navigation", () => {
+  it("portals native model controls into the case footer and removes them when inactive", async () => {
     const { default: ChatPage } = await import("./ChatPage");
-    await render(
-      <MemoryRouter initialEntries={["/chat"]}>
-        <ChatPage isActive />
-      </MemoryRouter>,
-    );
-  }
-
-  it("collapses the desktop side panel and persists the choice", async () => {
-    localStorage.clear();
-    await renderChat();
-    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-
-    const collapseButton = container.querySelector(
-      '[aria-label="Collapse chat side panel"]',
-    );
-    expect(collapseButton).not.toBeNull();
-
-    await act(async () => {
-      collapseButton!.dispatchEvent(
-        new MouseEvent("click", { bubbles: true }),
-      );
-    });
-
-    expect(localStorage.getItem("hermes-chat-panel-collapsed")).toBe("1");
-    expect(
-      container.querySelector('[aria-label="Collapse chat side panel"]'),
-    ).toBeNull();
-    expect(
-      container.querySelector('[aria-label="Show chat side panel"]'),
-    ).not.toBeNull();
-
-    // Reopening restores the panel and clears the persisted flag.
-    await act(async () => {
-      container
-        .querySelector('[aria-label="Show chat side panel"]')!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-
-    expect(localStorage.getItem("hermes-chat-panel-collapsed")).toBe("0");
-    expect(
-      container.querySelector('[aria-label="Collapse chat side panel"]'),
-    ).not.toBeNull();
+    const target = document.createElement("aside");
+    document.body.append(target);
+    const view = (active: boolean) => <MemoryRouter initialEntries={["/chat"]}>
+      <ChatPage isActive={active} navigationTarget={target} />
+    </MemoryRouter>;
+    try {
+      await render(view(true));
+      expect(target.textContent).toContain("model controls");
+      expect(container.textContent).not.toContain("session list");
+      expect(document.querySelector("#chat-side-panel")).toBeNull();
+      await act(async () => root.render(view(false)));
+      expect(target.textContent).toBe("");
+    } finally { target.remove(); }
   });
 });
 

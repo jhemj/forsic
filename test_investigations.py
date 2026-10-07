@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+import uuid
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -81,6 +82,37 @@ class InvestigationTests(unittest.TestCase):
             self.assertEqual(api.status(case_id='case-two')['case']['case_id'],'case-two')
             with self.assertRaises(HTTPException): api.status(case_id='../missing')
             with self.assertRaises(HTTPException): api.evidence('not-in-case',case_id='case-two')
+
+    def test_case_conversations_scope_and_compression_boundaries(self):
+        now = time.time()
+        first = self.case('case-one', 'first', created=now - 40)
+        self.case('case-one', 'compressed', parent='first', created=now - 30)
+        self.case('case-one', 'branch', parent='first', created=now - 20)
+        self.case('case-two', 'other', parent='first', created=now - 10)
+        with closing(sqlite3.connect(self.root / 'state.db')) as db, db:
+            db.execute('ALTER TABLE sessions ADD COLUMN end_reason TEXT')
+            db.execute('ALTER TABLE sessions ADD COLUMN model_config TEXT')
+            db.execute('ALTER TABLE sessions ADD COLUMN source TEXT')
+            db.execute("UPDATE sessions SET end_reason='compression',ended_at=? WHERE id='first'", (now - 30,))
+            db.execute("UPDATE sessions SET model_config=? WHERE id='branch'", (json.dumps({'_branched_from':'first'}),))
+        case = self.catalog.get(case_id='case-one')
+        self.assertEqual({tuple(c['session_ids']) for c in case['conversations']}, {('first', 'compressed'), ('branch',)})
+        continuation = next(c for c in case['conversations'] if c['id'] == 'first')
+        self.assertEqual(continuation['resume_session_id'], 'compressed')
+        self.assertIsNone(self.catalog.get(case_id='case-one', session_id='other'))
+        self.assertEqual(self.catalog.get(case_id='case-one', session_id='compressed')['case_id'], 'case-one')
+        from forsic_plugin.dashboard import plugin_api as api
+        with patch.object(api, 'directory', return_value=self.catalog):
+            with self.assertRaises(HTTPException) as error:
+                api.selected_case(case_id='case-one', session_id='other')
+            self.assertEqual(error.exception.status_code, 404)
+            response = api.investigation_conversations('case-one')
+            self.assertEqual(response['conversations'], case['conversations'])
+        public = next(c for c in self.catalog.public() if c['case_id'] == 'case-one')
+        self.assertEqual(public['scope'], json.loads(first.read_text())['evidence_root'])
+        self.assertEqual(set(public['session_ids']), {'first', 'compressed', 'branch'})
+        self.assertNotIn('manifest', public)
+        self.assertNotIn('output_root', public)
 
     def test_topics_migration_new_case_and_restart(self):
         self.case('case-one','first',created=time.time()-100)
@@ -204,6 +236,90 @@ class InvestigationTests(unittest.TestCase):
             return 1
         asyncio.run(router.tick(create,send));asyncio.run(self.router().tick(create,send))
         self.assertEqual(sorted(calls),['delivered','lost'])
+
+
+class NativeConversationCreationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.home = self.root / 'hermes'
+        self.home.mkdir()
+        self.intake = self.root / 'intake'
+        self.catalog = Investigations(self.home, self.intake)
+        (self.root / 'evidence').mkdir()
+        self.evidence = self.root / 'evidence' / 'synthetic.txt'
+        self.evidence.write_text('Synthetic fixture only. No investigation conclusions.\n')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_explicit_intake_and_empty_case_conversation_are_idempotent(self):
+        from hermes_state import SessionDB
+        from forsic_plugin.intake import Intake
+        from forsic_plugin.investigations import RequestConflict
+        from forsic_plugin.dashboard import plugin_api as api
+        original = self.evidence.read_bytes()
+        request = api.InvestigationInput(path=str(self.evidence), request_id=uuid.uuid4())
+        with patch.object(api, 'directory', return_value=self.catalog):
+            created = api.investigation_create(request)
+            self.assertEqual(api.investigation_create(request), created)
+            other_path = api.InvestigationInput(path=str(self.evidence.parent), request_id=request.request_id)
+            with self.assertRaises(HTTPException) as conflict:
+                api.investigation_create(other_path)
+            self.assertEqual(conflict.exception.status_code, 409)
+            pointer_before = (self.intake / 'current.json').read_bytes()
+            manifest_path = Path(Intake(self.intake).state(created['session_id'])['manifest'])
+            manifest_before = manifest_path.read_bytes()
+            new_request = api.ConversationInput(request_id=uuid.uuid4())
+            fresh = api.investigation_conversation_create(created['case_id'], new_request)
+            self.assertEqual(api.investigation_conversation_create(created['case_id'], new_request), fresh)
+        self.assertEqual(fresh['case_id'], created['case_id'])
+        self.assertNotEqual(fresh['session_id'], created['session_id'])
+        self.assertEqual((self.intake / 'current.json').read_bytes(), pointer_before)
+        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+        self.assertEqual(self.evidence.read_bytes(), original)
+        self.assertEqual(Intake(self.intake).state(fresh['session_id'])['stage'], 'case_bound')
+        db = SessionDB(self.home / 'state.db', read_only=True)
+        try:
+            for sid in (created['session_id'], fresh['session_id']):
+                self.assertIsNone(db.get_session(sid)['parent_session_id'])
+                self.assertEqual(db.resolve_resume_session_id(sid), sid)
+                self.assertEqual(db.get_messages(sid), [])
+        finally:
+            db.close()
+        with closing(sqlite3.connect(self.home / 'state.db')) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM sessions').fetchone()[0], 2)
+            self.assertEqual(db.execute('SELECT count(*) FROM messages').fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT count(*) FROM state_meta WHERE key LIKE 'goal:%'").fetchone()[0], 0)
+        case = self.catalog.public()[0]
+        self.assertEqual(case['scope'], str(self.evidence))
+        self.assertEqual(len(case['conversations']), 2)
+        self.assertEqual(len(list((self.intake / 'cases').iterdir())), 1)
+        with self.assertRaises(RequestConflict):
+            self.catalog.create_conversation(request.request_id, case_id=created['case_id'])
+
+    def test_evidence_containing_runtime_is_rejected_before_writes(self):
+        with self.assertRaises(ValueError):
+            self.catalog.create_conversation(uuid.uuid4(), path=str(self.root))
+        self.assertFalse(self.intake.exists())
+        self.assertFalse((self.home / 'state.db').exists())
+
+    def test_retry_recovers_bound_intake_after_native_session_write_failure(self):
+        from hermes_state import SessionDB
+        from forsic_plugin.intake import Intake
+        request = uuid.uuid4()
+        with patch.object(SessionDB, 'create_session', side_effect=RuntimeError('synthetic write failure')):
+            with self.assertRaises(RuntimeError):
+                self.catalog.create_conversation(request, path=str(self.evidence))
+        receipt = json.loads((self.intake / 'ui-requests' / (str(request) + '.json')).read_text())
+        sid = receipt['session_id']
+        manifest = Path(Intake(self.intake).state(sid)['manifest'])
+        before = manifest.read_bytes()
+        result = self.catalog.create_conversation(request, path=str(self.evidence))
+        self.assertEqual(result['session_id'], sid)
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assertEqual(Intake(self.intake).state(sid)['stage'], 'awaiting_question')
+        self.assertEqual(len(list((self.intake / 'cases').iterdir())), 1)
 
 
 if __name__ == '__main__': unittest.main()

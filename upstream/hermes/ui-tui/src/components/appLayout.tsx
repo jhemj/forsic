@@ -395,8 +395,8 @@ const ComposerPane = memo(function ComposerPane({
       )}
 
       {status.showStickyPrompt ? (
-        <Text color={ui.theme.color.muted} wrap="truncate-end">
-          <Text color={ui.theme.color.label}>↳ </Text>
+        <Text color={ui.theme.color.prompt} wrap="truncate-end">
+          <Text color={ui.theme.color.prompt}>↳ </Text>
 
           {status.stickyPrompt}
         </Text>
@@ -424,13 +424,13 @@ const ComposerPane = memo(function ComposerPane({
               <Box key={i}>
                 <Box width={promptWidth}>
                   {i === 0 ? (
-                    <PromptPrefix color={ui.theme.color.muted} promptText={promptText} width={promptWidth} />
+                    <PromptPrefix color={ui.theme.color.prompt} promptText={promptText} width={promptWidth} />
                   ) : (
-                    <Text color={ui.theme.color.muted}>{promptBlank}</Text>
+                    <Text color={ui.theme.color.prompt}>{promptBlank}</Text>
                   )}
                 </Box>
 
-                <Text color={ui.theme.color.text}>{line || ' '}</Text>
+                <Text color={ui.theme.color.prompt}>{line || ' '}</Text>
               </Box>
             ))}
 
@@ -454,8 +454,8 @@ const ComposerPane = memo(function ComposerPane({
               <Box flexGrow={0} flexShrink={0} height={inputHeight} width={inputColumns}>
                 {/* Reserve the transcript scrollbar gutter too so typing never rewraps when the scrollbar column repaints. */}
                 <TextInput
-                  accentColor={ui.theme.color.accent}
-                  color={ui.theme.color.text}
+                  accentColor={ui.theme.color.prompt}
+                  color={ui.theme.color.prompt}
                   columns={inputColumns}
                   cursorSnapshotRef={cursorSnapshotRef}
                   mouseApiRef={inputMouseRef}

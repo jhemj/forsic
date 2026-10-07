@@ -189,13 +189,17 @@ class DeploymentTests(unittest.TestCase):
             'commit', '-qm', 'synthetic source')
         pin = git('rev-parse', 'HEAD')
         (upstream / changed).write_text('after')
+        addition = 'web/src/lib/analysis-title.ts'
+        target = upstream / addition
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('synthetic new product module')
         public = Path(self.temp.name) / 'public source'
         first = Path(self.temp.name) / 'first.tar.gz'
         second = Path(self.temp.name) / 'different-name.tar.gz'
         with patch.object(deploy, 'PIN', pin):
             result = deploy.export_source(self.root, public)
             self.assertFalse(result['uploaded'])
-            for name in (*kept, changed):
+            for name in (*kept, changed, addition):
                 self.assertTrue((public / 'upstream/hermes' / name).is_file(), name)
             for name in removed:
                 self.assertFalse((public / 'upstream/hermes' / name).exists(), name)

@@ -37,6 +37,89 @@ def message_text(row):
     return text
 
 
+def assistant_plain_text(text):
+    """Render assistant Markdown as text without rewriting literal code or paths.
+
+    Markdown-it is already provided by the native Hermes runtime. Parse syntax
+    instead of removing punctuation: underscores, evidence IDs and fenced code
+    are content, and link destinations must remain available in plain Telegram.
+    """
+    from markdown_it import MarkdownIt
+
+    def inline(tokens):
+        parts, links = [], []
+        for token in tokens or []:
+            if token.type == 'link_open':
+                links.append((len(parts), token.attrGet('href') or ''))
+            elif token.type == 'link_close':
+                start, target = links.pop()
+                label = ''.join(parts[start:])
+                if target and target != label:
+                    parts.append(' (' + target + ')')
+            elif token.type == 'image':
+                label, target = inline(token.children), token.attrGet('src') or ''
+                parts.append(label)
+                if target and target != label:
+                    parts.append(' (' + target + ')')
+            elif token.type in ('softbreak', 'hardbreak'):
+                parts.append('\n')
+            elif token.type in ('text', 'code_inline', 'html_inline'):
+                parts.append(token.content)
+            elif token.children:
+                parts.append(inline(token.children))
+        return ''.join(parts)
+
+    parts, lists = [], []
+    table_cell = 0
+
+    def newline(count=1):
+        if parts:
+            # Add structural spacing without normalizing whitespace inside code.
+            tail = parts[-1]
+            existing = len(tail) - len(tail.rstrip('\n'))
+            if existing < count:
+                parts.append('\n' * (count - existing))
+
+    parser = MarkdownIt('commonmark', {'html': False}).enable(['table', 'strikethrough'])
+    for token in parser.parse(text):
+        kind = token.type
+        if kind in ('bullet_list_open', 'ordered_list_open'):
+            newline()
+            lists.append(int(token.attrGet('start') or 1) if kind == 'ordered_list_open' else None)
+        elif kind in ('bullet_list_close', 'ordered_list_close'):
+            lists.pop()
+            newline(1 if lists else 2)
+        elif kind == 'list_item_open':
+            newline()
+            number = lists[-1]
+            prefix = '• ' if number is None else str(number) + '. '
+            parts.append('  ' * (len(lists) - 1) + prefix)
+            if number is not None:
+                lists[-1] += 1
+        elif kind == 'list_item_close':
+            newline()
+        elif kind == 'inline':
+            parts.append(inline(token.children))
+        elif kind in ('paragraph_close', 'heading_close'):
+            newline(1 if lists else 2)
+        elif kind in ('fence', 'code_block'):
+            newline()
+            parts.append(token.content)
+            newline(2)
+        elif kind == 'tr_open':
+            newline()
+            table_cell = 0
+        elif kind in ('th_open', 'td_open'):
+            if table_cell:
+                parts.append(' | ')
+            table_cell += 1
+        elif kind == 'tr_close':
+            newline()
+        elif kind in ('table_close', 'blockquote_close', 'hr'):
+            newline(2)
+    return ''.join(parts).strip('\n')
+
+
 def progress_text(row):
     data = json.loads(row['data'])
     if row['kind'] == 'tool_start':
@@ -162,6 +245,12 @@ class Mirror:
                 continue  # No blind re-creation of an uncertain progress card.
             # Native Hermes redaction/chunking; always plain text, never MEDIA attachments.
             text = redact_sensitive_text(text)
+            if key.startswith('message:') and not user_message:
+                text = assistant_plain_text(text)
+                if not text.strip():
+                    self.state['delivered'].append(key)
+                    write_json(self.path, self.state)
+                    continue
             if progress:
                 text = '진행 현황\n' + text
                 if len(text) > 1800:

@@ -142,6 +142,46 @@ def current_notes(case):
     return list(latest.values())
 
 
+def model_view(result, args):
+    """Present a small navigation/acknowledgement view; retained notes stay intact.
+
+    Only the native model handler uses this projection. The case store, web views
+    and report builders still receive complete notes and revision history.
+    """
+    if result.get('error'):
+        return result
+    action = args.get('action', 'list')
+    view = dict(result)
+    keys = ('note_id', 'revision', 'question', 'status', 'updated_at')
+    if action == 'list':
+        view['notes'] = [
+            {**{k: n[k] for k in keys if k in n}, 'detail_included': False,
+             'counts': {k: len(n.get(k, [])) for k in
+                        ('evidence_ids', 'alternatives', 'gaps', 'critical_gaps', 'next_checks', 'timeline')}}
+            for n in result.get('notes', [])
+        ]
+        view['detail_hint'] = 'Index only. Get the selected note before using its answer, counterevidence or gaps.'
+    elif action == 'get':
+        history = result.get('history', [])
+        view.pop('history', None)
+        view['history_total'] = len(history)
+        if args.get('include_history'):
+            offset = max(0, int(args.get('offset', 0)))
+            limit = max(1, min(10, int(args.get('limit', 1))))
+            end = offset + limit
+            view['history'] = history[offset:end]
+            view['history_next_offset'] = end if end < len(history) else None
+        else:
+            view['history_hint'] = 'Current note only. For an explicit revision audit, get with include_history=true and offset/limit.'
+    elif action == 'save' and 'note' in result:
+        note_value = result['note']
+        view['note'] = {k: note_value[k] for k in ('note_id', 'revision', 'updated_at') if k in note_value}
+        view['saved'] = True
+        view['detail_included'] = False
+        view['detail_hint'] = 'Save receipt only, not validation of the conclusion. Get by note_id for the full stored note and normalized timeline.'
+    return view
+
+
 def note(case, args):
     action = args.get('action', 'list')
     if action == 'list':

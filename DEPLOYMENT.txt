@@ -64,12 +64,9 @@ uploads source or installs runtime dependencies.
 
 New installation (explicit operator actions; not run by the helper)
 ----------------------------------------------------------------
-1. Clone the public source into a new operator-owned directory:
-     git clone https://github.com/jhemj/forsic.git
-     cd forsic
-   Alternatively, verify a source archive SHA-256 and extract it into a new
-   directory. Do not overwrite a running installation. Keep the source root
-   as the working directory for the following steps.
+1. Verify the release SHA-256 and extract into a new operator-owned directory.
+   Do not extract over a running installation. Open a shell in the extracted
+   forsic directory and keep that directory as the working directory below.
 
 2. Generate NEW local state (refuses any existing state directory):
      python3 deploy_forsic.py init --ollama-url http://127.0.0.1:11434/v1 --model YOUR_INSTALLED_MODEL
@@ -175,7 +172,7 @@ or evidence of investigation completion, and indicator failure cannot block repl
 Acceptance / smoke
 ------------------
 Offline check with the selected runtime (no model/API calls):
-  python3 run.py -m unittest test_evidence test_workflow test_case_library test_intake test_improvements test_investigations test_telegram_mirror test_telegram_mentions test_telegram_reports test_telegram_actions test_report_driven test_timeline_recovery test_connections test_note_revision_recovery test_harness_guidance test_report_review_projection test_reporting_pages test_deployment
+  python3 run.py -m unittest test_evidence test_workflow test_case_library test_intake test_improvements test_investigations test_telegram_mirror test_telegram_mentions test_telegram_reports test_telegram_actions test_report_driven test_timeline_recovery test_connections test_note_revision_recovery test_harness_guidance test_harness_context test_note_model_view test_report_review_projection test_reporting_pages test_deployment
 Use the PM Node interpreter for: node test_dashboard.cjs.
 Additional offline product regressions:
   python3 run.py -m unittest test_indicators test_indicator_integration test_search_resume test_log_timeline

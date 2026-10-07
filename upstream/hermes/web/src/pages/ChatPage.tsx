@@ -23,19 +23,17 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@nous-research/ui/ui/components/button";
-import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { cn } from "@/lib/utils";
-import { Copy, PanelRight, RotateCcw, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Copy, RotateCcw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 
 import { ChatSidebar } from "@/components/ChatSidebar";
-import { ChatSessionList } from "@/components/ChatSessionList";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
-import { readStoredWorkspace, writeStoredWorkspace } from "@/lib/chat-workspaces";
+import { readStoredWorkspace } from "@/lib/chat-workspaces";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { normalizeSessionTitle } from "@/lib/chat-title";
@@ -173,7 +171,14 @@ function terminalLineHeightForWidth(layoutWidthPx: number): number {
   return layoutWidthPx < 1024 ? 1.02 : 1.15;
 }
 
-export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
+export interface ChatPageProps {
+  isActive?: boolean;
+  navigationTarget?: HTMLElement | null;
+  caseLabel?: string;
+  conversationTitle?: string;
+}
+
+export default function ChatPage({ isActive = true, navigationTarget, caseLabel, conversationTitle }: ChatPageProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termWrapRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -235,7 +240,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // Why ptyState is "ended": the agent process exited (/exit or crash), or the
   // server could not start it at all (close 1011; the reason is in the terminal).
   const [endedReason, setEndedReason] = useState<"exited" | "start-failed">("exited");
-  const navigate = useNavigate();
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -334,48 +338,12 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       mobileReplacementInputUntilRef.current = 0;
     }
   }, [clearReconnectTimer, isActive]);
-  // Raw state for the mobile side-sheet + a derived value that force-
-  // closes whenever the chat tab isn't active.  The *derived* value is
-  // what side-effects (body-scroll lock, keydown listener, portal render)
-  // key on — that way switching to another tab triggers the effect's
-  // cleanup, releasing the scroll-lock on /sessions etc.  Returning to
-  // /chat re-runs the effect (derived flips back to true) and re-locks.
-  // Keying on the raw state would leak the body.overflow="hidden" across
-  // tabs because the dep wouldn't change on tab switch.
-  const [mobilePanelOpenRaw, setMobilePanelOpenRaw] = useState(false);
-  const mobilePanelOpen = isActive && mobilePanelOpenRaw;
-
-  // Collapse toggle for the desktop chat side panel (model + sessions),
-  // persisted in localStorage so the choice survives reloads.
-  const [chatPanelCollapsed, setChatPanelCollapsed] = useState(
-    () => localStorage.getItem("hermes-chat-panel-collapsed") === "1",
-  );
-  const toggleChatPanel = useCallback(() => {
-    setChatPanelCollapsed((prev) => {
-      const next = !prev;
-      localStorage.setItem("hermes-chat-panel-collapsed", next ? "1" : "0");
-      return next;
-    });
-  }, []);
-  const { setEnd, setTitle } = usePageHeader();
+  const { setTitle } = usePageHeader();
   const [sessionTitleState, setSessionTitleState] = useState<{
     scope: string;
     title: string | null;
   }>({ scope: "", title: null });
-  const { t, locale } = useI18n();
-  const closeMobilePanel = useCallback(() => setMobilePanelOpenRaw(false), []);
-  const modelToolsLabel = useMemo(
-    () => `${t.app.modelToolsSheetTitle} ${t.app.modelToolsSheetSubtitle}`,
-    [t.app.modelToolsSheetSubtitle, t.app.modelToolsSheetTitle],
-  );
-  const [portalRoot] = useState<HTMLElement | null>(() =>
-    typeof document !== "undefined" ? document.body : null,
-  );
-  const [narrow, setNarrow] = useState(() =>
-    typeof window !== "undefined"
-      ? window.matchMedia("(max-width: 1023px)").matches
-      : false,
-  );
+  const { locale } = useI18n();
 
   const { theme } = useTheme();
   const terminalBg = theme.terminalBackground ?? DEFAULT_TERMINAL_BACKGROUND;
@@ -396,27 +364,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // management profile. Changing it remounts the terminal (key below /
   // effect dep) so the user explicitly starts a fresh scoped session.
   const { profile: scopedProfile } = useProfileScope();
-  // Workspace a FRESH chat starts in (`/api/pty?cwd=`), persisted per
-  // management profile (a phone remembers the repo it drives). The connect
-  // effect reads storage directly, so changing the picker never respawns the
-  // live PTY: it applies on the next "New chat".
-  const [workspaceCwd, setWorkspaceCwdState] = useState(() =>
-    readStoredWorkspace(scopedProfile),
-  );
-  const setWorkspaceCwd = useCallback(
-    (next: string) => {
-      writeStoredWorkspace(scopedProfile, next);
-      setWorkspaceCwdState(next);
-    },
-    [scopedProfile],
-  );
-  // Profile switch: show that profile's remembered workspace (state, not an
-  // effect, so no cascading render).
-  const [workspaceProfile, setWorkspaceProfile] = useState(scopedProfile);
-  if (workspaceProfile !== scopedProfile) {
-    setWorkspaceProfile(scopedProfile);
-    setWorkspaceCwdState(readStoredWorkspace(scopedProfile));
-  }
   const channel = useMemo(
     () => generateChannelId(`${resumeParam ?? ""}\0${scopedProfile}`),
     [resumeParam, scopedProfile],
@@ -435,9 +382,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       return;
     }
 
-    setTitle(sessionTitle);
+    setTitle(caseLabel ? `${caseLabel} / ${conversationTitle || "분석"}` : (conversationTitle || sessionTitle));
     return () => setTitle(null);
-  }, [isActive, sessionTitle, setTitle]);
+  }, [isActive, caseLabel, conversationTitle, sessionTitle, setTitle]);
 
   useEffect(() => {
     if (!resumeParam) return;
@@ -483,68 +430,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       cancelled = true;
     };
   }, [resumeParam, scopedProfile, searchParams, setSearchParams]);
-
-  useEffect(() => {
-    const mql = window.matchMedia("(max-width: 1023px)");
-    const sync = () => setNarrow(mql.matches);
-    sync();
-    mql.addEventListener("change", sync);
-    return () => mql.removeEventListener("change", sync);
-  }, []);
-
-  useEffect(() => {
-    if (!mobilePanelOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeMobilePanel();
-    };
-    document.addEventListener("keydown", onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [mobilePanelOpen, closeMobilePanel]);
-
-  useEffect(() => {
-    const mql = window.matchMedia("(min-width: 1024px)");
-    const onChange = (e: MediaQueryListEvent) => {
-      if (e.matches) setMobilePanelOpenRaw(false);
-    };
-    mql.addEventListener("change", onChange);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
-
-  useLayoutEffect(() => {
-    // When hidden (non-chat tab) another page owns the header's end slot.
-    // Don't touch it AT ALL — the persistent chat host mounts (plugin
-    // manifests resolving) and updates AFTER the routed page's layout
-    // effect has already filled the slot, so even a "defensive"
-    // setEnd(null) here wipes that page's header buttons (Cron "Create",
-    // Profiles "Build", …). Ownership rule: only write to the slot while
-    // /chat is the active route AND the narrow layout needs the button;
-    // the effect cleanup handles removal on every transition out.
-    if (!isActive || !narrow) return;
-    setEnd(
-      <Button
-        ghost
-        onClick={() => setMobilePanelOpenRaw(true)}
-        aria-expanded={mobilePanelOpen}
-        aria-controls="chat-side-panel"
-        className={cn(
-          "shrink-0 rounded border border-current/20",
-          "px-2 py-1 text-xs font-medium tracking-wide",
-          "text-text-secondary hover:text-midground hover:bg-midground/5",
-        )}
-      >
-        <span className="inline-flex items-center gap-1.5">
-          <PanelRight className="h-3 w-3 shrink-0" />
-          {modelToolsLabel}
-        </span>
-      </Button>,
-    );
-    return () => setEnd(null);
-  }, [isActive, narrow, mobilePanelOpen, modelToolsLabel, setEnd]);
 
   const handleCopyLast = () => {
     const ws = wsRef.current;
@@ -1826,10 +1711,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   //     model badge, tool-call list, model picker. Best-effort: if the
   //     sidecar fails to connect the terminal pane keeps working.
   //
-  // Mobile model/tools sheet is portaled to `document.body` so it stacks
-  // above the app sidebar (`z-50`) and mobile chrome (`z-40`).  The main
-  // dashboard column uses `relative z-2`, which traps `position:fixed`
-  // descendants below those layers (see Toast.tsx).
+  // Keep the native session controls in the product shell’s left navigation.
   const reconnectBanner =
     ptyState === "reconnecting" ? PTY_RECONNECTING_BANNER : null;
   const visibleBanner = banner ?? reconnectBanner;
@@ -1840,98 +1722,21 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     ptyState,
     hydrating: resumeHydrating,
   });
-  const mobileModelToolsPortal =
-    isActive &&
-    narrow &&
-    portalRoot &&
-    createPortal(
-      <>
-        {mobilePanelOpen && (
-          <Button
-            ghost
-            aria-label={t.app.closeModelTools}
-            onClick={closeMobilePanel}
-            className={cn(
-              "fixed inset-0 z-[55] p-0 block",
-              "bg-black/60",
-            )}
-          />
-        )}
-
-        <div
-          id="chat-side-panel"
-          role="complementary"
-          aria-label={modelToolsLabel}
-          className={cn(
-            "font-mondwest fixed top-0 right-0 z-[60] flex h-dvh max-h-dvh w-64 min-w-0 flex-col antialiased",
-            "border-l border-current/20 text-midground",
-            "bg-background-base/95",
-            "transition-transform duration-200 ease-out",
-            "[background:var(--component-sidebar-background,var(--background-base))]",
-            "[clip-path:var(--component-sidebar-clip-path)]",
-            "[border-image:var(--component-sidebar-border-image)]",
-            mobilePanelOpen
-              ? "translate-x-0"
-              : "pointer-events-none translate-x-full",
-          )}
-        >
-          <div
-            className={cn(
-              "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-current/20 px-5",
-            )}
-          >
-            <Typography
-              mondwest
-              className="text-display font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
-            >
-              {t.app.modelToolsSheetTitle}
-              <br />
-              {t.app.modelToolsSheetSubtitle}
-            </Typography>
-
-            <Button
-              ghost
-              size="icon"
-              onClick={closeMobilePanel}
-              aria-label={t.app.closeModelTools}
-              className="text-text-secondary hover:text-midground"
-            >
-              <X />
-            </Button>
-          </div>
-
-          <div
-            className={cn(
-              "min-h-0 flex-1 overflow-y-auto overflow-x-hidden",
-              "border-t border-current/10",
-            )}
-          >
-            <div className="border-b border-current/10 px-1 py-2">
-              <ChatSidebar
-                channel={channel}
-                profile={scopedProfile}
-                onDashboardNewSessionRequest={startFreshDashboardChat}
-                onSessionTitleChange={handleSessionTitleChange}
-              />
-            </div>
-            <ChatSessionList
-              activeSessionId={resumeParam}
-              profile={scopedProfile}
-              onPicked={closeMobilePanel}
-              onNewChat={startFreshDashboardChat}
-              workspaceCwd={workspaceCwd}
-              onWorkspaceChange={setWorkspaceCwd}
-            />
-          </div>
-        </div>
-      </>,
-      portalRoot,
-    );
+  const navigation = isActive && navigationTarget && createPortal(
+    <section aria-label="조사 모델 연결" className="flex flex-col gap-3 p-3">
+      <ChatSidebar
+        channel={channel}
+        profile={scopedProfile}
+        onDashboardNewSessionRequest={startFreshDashboardChat}
+        onSessionTitleChange={handleSessionTitleChange}
+      />
+    </section>, navigationTarget,
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <PluginSlot name="chat:top" />
-      {mobileModelToolsPortal}
+      {navigation}
 
       {visibleBanner && (
         <div
@@ -1984,16 +1789,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
                   >
                     Reconnect now
                   </Button>
-                  {ptyState === "closed" && reconnectGaveUp && (
-                    <Button
-                      size="sm"
-                      ghost
-                      onClick={() => navigate("/system")}
-                      aria-label="Check server status"
-                    >
-                      Check server status
-                    </Button>
-                  )}
+
                 </div>
               </div>
             </div>
@@ -2030,15 +1826,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
                 >
                   Start new session
                 </Button>
-                {endedReason === "exited" && (
-                  <Button
-                    outlined
-                    onClick={() => navigate("/logs")}
-                    aria-label="Open logs"
-                  >
-                    Open logs
-                  </Button>
-                )}
+
               </div>
             </div>
           )}
@@ -2068,74 +1856,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             </span>
           </Button>
 
-          {chatPanelCollapsed && (
-            <Button
-              ghost
-              onClick={toggleChatPanel}
-              title={locale === 'ko' ? '모델·대화 목록 열기' : 'Show side panel (model + sessions)'}
-              aria-label={locale === 'ko' ? '대화 패널 열기' : 'Show chat side panel'}
-              className={cn(
-                "absolute z-10",
-                "normal-case tracking-normal font-normal",
-                "rounded border border-current/30",
-                "bg-black/20",
-                "opacity-70 hover:opacity-100 hover:border-current/60",
-                "transition-opacity duration-150",
-                "top-2 right-2 px-2 py-1 text-xs sm:top-3 sm:right-3",
-              )}
-              style={{ color: terminalFg }}
-            >
-              <span className="inline-flex items-center gap-1">
-                <PanelRight className="h-3 w-3 shrink-0" />
-                <span className="hidden min-[400px]:inline tracking-wide">
-                  {locale === 'ko' ? '대화 목록' : 'panel'}
-                </span>
-              </span>
-            </Button>
-          )}
         </div>
-
-        {!narrow && !chatPanelCollapsed && (
-          <div
-            id="chat-side-panel"
-            role="complementary"
-            aria-label={modelToolsLabel}
-            className="flex min-h-0 shrink-0 flex-col gap-3 overflow-hidden lg:h-full lg:w-60"
-          >
-            <div className="flex h-8 shrink-0 items-center justify-end pr-1">
-              <Button
-                ghost
-                size="icon"
-                onClick={toggleChatPanel}
-                aria-label={locale === 'ko' ? '대화 패널 접기' : 'Collapse chat side panel'}
-                title={locale === 'ko' ? '대화 패널 접기' : 'Collapse side panel'}
-                className="text-text-secondary hover:text-midground"
-              >
-                <X />
-              </Button>
-            </div>
-            {/* Model picker — keeps the rail thin. */}
-            <div className="shrink-0">
-              <ChatSidebar
-                channel={channel}
-                profile={scopedProfile}
-                onDashboardNewSessionRequest={startFreshDashboardChat}
-                onSessionTitleChange={handleSessionTitleChange}
-              />
-            </div>
-
-            {/* Session switcher fills the remaining height below the model box. */}
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <ChatSessionList
-                activeSessionId={resumeParam}
-                profile={scopedProfile}
-                onNewChat={startFreshDashboardChat}
-                workspaceCwd={workspaceCwd}
-                onWorkspaceChange={setWorkspaceCwd}
-              />
-            </div>
-          </div>
-        )}
       </div>
       <PluginSlot name="chat:bottom" />
     </div>

@@ -15,10 +15,10 @@ export function GoalBarView({ cols, line, t }: { cols: number; line: GoalLine | 
   const head = `${line.glyph} ${line.label} · ${line.detail} · `
 
   return (
-    <Text wrap="truncate-end">
-      <Text color={line.glyph === '⊙' ? t.color.accent : t.color.warn}>{`${line.glyph} ${line.label}`}</Text>
+    <Text color={t.color.muted} dimColor wrap="truncate-end">
+      <Text color={line.glyph === '⊙' ? t.color.muted : t.color.warn}>{`${line.glyph} ${line.label}`}</Text>
       <Text color={t.color.muted}>{` · ${line.detail} · `}</Text>
-      <Text color={t.color.text}>{compactPreview(line.title, Math.max(8, cols - stringWidth(head)))}</Text>
+      <Text color={t.color.muted}>{compactPreview(line.title, Math.max(8, cols - stringWidth(head)))}</Text>
     </Text>
   )
 }

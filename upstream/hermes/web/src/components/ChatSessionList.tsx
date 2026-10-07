@@ -73,7 +73,7 @@ export function ChatSessionList({
   workspaceCwd,
   onWorkspaceChange,
 }: ChatSessionListProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -266,9 +266,9 @@ export function ChatSessionList({
         size="sm"
         onClick={startNew}
         prefix={<MessageSquarePlus />}
-        className="mx-2 mb-2 justify-center"
+        className="forsic-new-chat mx-2 mb-2 justify-center"
       >
-        {t.sessions.newChat}
+        {locale === "ko" ? "새 대화" : t.sessions.newChat}
       </Button>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 pb-1">

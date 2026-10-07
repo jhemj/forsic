@@ -22,15 +22,15 @@ from urllib.parse import urlsplit
 
 PIN = 'bafb42b431fca313471958fdf77f9c30e455f86b'
 DEPENDENCIES = {'python-docx': '1.2.0', 'lxml': '6.1.3', 'python-telegram-bot': '22.8'}
-ROOT_FILES = ('run.py', 'telegram_mirror.py', 'telegram_mentions.py', 'telegram_reports.py',
+ROOT_FILES = ('AGENTS.md', '.hermes.md', 'run.py', 'telegram_mirror.py', 'telegram_mentions.py', 'telegram_reports.py',
               'telegram_actions.py', 'deploy_forsic.py',
               'smoke.py', 'library_smoke.py', 'requirements-forsic.txt', 'Dockerfile.tools',
-              'UPSTREAM.txt', 'README.txt', 'DEPLOYMENT.txt', 'test_deployment.py',
+              'UPSTREAM.txt', 'README.txt', 'DEPLOYMENT.txt', 'DESIGN.txt', 'HARNESS_REVIEW.txt', 'test_deployment.py',
               'test_evidence.py', 'test_workflow.py', 'test_case_library.py', 'test_intake.py',
               'test_improvements.py', 'test_investigations.py', 'test_telegram_mirror.py',
               'test_telegram_mentions.py', 'test_telegram_reports.py', 'test_telegram_actions.py',
               'test_report_driven.py', 'test_timeline_recovery.py',
-              'test_connections.py', 'test_note_revision_recovery.py', 'test_harness_guidance.py',
+              'test_connections.py', 'test_note_revision_recovery.py', 'test_harness_guidance.py', 'test_harness_context.py', 'test_note_model_view.py',
               'test_report_review_projection.py', 'test_reporting_pages.py', 'test_dashboard.cjs',
               'test_indicators.py', 'test_search_resume.py', 'test_log_timeline.py', 'test_indicator_integration.py')
 PUBLIC_FILES = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'SECURITY.md',
@@ -43,7 +43,7 @@ UPSTREAM_ADDITIONS = (
     'ui-tui/src/__tests__/sessionGreeting.test.ts', 'ui-tui/src/app/sessionGreeting.ts',
     'web/public/assets/forsic-lens.svg', 'web/src/plugins/slots.test.tsx',
     'tests/hermes_cli/test_terminal_theme.py', 'web/src/i18n/context.test.ts',
-    'web/src/forsic-shell.css', 'web/src/App.test.tsx',
+    'web/src/forsic-shell.css', 'web/src/App.test.tsx', 'web/src/lib/analysis-title.ts',
 )
 
 

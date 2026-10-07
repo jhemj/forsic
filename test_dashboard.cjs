@@ -16,6 +16,7 @@ vm.runInNewContext(fs.readFileSync('forsic_plugin/dashboard/dist/index.js', 'utf
   document: {},
   module: motionModule,
   URLSearchParams,
+  crypto: require('node:crypto').webcrypto,
 });
 const tree = components.forsic();
 function uniqueSiblingKeys(node) {
@@ -187,10 +188,19 @@ assert.equal(motionModule.exports.caseTarget({pathname:'/chat',search:''}),null)
 assert.equal(motionModule.exports.caseTarget({pathname:'/chat',search:'?case=old&resume=old&fresh=1'}),null);
 assert.equal(motionModule.exports.caseTarget({pathname:'/chat',search:'?resume=one'}).session,'one');
 assert.equal(motionModule.exports.caseTarget({pathname:'/forsic',search:'?view=history&case=one'}).caseId,'one');
-stateIndex=0; data.case.case_id='CASE-one';
+stateIndex=0; data.case.case_id='CASE-one'; data.case.scope='/evidence/case-one';
 const sidebar=motionModule.exports.Sidebar();
-const navigation=sidebar.children.find(n=>n?.props?.['aria-label']==='주 메뉴');
-const currentGroup=navigation.children.find(n=>n?.props?.key==='current');
-assert(currentGroup.children.some(n=>n?.props?.['aria-label']==='지금 사건 보기'));
-assert(!sidebar.children.some(n=>n?.props?.['aria-label']==='지금 사건 보기'));
+assert(sidebar.children.some(n=>n?.props?.['aria-label']==='증거 경로'));
+assert(sidebar.children.some(n=>n?.props?.['aria-label']==='사건 탐색'));
+assert(!JSON.stringify(sidebar).includes('작업 공간'));
 uniqueSiblingKeys(sidebar);
+stateIndex=1;
+const conversations=motionModule.exports.CaseConversations({item:{case_id:'CASE-one',conversations:[{id:'one',resume_session_id:'tip',title:'검토 대화',session_ids:['one','tip'],last_activity_at:1}]},currentSession:'tip'});
+const links=[];function collect(n){if(!n||typeof n!=='object')return;if(n.type==='a')links.push(n);for(const c of n.children||[])collect(c);}collect(conversations);
+assert.equal(links.length,1);
+const target=new URLSearchParams(links[0].props.href.split('?')[1]);
+assert.equal(target.get('case'),'CASE-one');assert.equal(target.get('resume'),'tip');assert.equal(links[0].props['aria-current'],'page');
+assert.equal(workspaceRoute({pathname:'/forsic',search:'?view=new'}).panel,'intake');
+assert.equal(workspaceRoute({pathname:'/forsic',search:'?view=current&case=one&panel=reports'}).panel,'reports');
+assert.equal(motionModule.exports.caseTarget({pathname:'/chat',search:'?case=one&resume=tip'}).session,'tip');
+console.log('Case navigation: literal evidence scope, case-bound conversations and separate intake passed');

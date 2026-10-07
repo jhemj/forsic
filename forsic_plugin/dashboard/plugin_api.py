@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse, FileResponse, Response
 from pydantic import BaseModel, Field, SecretStr
@@ -92,6 +93,46 @@ def directory():
 @router.get('/investigations')
 def investigations():
     return {'cases': directory().public()}
+
+
+class ConversationInput(BaseModel):
+    request_id: UUID
+
+
+class InvestigationInput(ConversationInput):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+def create_ui_conversation(body, *, case_id='', path=''):
+    from forsic_plugin.investigations import RequestConflict
+    try:
+        return directory().create_conversation(body.request_id, case_id=case_id, path=path)
+    except RequestConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from None
+    except (ValueError, FileNotFoundError, NotADirectoryError):
+        raise HTTPException(400, '접근할 수 있는 증거 파일이나 폴더의 전체 경로를 확인해주세요.') from None
+    except PermissionError:
+        raise HTTPException(403, '선택한 경로에 접근할 권한이 없습니다.') from None
+
+
+@router.post('/investigations')
+def investigation_create(body: InvestigationInput):
+    return create_ui_conversation(body, path=body.path)
+
+
+@router.get('/investigations/{case_id}/conversations')
+def investigation_conversations(case_id: str):
+    item = directory().get(case_id=case_id)
+    if item is None:
+        raise HTTPException(404, '사건을 찾을 수 없습니다.')
+    return {'case_id': case_id, 'conversations': item['conversations']}
+
+
+@router.post('/investigations/{case_id}/conversations')
+def investigation_conversation_create(case_id: str, body: ConversationInput):
+    return create_ui_conversation(body, case_id=case_id)
 
 
 def selected_case(case_id='', session_id=''):

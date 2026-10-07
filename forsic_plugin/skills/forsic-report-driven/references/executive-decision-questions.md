@@ -19,7 +19,7 @@
 
 1. 초기 질문과 자료를 보고 해당 경영 질문을 평범한 문장으로 `forsic_note`에 기록한다.
    예: “고객 개인정보가 이 서버에 있었고 외부로 전송됐는가?”가 너무 넓으면 보유·접근·전송으로 나눈다.
-   추정 답을 채우지 말고 현재 답, 실제 evidence_ids, 정상 대안, critical_gaps와 next_checks를 쓴다.
+   없는 관측을 채우지 말고 현재 가장 유력한 답과 질적 신뢰도·이유, 실제 evidence_ids, 정상 대안, critical_gaps와 next_checks를 쓴다. 직접 관측과 정황 기반 추론을 구분한다.
 2. `forsic_reporting(state)`에서 실제 question refs를 읽는다. `requirement`로
    REQ-CORE-ANSWER의 basis_refs에 임원에게 중요한 question refs를 선택한다.
    REQ-IMPACT는 근거 refs와 업무상 의미·미확인 영향을 rationale로 기록한다.

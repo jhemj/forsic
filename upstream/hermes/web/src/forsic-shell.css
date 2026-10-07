@@ -1,19 +1,131 @@
-/* Product layout, not overrides of the upstream administration dashboard. */
-.forsic-app{display:flex;height:100dvh;min-height:0;overflow:hidden;background:#202127;color:#e5e7eb;font-family:var(--theme-font-sans,system-ui)}
-.forsic-app-sidebar{display:flex;flex-direction:column;flex:0 0 256px;width:256px;min-height:0;border-right:1px solid #484b55;background:#202127}
-.forsic-app-brand{height:56px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid #484b55;letter-spacing:.12em}
-.forsic-app-content{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
-.forsic-chat-host{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;padding:12px}
-.forsic-shell-loading{padding:24px;color:#b0b5c0;font-size:13px}
-.forsic-shell-fallback{display:flex;flex-direction:column;gap:14px;padding:20px;font-size:13px}
-.forsic-shell-fallback a,.forsic-shell-fallback button{border:1px solid #484b55;border-radius:8px;padding:10px;background:#292b33;color:inherit;text-align:left}
-.forsic-shell-fallback :focus-visible,.forsic-app-brand button:focus-visible,.forsic-mobile-header button:focus-visible{outline:2px solid #a9bed9;outline-offset:3px}
-.forsic-mobile-header,.forsic-mobile-close,.forsic-menu-backdrop{display:none}
-@media(max-width:1023px){
-  .forsic-app{padding-top:56px}
-  .forsic-mobile-header{position:fixed;inset:0 0 auto;height:56px;display:flex;align-items:center;gap:16px;padding:0 16px;background:#202127;border-bottom:1px solid #484b55;z-index:40}
-  .forsic-mobile-header button,.forsic-mobile-close{display:block;padding:8px;border-radius:8px}
-  .forsic-app-sidebar{position:fixed;inset:0 auto 0 0;z-index:50;transform:translateX(-100%);visibility:hidden}
-  .forsic-app-sidebar[data-open=true]{transform:none;visibility:visible}
-  .forsic-menu-backdrop{display:block;position:fixed;inset:0;z-index:45;background:#0009}
+/* Forsic's shared visual language. Plugin screens use these same tokens. */
+:root {
+  --forsic-canvas: #222222;
+  --forsic-surface: #2b2b2a;
+  --forsic-inset: #1c1c1b;
+  --forsic-hover: #393938;
+  --forsic-border: #4b4b48;
+  --forsic-text: #e9e7e2;
+  --forsic-muted: #b7b6b0;
+  --forsic-accent: #d7d4cc;
+  --forsic-accent-soft: #383836;
+  --forsic-primary: #d2cfc7;
+  --forsic-primary-hover: #e2dfd7;
+  --forsic-primary-text: #252522;
+  --forsic-focus: #d7d4cc;
+  --forsic-warning: #ddc08b;
+  --forsic-error: #efaaaa;
+  --forsic-control-radius: 0px;
+  --forsic-card-radius: 0px;
+  --forsic-dialog-radius: 0px;
+  --forsic-space-1: 4px;
+  --forsic-space-2: 8px;
+  --forsic-space-3: 12px;
+  --forsic-space-4: 16px;
+  --forsic-space-6: 24px;
+  --forsic-space-8: 32px;
+  --forsic-sidebar-width: 288px;
+  --radius: 0px;
+  --theme-radius: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --color-primary: #d2cfc7;
 }
+
+.forsic-app {
+  display: flex;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--forsic-canvas);
+  color: var(--forsic-text);
+  font-family: var(--theme-font-sans, system-ui, sans-serif);
+  font-size: 14px;
+  color-scheme: dark;
+}
+.forsic-app-sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--forsic-sidebar-width);
+  width: var(--forsic-sidebar-width);
+  min-height: 0;
+  border-right: 1px solid var(--forsic-border);
+  background: var(--forsic-canvas);
+}
+.forsic-brand-space {height: 128px;flex-shrink: 0;border-bottom: 1px solid var(--forsic-border);}
+.forsic-identity-anchor {position:fixed;top:0;left:0;width:var(--forsic-sidebar-width);height:128px;z-index:61;display:flex;align-items:center;padding:8px 16px;box-sizing:border-box;pointer-events:none;}
+.forsic-identity-fallback {display:flex;flex-direction:column;gap:4px;padding-left:12px;}
+.forsic-identity-fallback b {font-size:18px;letter-spacing:.02em;}
+.forsic-identity-fallback small {font-size:10px;letter-spacing:.16em;color:var(--forsic-muted);}
+/* Native controls and portal menus share the product's rectangular geometry. */
+html.forsic-shell :is(button,input,select,textarea,dialog,[role=dialog],[role=menu],[role=listbox],[class*=rounded]) {border-radius:0!important;}
+.forsic-app-content { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.forsic-chat-host { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; padding: var(--forsic-space-3); }
+.forsic-navigation-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.forsic-shell-loading { padding: var(--forsic-space-6); color: var(--forsic-muted); font-size: 13px; line-height: 1.6; }
+.forsic-shell-fallback { display: flex; flex-direction: column; gap: var(--forsic-space-3); padding: var(--forsic-space-4); font-size: 13px; }
+.forsic-shell-fallback a, .forsic-shell-fallback button {
+  border: 1px solid var(--forsic-border);
+  border-radius: var(--forsic-control-radius);
+  padding: 10px 12px;
+  background: var(--forsic-surface);
+  color: inherit;
+  text-align: left;
+}
+.forsic-shell :is(a, button, input, select, summary):focus-visible {
+  outline: 2px solid var(--forsic-focus);
+  outline-offset: 3px;
+}
+.forsic-shell :is(.forsic-action-primary, .forsic-action-secondary) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--forsic-border);
+  border-radius: var(--forsic-control-radius);
+  font: 600 13px/1.4 var(--theme-font-sans, system-ui, sans-serif);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s;
+}
+.forsic-shell .forsic-action-primary { background: var(--forsic-primary); border-color: var(--forsic-primary); color: var(--forsic-primary-text); }
+.forsic-shell .forsic-action-primary:hover { background: var(--forsic-primary-hover); border-color: var(--forsic-accent); }
+.forsic-shell .forsic-action-secondary { background: transparent; color: var(--forsic-muted); }
+.forsic-shell .forsic-action-secondary:hover { background: var(--forsic-surface); color: var(--forsic-text); }
+.forsic-shell :is(.forsic-action-primary, .forsic-action-secondary):disabled { opacity: .5; cursor: default; }
+.forsic-mobile-header, .forsic-mobile-close, .forsic-menu-backdrop { display: none; }
+
+@media (max-width: 1023px) {
+  .forsic-app { padding-top: 96px; }
+  .forsic-identity-anchor {width:calc(100% - 64px);height:96px;padding:4px 12px;}
+  .forsic-brand-space {display:none;}
+  .forsic-mobile-header {
+    position: fixed;
+    inset: 0 0 auto;
+    height: 96px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--forsic-space-3);
+    padding: 0 var(--forsic-space-3);
+    background: var(--forsic-canvas);
+    border-bottom: 1px solid var(--forsic-border);
+    z-index: 60;
+  }
+  .forsic-mobile-header button, .forsic-mobile-close { display: grid; place-items: center; min-width: 44px; min-height: 44px; padding: 8px; border-radius: var(--forsic-control-radius); }
+  .forsic-app-sidebar { position: fixed; inset: 96px auto 0 0; width: min(320px, calc(100vw - 32px)); z-index: 50; transform: translateX(-100%); visibility: hidden; }
+  .forsic-app-sidebar[data-open=true] { transform: none; visibility: visible; }
+  .forsic-menu-backdrop { display: block; position: fixed; inset: 96px 0 0; z-index: 45; background: #0009; }
+  .forsic-shell :is(.forsic-action-primary, .forsic-action-secondary) { min-height: 44px; }
+  .forsic-chat-host { padding: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .forsic-shell :is(.forsic-action-primary, .forsic-action-secondary) { transition: none; }
+}
+
+.forsic-chat-host > div {border-radius:0;}

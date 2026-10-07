@@ -5,12 +5,13 @@
   const selectedCase = () => new URLSearchParams(window.location?.search || '').get('case') || '';
   function workspaceRoute(location=window.location || {}) {
     const params=new URLSearchParams(location.search || '');
+    if (params.get('view') === 'new') return {section:'new',panel:'intake'};
     if (location.pathname === '/sessions') return {section:'history',panel:'conversations'};
     if (location.pathname === '/chat') return {section:params.get('resume') || params.get('case') ? 'current' : 'new',panel:'chat'};
     // Keep old bookmarks working, but never combine the library and current board.
     if (params.get('view') === 'history' || ['#case-library','#investigations'].includes(location.hash))
       return {section:'history',panel:params.get('panel') === 'library' || location.hash === '#case-library' ? 'library' : 'cases'};
-    return {section:'current',panel:'board'};
+    return {section:'current',panel:params.get('panel') === 'reports' ? 'reports' : 'board'};
   }
   function workspaceURL(section,caseId='',panel='') {
     const query=new URLSearchParams({view:section});
@@ -47,7 +48,8 @@
     const params=new URLSearchParams(location.search || '');
     const caseId=params.get('case') || '', session=params.get('resume') || '';
     if(location.pathname==='/chat' && (params.get('fresh')==='1' || !caseId && !session)) return null;
-    return {caseId,session:caseId?'':session};
+    if (location.pathname==='/forsic' && (params.get('view')==='new' || !caseId)) return null;
+    return {caseId,session};
   }
   function useCase() {
     const [data, setData] = R.useState(null), [error, setError] = R.useState('');
@@ -59,15 +61,11 @@
         if (identity !== lastTarget) {setData(null); lastTarget=identity;}
         if (!target) {if(alive){setData(null);setError('');}return;}
         const {caseId:id,session}=target;
-        // Old servers ignore unknown query parameters: do not show another case's records.
-        let expected=id;
-        if(id || session) {
-          const directory=await nativeFetch(base+'/investigations');
-          if(session) expected=directory.cases.find(c=>c.session_id===session || c.resume_session_id===session)?.case_id;
-          if(!expected) {if(alive && identity===JSON.stringify(caseTarget())){setData(null);setError('이 대화에 연결된 사건이 아직 없어요.');}return;}
-        }
-        const v=await nativeFetch(scopedURL(base+'/status',expected || ''));
-        if(expected && v.case?.case_id!==expected) throw new Error('case mismatch');
+        const query = new URLSearchParams();
+        if(id) query.set('case_id',id);
+        if(session) query.set('session_id',session);
+        const v=await nativeFetch(base+'/status?'+query);
+        if(id && v.case?.case_id!==id) throw new Error('case mismatch');
         if (alive && identity === JSON.stringify(caseTarget())) { setData(v); setError(''); }
       } catch { if (alive) setError('사건 기록에 연결하지 못했어요. 잠시 뒤 다시 확인해 주세요.'); } };
       refresh(); const timer = setInterval(refresh, 2500);
@@ -152,34 +150,95 @@
             h('path', {className:'forsic-mark-write', d:'M5 19 L6 14 L16 4 L20 8 L10 18 Z M13 7 L17 11'})))),
       h('span', {className:'forsic-mood-label'}, h('i', {'aria-hidden':true}), moods[mode]));
   }
+  function Identity() {
+    const {data,error}=useCase();
+    const {mode,active,heading}=activityState(data,error);
+    return h('div',{className:'forsic-identity',title:heading},
+      h('div',{className:'forsic-identity-character'},h(Lens,{mode,active})),
+      h('div',{className:'forsic-identity-copy'},h('strong',null,'포식이'),h('small',null,moods[mode])));
+  }
+  const conversationURL = (caseId,sessionId) => '/chat?'+new URLSearchParams({profile:'default',case:caseId,resume:sessionId});
+  function useDirectory() {
+    const [items,setItems]=R.useState([]), [error,setError]=R.useState('');
+    R.useEffect(()=>{let alive=true;
+      const refresh=async()=>{try {const v=await nativeFetch(base+'/investigations'); if(alive){setItems(v.cases);setError('');}}
+        catch {if(alive) setError('사건 목록을 불러오지 못했어요.');}};
+      refresh();const timer=setInterval(refresh,5000);return()=>{alive=false;clearInterval(timer);};
+    },[]);
+    return {items,error};
+  }
+  function analysisTitle(item,session) {
+    const order=[...(item.conversations || [])].sort((a,b)=>(item.session_ids || []).indexOf(a.id)-(item.session_ids || []).indexOf(b.id));
+    const index=order.findIndex(c=>c.session_ids.includes(session));
+    return index<0 ? '분석' : `${['첫','두','세','네','다섯','여섯','일곱','여덟','아홉','열'][index] || index+1} 번째 분석`;
+  }
+  function CaseConversations({item,currentSession}) {
+    const [busy,setBusy]=R.useState(false), [error,setError]=R.useState('');
+    const [requestId]=R.useState(()=>crypto.randomUUID());
+    async function create() {
+      if(busy)return;setBusy(true);setError('');
+      try {const v=await nativeFetch(base+'/investigations/'+encodeURIComponent(item.case_id)+'/conversations',
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:requestId})});
+        window.location.href=conversationURL(v.case_id,v.session_id);
+      } catch {setError('대화를 만들지 못했어요. 같은 요청으로 다시 시도할 수 있어요.');setBusy(false);}
+    }
+    return h('section',{className:'forsic-conversation-section','aria-label':'이 사건의 대화'},
+      h('div',{className:'forsic-section-heading'},h('h3',null,'대화'),
+        h('button',{type:'button',className:'forsic-action-primary',onClick:create,disabled:busy},busy?'만드는 중…':'+ 새 대화')),
+      h('div',{className:'forsic-conversations'},...(item.conversations || []).map(c=>
+        h('a',{key:c.id,className:'forsic-nav-item',href:conversationURL(item.case_id,c.resume_session_id),
+          'aria-current':(c.session_ids || []).includes(currentSession)?'page':undefined},
+          h('span',null,analysisTitle(item,c.resume_session_id)),h('small',null,new Date(c.last_activity_at*1000).toLocaleDateString('ko-KR',{month:'short',day:'numeric'}))))),
+      !item.conversations?.length && h('p',{className:'forsic-empty'},'아직 이 사건의 대화가 없어요.'),
+      error&&h('p',{role:'status'},error));
+  }
   function Sidebar() {
-    const {data, error} = useCase();
-    const route=useRoute(), caseId=selectedCase() || data?.case?.case_id || '';
-    const conversation=useConversation(caseId);
-    const [settings, setSettings] = R.useState(false);
-    const {mode, reactionId, heading, active, since, context} = activityState(data, error);
-    return h('aside', {className: 'forsic-sidebar'},
-      h('div', {className: 'forsic-wordmark'}, 'FORSIC'),
-      h(Lens, {mode, active, key:mode + ':' + (reactionId || '')}), h('h2', null, '포식이'),
-      h('div', {className: 'forsic-bubble', 'aria-live': 'polite'}, h('strong', null, heading),
-        active && context && h('p', {className: 'forsic-path'}, context.path || context.text),
-        active && context?.reason && h('p', null, context.reason),
-        active && h('small', null, `${Math.max(0, Math.floor(Date.now()/1000 - since))}초째 확인 중`)),
-      error && h('p', {role: 'status'}, error),
-      h('div', {className: 'forsic-case-label'}, data?.case.label ? (selectedCase() ? '선택한 사건 · ' : '최근 접수 · ') + data.case.label : '증거 경로를 알려주세요'),
-      data?.case.synthetic && h('small', null, '합성 시험 자료'),
-      h('nav',{className:'forsic-main-nav','aria-label':'주 메뉴'},
-        ...[['new','새 사건','새 증거로 조사 시작','/chat?fresh=1'],
-          ['current','지금 사건','대화 · 단서 · 시간축',conversation || workspaceURL('current',caseId)],
-          ['history','이력','이전 사건 · 저장한 사례',workspaceURL('history',caseId)]].map(([id,label,description,href])=>
-          h('div',{key:id,className:'forsic-nav-group'},
-            h('a',{href,'aria-current':!settings && route.section===id ? 'page' : undefined},h('strong',null,label),h('small',null,description)),
-            id==='current' && caseId && h('nav',{className:'forsic-subnav','aria-label':'지금 사건 보기'},
-              conversation && h('a',{href:conversation,'aria-current':!settings && route.section==='current' && route.panel==='chat'?'page':undefined},'대화'),
-              h('a',{href:workspaceURL('current',caseId),'aria-current':!settings && route.section==='current' && route.panel==='board'?'page':undefined},'조사 보드')))),
-        h('button',{type:'button',className:'forsic-settings-open','aria-pressed':settings,onClick:()=>setSettings(true)},h('strong',null,'설정'),h('small',null,'모델 · GTI · 텔레그램'))),
-      settings && h(ConnectionSettings, {onClose:() => setSettings(false)}),
-      h('p', {className: 'forsic-caption'}, '포식이의 설명과 도구 기록을 함께 확인하세요.'));
+    const {data,error}=useCase(), {items,error:directoryError}=useDirectory(), route=useRoute();
+    const caseId=data?.case?.case_id || selectedCase(), item=items.find(c=>c.case_id===caseId);
+    const params=new URLSearchParams(window.location?.search || ''), currentSession=route.panel==='chat'?params.get('resume'):'';
+    const [settings,setSettings]=R.useState(false);
+    const scope=data?.case?.scope || item?.scope || '';
+    return h('aside',{className:'forsic-sidebar'},
+      h('nav',{className:'forsic-global-nav','aria-label':'사건 탐색'},
+        h('a',{className:'forsic-nav-item',href:workspaceURL('history'),'aria-current':route.section==='history'&&route.panel!=='library'?'page':undefined},'사건 목록'),
+        h('a',{className:'forsic-action-secondary',href:'/forsic?view=new','aria-current':route.section==='new'?'page':undefined},'+ 새 사건')),
+      scope && h('section',{className:'forsic-context-card','aria-label':'증거 경로'},
+        h('small',null,'증거 경로'),h('strong',null,scope.split('/').filter(Boolean).at(-1) || scope),
+        h('details',null,h('summary',null,'전체 경로 보기'),h('code',null,scope)),
+        data?.case?.selected_files?.length>0 && h('small',null,'선택한 파일 ',data.case.selected_files.length,'개')),
+      caseId && scope ? h('div',{className:'forsic-current-case'},
+        h('header',{className:'forsic-case-heading'},h('small',null,'현재 사건'),h('h2',null,(data?.case?.question && data.case.question!=='질문 선택 대기' ? data.case.question : item?.question) || data?.case?.label || item?.label),h('code',null,caseId)),
+        item && h(CaseConversations,{key:caseId,item,currentSession}),
+        h('nav',{className:'forsic-case-views','aria-label':'이 사건의 결과'},
+          h('a',{className:'forsic-nav-item',href:workspaceURL('current',caseId),'aria-current':route.panel==='board'?'page':undefined},'조사 보드'),
+          h('a',{className:'forsic-nav-item',href:workspaceURL('current',caseId,'reports'),'aria-current':route.panel==='reports'?'page':undefined},'보고서')))
+        : h('p',{className:'forsic-empty'},route.section==='new'?'원본 경로를 등록하면 사건과 첫 대화가 만들어집니다.':'사건을 선택하면 증거 경로와 대화가 여기에 표시됩니다.'),
+      directoryError&&h('p',{role:'status'},directoryError),
+      h('footer',{className:'forsic-sidebar-footer'},
+        h('a',{className:'forsic-nav-item',href:workspaceURL('history','','library'),'aria-current':route.panel==='library'?'page':undefined},'저장한 사례'),
+        h('div',{id:'forsic-model-target'}),
+        h('button',{type:'button',className:'forsic-nav-item',onClick:()=>setSettings(true)},'설정')),
+      settings&&h(ConnectionSettings,{onClose:()=>setSettings(false)}));
+  }
+  function NewCase() {
+    const [path,setPath]=R.useState(''),[busy,setBusy]=R.useState(false),[error,setError]=R.useState('');
+    const [request,setRequest]=R.useState(null);
+    async function submit(event) {
+      event.preventDefault(); if(busy || !path.trim())return;
+      const attempt=request?.path===path.trim()?request:{path:path.trim(),request_id:crypto.randomUUID()};
+      setRequest(attempt);setBusy(true);setError('');
+      try {const result=await nativeFetch(base+'/investigations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(attempt)});
+        window.location.href=conversationURL(result.case_id,result.session_id);
+      } catch {setError('경로를 등록하지 못했어요. 접근 가능한 파일·폴더의 전체 경로인지 확인해 주세요.');setBusy(false);}
+    }
+    return h('section',{className:'forsic-records forsic-new-case'},
+      h('header',{className:'forsic-workspace-heading'},h('div',null,h('small',null,'새 사건'),h('h1',null,'어떤 증거를 조사할까요?'),h('p',null,'파일이나 폴더의 경로를 기준으로 사건을 만들고, 그 안에서 포식이와 대화합니다.'))),
+      h('form',{onSubmit:submit},h('label',{htmlFor:'forsic-evidence-path'},'증거 경로'),
+        h('input',{id:'forsic-evidence-path',value:path,onChange:e=>setPath(e.target.value),placeholder:'/home/사용자/증거/사건폴더',required:true,disabled:busy,autoComplete:'off',spellCheck:false}),
+        h('p',null,'원본은 읽기 전용으로 확인합니다. 조사 목적은 다음 대화에서 정할 수 있어요.'),
+        error&&h('p',{role:'alert'},error),
+        h('button',{type:'submit',className:'forsic-action-primary',disabled:busy||!path.trim()},busy?'경로 확인 중…':'사건 만들고 대화 시작')),
+      h('div',{className:'forsic-intake-explanation'},h('h2',null,'사건과 대화'),h('p',null,'같은 증거에 대한 추가 질문은 사건 안에서 새 대화로 이어가세요. 다른 증거를 조사할 때는 새 사건을 만듭니다.')));
   }
   function settingsBody(value, secret, clearKey, telegram={}) {
     return {llm_base_url:value.llm.base_url, llm_model:value.llm.model,
@@ -341,38 +400,49 @@
       && (item.label + ' ' + item.title + ' ' + item.case_id).toLowerCase().includes(query.toLowerCase()));
     return h('section', {id:'investigations', className:'forsic-directory'},
       h('div', {className:'forsic-directory-heading'}, h('div', null, h('h2', null, '사건 이력'),
-        h('p', null, '같은 사건은 이어서, 다른 증거는 새 대화에서 조사하세요.')),
+        h('p', null, '사건을 선택하면 마지막 대화로 이어집니다.')),
         h('a', {href:'/chat?fresh=1'}, '+ 새 사건')),
       h('div', {className:'forsic-directory-filters'},
         h('button', {'aria-pressed':filter==='active', onClick:() => setFilter('active')}, '사건 목록'),
         h('button', {'aria-pressed':filter==='archived', onClick:() => setFilter('archived')}, '보관함'),
         h('input', {value:query, onChange:e => setQuery(e.target.value), placeholder:'사건 이름 검색', 'aria-label':'사건 검색'})),
       error && h('p', {role:'status'}, error),
-      !error && !visible.length && h('p', null, filter==='archived' ? '보관한 사건이 없어요.' : '등록된 사건이 없어요. 새 대화에서 증거 경로를 알려주세요.'),
+      !error && !visible.length && h('p', null, filter==='archived' ? '보관한 사건이 없어요.' : '등록된 사건이 없어요. 새 사건에서 증거 경로를 등록하세요.'),
       ...visible.map(item => h('article', {key:item.case_id, className:'forsic-investigation'},
-        h('div', null, h('strong', null, item.label), h('small', null, item.case_id, item.synthetic ? ' · 합성 시험' : ''),
-          h('p', null, item.question)),
-        h('div', {className:'forsic-investigation-status'},
-          h('span', {'data-status':item.status}, {investigating:'조사 중',waiting:'대기',ended:'실행 종료',completed:'실행 종료'}[item.status]),
-          h('small', null, '최근 활동 ', new Date(item.last_activity_at*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}))),
-        h('div', {className:'forsic-investigation-actions'},
-          h('a', {href:'/chat?profile=default&resume=' + encodeURIComponent(item.resume_session_id) + '&case=' + encodeURIComponent(item.case_id)}, '대화 이어가기'),
-          h('a', {href:workspaceURL('current',item.case_id)}, '조사 보드 · 보고서'),
-          h('button', {onClick:() => archive(item), title:'목록에서 보관하며, 실행을 중단하거나 자료를 삭제하지 않습니다.'}, item.archived ? '목록으로 복원' : '보관')))));
+        h('a', {className:'forsic-investigation-link',href:conversationURL(item.case_id,item.resume_session_id), 'aria-label':item.label+' 대화 열기'},
+          h('div', null, h('strong', null, item.label), h('small', null, item.case_id, item.synthetic ? ' · 합성 시험' : ''),
+            h('p', null, item.question),h('code',{className:'forsic-directory-path'},item.scope)),
+          h('div', {className:'forsic-investigation-status'},
+            h('span', {'data-status':item.status}, {investigating:'조사 중',waiting:'대기',ended:'실행 종료',completed:'실행 종료'}[item.status]),
+            h('small', null, '최근 활동 ', new Date(item.last_activity_at*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})))),
+        h('button', {className:'forsic-archive-action',onClick:() => archive(item), 'aria-label':item.archived ? item.label+' 목록으로 복원' : item.label+' 보관', title:item.archived ? '목록으로 복원' : '사건 보관'},
+          h('svg',{viewBox:'0 0 24 24',width:18,height:18,fill:'none',stroke:'currentColor',strokeWidth:1.5,'aria-hidden':true},
+            h('path',{d:'M4 8H20V20H4Z M3 4H21V8H3Z'}),
+            h('path',{d:item.archived?'M12 17V11 M9 14L12 11L15 14':'M9 12H15'}))))));
   }
-  function ReportDriven({caseId, onSource}) {
-    const [value, setValue] = R.useState(null), [error, setError] = R.useState('');
-    async function load() { try { setValue(await nativeFetch(scopedURL(base + '/report-driven', caseId))); setError(''); } catch { setError('보고 상태를 가져오지 못했어요. 현재 서버에 새 보고 기능이 배포되었는지 확인해주세요.'); } }
-    R.useEffect(() => {setValue(null); setError('');}, [caseId]);
-    return h('section', null, h('h2', null, '보고를 위해 다음에 확인할 것'),
-      h('button', {onClick:load}, '현재 답 · 남은 확인 · 보고서 묶음 보기'), error && h('p', {role:'status'}, error),
-      value && h('div', null,
-        ...value.state.questions.map(q => h('article', {key:q.id}, h('h3', null, q.question), h('p', null, q.answer))),
-        ...value.state.gaps.filter(g => g.disposition !== 'resolved').map(g => h('details', {key:g.id}, h('summary', null, g.original_obligation), h('p', null, g.reason), h('p', null, g.reopen_conditions.join(' / ')))),
-        ...value.state.sources.map((s,i) => h('button', {key:s.id, onClick:() => onSource(s.id)}, '근거 ' + (i+1) + ' · ' + s.label)),
-        ...value.bundles.map(b => h('article', {key:b.bundle_id}, h('p', null, b.stale ? '이전 판단의 보존 보고서 · 정정 후 재생성 필요' : '현재 판단의 부분 보고서'),
-          ...b.files.map(f => h('a', {key:f.name, download:f.name, href:scopedURL(base + '/report-bundles/' + b.bundle_id + '/' + f.name, caseId)}, (f.name.startsWith('executive') ? '임원용 ' : '실무자용 ') + (f.name.endsWith('.docx') ? 'Word' : 'HTML') + ' ↓ ')),
-          h('a', {download:'manifest.json', href:scopedURL(base + '/report-bundles/' + b.bundle_id + '/manifest.json', caseId)}, '파일 검증 목록 ↓')))));
+  function ReportDriven({caseId, onSource, autoLoad=false}) {
+    const [value,setValue]=R.useState(null),[error,setError]=R.useState('');
+    async function load() {try {setValue(await nativeFetch(scopedURL(base+'/report-driven',caseId)));setError('');} catch {setError('보고서 상태를 불러오지 못했어요. 다시 시도해 주세요.');}}
+    R.useEffect(()=>{let alive=true;setValue(null);setError('');
+      if(autoLoad)nativeFetch(scopedURL(base+'/report-driven',caseId)).then(v=>{if(alive)setValue(v);}).catch(()=>{if(alive)setError('보고서 상태를 불러오지 못했어요. 다시 시도해 주세요.');});
+      return()=>{alive=false;};
+    },[caseId,autoLoad]);
+    return h('section',{className:'forsic-report-overview'},
+      h('div',{className:'forsic-section-heading'},h('h2',null,autoLoad?'조사 보고서':'보고 상태'),h('button',{className:'forsic-action-secondary',onClick:load},value?'새로고침':'보고서 확인')),
+      error&&h('p',{role:'status'},error),
+      autoLoad&&!value&&!error&&h('p',{role:'status'},'보고서를 불러오고 있어요.'),
+      value&&h('div',null,
+        !value.bundles.length&&h('p',{className:'forsic-empty'},'아직 생성된 보고서가 없어요. 조사 중 정리된 판단과 남은 확인은 아래에서 볼 수 있습니다.'),
+        ...value.bundles.map(b=>h('article',{key:b.bundle_id,className:'forsic-report-bundle'},
+          h('h3',null,b.stale?'이전 판단의 보존 보고서':'현재 판단의 부분 보고서'),
+          h('p',null,b.stale?'판단이 바뀌어 다시 작성할 필요가 있습니다.':'파일 생성과 조사 완료는 다릅니다. 남은 확인과 함께 읽어 주세요.'),
+          h('div',{className:'forsic-report-downloads'},...b.files.map(f=>h('a',{key:f.name,className:'forsic-action-secondary',download:f.name,href:scopedURL(base+'/report-bundles/'+b.bundle_id+'/'+f.name,caseId)},
+            (f.name.startsWith('executive')?'임원용 ':'실무자용 ')+(f.name.endsWith('.docx')?'Word':'HTML')+' ↓'))),
+          h('a',{className:'forsic-report-manifest',download:'manifest.json',href:scopedURL(base+'/report-bundles/'+b.bundle_id+'/manifest.json',caseId)},'파일 검증 목록'))),
+        h('details',{className:'forsic-report-coverage'},h('summary',null,'현재 판단과 남은 확인'),
+          ...value.state.questions.map(q=>h('article',{key:q.id},h('h3',null,q.question),h('p',null,q.answer))),
+          ...value.state.gaps.filter(g=>g.disposition!=='resolved').map(g=>h('details',{key:g.id},h('summary',null,g.original_obligation),h('p',null,g.reason),h('p',null,g.reopen_conditions.join(' / ')))),
+          ...value.state.sources.map((source,i)=>h('button',{key:source.id,onClick:()=>onSource(source.id)},'근거 '+(i+1)+' · '+source.label)))));
   }
   // A read-only view of existing notes. No new model, generated facts or parallel state store.
   function investigationView(data) {
@@ -495,20 +565,21 @@
       const candidates = match ? (report.evidence_ids || []).filter(id => id.startsWith(match[1])) : [];
       return candidates.length === 1 ? h('button', {key: i, onClick: async () => setSelected(await fetchJSON(base + '/evidence/' + candidates[0]))}, '근거 보기') : part;
     });
+    const reportsOnly=workspaceRoute().panel==='reports';
     return h('section', {className: 'forsic-records'},
-      h('header',{className:'forsic-workspace-heading'},h('div',null,h('small',null,'지금 사건'),h('h1', {id:'case-records'}, data?.case.label || '사건 기록')),
+      h('header',{className:'forsic-workspace-heading'},h('div',null,h('small',null,reportsOnly?'보고서':'조사 보드'),h('h1', {id:'case-records'}, data?.case.label || '사건 기록')),
         conversation && h('a',{href:conversation},'대화로 돌아가기 →')),
       h('p', null, data?.case.question),
-      h('nav',{'aria-label':'조사 보드 보기',className:'forsic-board-tabs'},...['findings','indicators'].map(tab=>h('button',{key:tab,'aria-pressed':boardTab===tab,onClick:()=>setBoardTab(tab)},tab==='findings'?'조사 결과·시간축':'IOC·관측 지표'))),
-      boardTab==='indicators'?h(IndicatorBoard,{key:data?.case?.case_id||'none',caseId:data?.case?.case_id||'',onSource:async id=>setSelected(await fetchJSON(base+'/evidence/'+id))}):h(InvestigationBoard,{data,onSource:async id=>setSelected(await fetchJSON(base+'/evidence/'+id))}),
-      data && h(ReportDriven, {key:'report-driven-' + data.case.case_id, caseId:data.case.case_id, onSource:async id => setSelected(await fetchJSON(base + '/evidence/' + id))}),
-      error && h('p', {role: 'status'}, error), h('h2', null, '조사 과정'),
-      h('p', null, '최근 작업을 펼치면 확인 결과와 원문을 볼 수 있어요. 전체 대화는 이전 대화에서 확인하세요.'),
-      ...(data?.events || []).filter(e => ['tool_result', 'turn_complete', 'api_request_error'].includes(e.kind)).map(e => h('details', {key: e.id},
+      !reportsOnly && h('nav',{'aria-label':'조사 보드 보기',className:'forsic-board-tabs'},...['findings','indicators'].map(tab=>h('button',{key:tab,'aria-pressed':boardTab===tab,onClick:()=>setBoardTab(tab)},tab==='findings'?'조사 결과·시간축':'IOC·관측 지표'))),
+      !reportsOnly && (boardTab==='indicators'?h(IndicatorBoard,{key:data?.case?.case_id||'none',caseId:data?.case?.case_id||'',onSource:async id=>setSelected(await fetchJSON(base+'/evidence/'+id))}):h(InvestigationBoard,{data,onSource:async id=>setSelected(await fetchJSON(base+'/evidence/'+id))})),
+      data && h(ReportDriven, {key:'report-driven-' + data.case.case_id, caseId:data.case.case_id, autoLoad:reportsOnly, onSource:async id => setSelected(await fetchJSON(base + '/evidence/' + id))}),
+      error && h('p', {role: 'status'}, error), !reportsOnly && h('h2', null, '조사 과정'),
+      !reportsOnly && h('p', null, '최근 작업을 펼치면 확인 결과와 원문을 볼 수 있어요. 전체 대화는 이전 대화에서 확인하세요.'),
+      ...(reportsOnly?[]:(data?.events || [])).filter(e => ['tool_result', 'turn_complete', 'api_request_error'].includes(e.kind)).map(e => h('details', {key: e.id},
         h('summary', null, new Date(e.time * 1000).toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}), ' · ', e.data.path || (e.data.tool === 'forsic_report' ? '보고서 저장' : e.data.tool === 'forsic_list' ? '자료 목록' : e.data.tool === 'forsic_case' ? '조사 범위' : e.kind === 'turn_complete' ? '조사 결과' : '확인 결과'), e.data.error ? ' · 확인 실패' : ''),
         h('pre', null, e.data.summary || JSON.stringify(e.data, null, 2)),
         e.kind === 'tool_result' && h('button', {onClick: () => setSelected(e)}, '원문 결과 열기'))),
-      h('h2', null, '보고서'), ...(data?.reports || []).map((name, i) => h('button', {key: name, onClick: async () => { try { setReport(await fetchJSON(base + '/report-text/' + name)); } catch { setReport({name, markdown: '보고서를 열지 못했어요. 잠시 뒤 다시 열어주세요.'}); } }}, name.includes('-executive') ? '임원용 요약' : name.includes('-analyst') ? '분석가용 상세' : i === 0 ? '최근 보고서 열기' : '이전 보고서 ' + i)),
+      !!data?.reports?.length && h('h2', null, '이전 형식의 보고서'), ...(data?.reports || []).map((name, i) => h('button', {key: name, onClick: async () => { try { setReport(await fetchJSON(base + '/report-text/' + name)); } catch { setReport({name, markdown: '보고서를 열지 못했어요. 잠시 뒤 다시 열어주세요.'}); } }}, name.includes('-executive') ? '임원용 요약' : name.includes('-analyst') ? '분석가용 상세' : i === 0 ? '최근 보고서 열기' : '이전 보고서 ' + i)),
       report && h('div', {className: 'forsic-modal', role: 'dialog', 'aria-modal': true, 'aria-label': '조사 보고서'}, h('button', {onClick: () => setReport(null)}, '닫기'), h('h2', null, '조사 보고서'),
         report.docx && h('a', {href: scopedURL(base + '/download/' + report.docx, data?.case.case_id || ''), download: report.docx}, 'Word 내려받기'),
         report.source_appendix && h('a', {href: scopedURL(base + '/download/' + report.source_appendix, data?.case.case_id || ''), download: report.source_appendix}, '근거 부록 내려받기'),
@@ -520,22 +591,27 @@
   function History({data,route,error}) {
     const id=selectedCase() || data?.case?.case_id || '';
     return h('section',{className:'forsic-records forsic-history'},
-      h('header',{className:'forsic-workspace-heading'},h('div',null,h('small',null,'FORSIC'),h('h1',null,'이력'),h('p',null,'이전 사건을 이어 보거나, 참고할 조사 사례를 찾아보세요.'))),
+      h('header',{className:'forsic-workspace-heading'},h('div',null,h('small',null,'FORSIC'),h('h1',null,'사건 목록'),h('p',null,'이전 사건을 이어 보거나, 참고할 조사 사례를 찾아보세요.'))),
       h('nav',{className:'forsic-view-tabs','aria-label':'이력 종류'},
-        ...[['cases','사건 이력'],['library','저장한 사례']].map(([panel,label])=>h('a',{key:panel,href:workspaceURL('history',id,panel),'aria-current':route.panel===panel?'page':undefined},label)),
-        h('a',{href:'/sessions'},'전체 대화')),
+        ...[['cases','사건 목록'],['library','저장한 사례']].map(([panel,label])=>h('a',{key:panel,href:workspaceURL('history',id,panel),'aria-current':route.panel===panel?'page':undefined},label)),
+        h('a',{href:'/forsic?view=new',className:'forsic-action-secondary'},'+ 새 사건')),
       error && h('p',{role:'status'},error),
       route.panel==='library' ? h(CaseLibrary,{key:id,current:data?.case}) : h(CaseDirectory));
   }
   function Workspace() {
     const {data,error}=useCase(), route=useRoute();
+    if(route.section==='new') return h(NewCase);
     return route.section==='history' ? h(History,{key:data?.case?.case_id || '',data,error,route}) : h(Records,{key:data?.case?.case_id || '',data,error});
   }
   window.__HERMES_PLUGINS__.register('forsic', Workspace);
   window.__HERMES_PLUGINS__.registerSlot('forsic', 'sidebar', Sidebar);
-  window.__HERMES_PLUGINS__.registerSlot('forsic', 'header-left', () => h('b', {className: 'forsic-brand'}, 'FORSIC'));
+  window.__HERMES_PLUGINS__.registerSlot('forsic', 'chat:top', () => {
+    const {data}=useCase();
+    return data?.case?.question==='질문 선택 대기' ? h('div',{className:'forsic-intake-greeting'},'증거가 등록됐어요. 종합 침해 분석은 아래 대화에 1을 입력하거나, 확인하고 싶은 내용을 자유롭게 질문하세요.') : null;
+  });
+  window.__HERMES_PLUGINS__.registerSlot('forsic', 'header-left', Identity);
   document.documentElement?.classList.add('forsic-shell');
   document.title = 'Forsic · 포식이와 조사하기';
   // Offline contract/visual tests reuse the real component without a model or case writes.
-  if (typeof module !== 'undefined') module.exports = {activityState, Lens, moods, CaseCard, scopedURL, caseTarget, CaseDirectory, CaseLibrary, Records, History, Sidebar, workspaceRoute, workspaceURL, ConnectionSettings, settingsBody, investigationView, InvestigationBoard, EvidenceCard, IndicatorBoard, indicatorLabels};
+  if (typeof module !== 'undefined') module.exports = {activityState, Lens, Identity, moods, CaseCard, scopedURL, caseTarget, CaseDirectory, CaseLibrary, Records, History, Sidebar, workspaceRoute, workspaceURL, ConnectionSettings, CaseConversations, NewCase, conversationURL, analysisTitle, settingsBody, investigationView, InvestigationBoard, EvidenceCard, IndicatorBoard, indicatorLabels};
 })();

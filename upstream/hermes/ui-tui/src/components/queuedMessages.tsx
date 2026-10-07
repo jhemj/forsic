@@ -42,7 +42,7 @@ export function QueuedMessages({ cols, queueEditIdx, queued, t }: QueuedMessages
         const active = queueEditIdx === idx
 
         return (
-          <Text color={active ? t.color.accent : t.color.muted} dimColor key={`${idx}-${item.slice(0, 16)}`}>
+          <Text bold={active} color={t.color.prompt} key={`${idx}-${item.slice(0, 16)}`}>
             {active ? '▸' : ' '} {idx + 1}. {compactPreview(item, Math.max(16, cols - 10))}
           </Text>
         )

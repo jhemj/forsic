@@ -4021,7 +4021,19 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             + _language_and_provenance_rule +
             "NEVER include API keys, tokens, passwords, secrets, credentials, or connection strings in the "
             "summary — replace any that appear with [REDACTED]. Note that credentials were present, but do "
-            "not preserve their values."
+            "not preserve their values. "
+            "EVIDENCE PROVENANCE: Keep tool observations, assistant interpretations, and unresolved "
+            "assumptions distinct. Attribute every material conclusion to its actual speaker or source; "
+            "an assistant claim, saved note, or previous summary is not an independently verified fact. "
+            "Preserve the source ID, location, coverage and uncertainty for material observations. "
+            "When later evidence contradicts a prior claim, mark the old claim superseded and retain "
+            "the correction in Active State; never leave the obsolete claim as an unqualified fact "
+            "elsewhere in the summary. Missing output or a failed read is not a negative finding. "
+            "A recorded command is not its successful effect, an object's name is not its behavior, "
+            "and temporal proximity is not proof of causation or authorization. "
+            "For unfinished investigations, prioritize a short current evidence/claim/open-question "
+            "ledger over repeated old narrative. Preserve uncertainty rather than settling disputes "
+            "during summarization. Do not conduct new analysis or invent missing evidence."
         )
         # Lean mode folds the session log into this SAME single request (one aux call).
         _session_log_section = _LEAN_SESSION_LOG_SECTION if getattr(self, "tail_mode", "lean") == "lean" else ""

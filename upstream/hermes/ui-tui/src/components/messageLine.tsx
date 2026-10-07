@@ -172,7 +172,11 @@ export const MessageLine = memo(function MessageLine({
 
   const content = (() => {
     if (msg.kind === 'slash') {
-      return <Text color={t.color.muted}>{msg.text}</Text>
+      return (
+        <Text color={t.color.muted} dimColor>
+          {msg.text}
+        </Text>
+      )
     }
 
     // ── Collapsible long system message (system prompt, AGENTS.md, etc.) ──
@@ -191,13 +195,23 @@ export const MessageLine = memo(function MessageLine({
               {T.chars(msg.text.length.toLocaleString())}
             </Text>
           </Box>
-          {systemOpen && <Ansi>{sanitizeAnsiForRender(msg.text)}</Ansi>}
+          {systemOpen && (
+            <Text dimColor>
+              <Ansi>{sanitizeAnsiForRender(msg.text)}</Ansi>
+            </Text>
+          )}
         </Box>
       )
     }
 
     if (msg.role !== 'user' && hasAnsi(msg.text)) {
-      return <Ansi>{sanitizeAnsiForRender(msg.text)}</Ansi>
+      return msg.role === 'system' ? (
+        <Text dimColor>
+          <Ansi>{sanitizeAnsiForRender(msg.text)}</Ansi>
+        </Text>
+      ) : (
+        <Ansi>{sanitizeAnsiForRender(msg.text)}</Ansi>
+      )
     }
 
     if (msg.role === 'assistant') {
@@ -227,9 +241,8 @@ export const MessageLine = memo(function MessageLine({
       )
     }
 
-    // A skill, `@ref`, or attachment token the user put in the message keeps
-    // the accent it wore in the composer, instead of flattening back into the
-    // body text.
+    // Keep user-authored references in the human-message tone; bold preserves
+    // their distinction without borrowing the assistant's accent.
     if (msg.role === 'user') {
       const segments = splitComposerHighlights(msg.text)
 
@@ -237,7 +250,7 @@ export const MessageLine = memo(function MessageLine({
         <Text {...(body ? { color: body } : {})}>
           {segments.map((segment, i) =>
             segment.ref ? (
-              <Text color={t.color.accent} key={i}>
+              <Text bold color={body} key={i}>
                 {segment.text}
               </Text>
             ) : (
@@ -248,7 +261,11 @@ export const MessageLine = memo(function MessageLine({
       )
     }
 
-    return <Text {...(body ? { color: body } : {})}>{msg.text}</Text>
+    return (
+      <Text color={body} dimColor={msg.role === 'system'}>
+        {msg.text}
+      </Text>
+    )
   })()
 
   // Diff segments (emitted by pushInlineDiffSegment between narration
@@ -324,7 +341,7 @@ export const MessageLine = memo(function MessageLine({
 
       <Box>
         <NoSelect flexShrink={0} fromLeftEdge width={gutterWidth}>
-          <Text bold={msg.role === 'user'} color={prefix}>
+          <Text bold={msg.role === 'user'} color={prefix} dimColor={msg.role === 'system'}>
             {glyph}{' '}
           </Text>
         </NoSelect>

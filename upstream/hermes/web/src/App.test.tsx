@@ -5,6 +5,7 @@ import { MemoryRouter, useNavigate } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ loading: true, mounts: 0, unmounts: 0 }));
+vi.mock('@/lib/api', () => ({ fetchJSON: async () => ({cases:[{case_id:'A',label:'Case A',session_ids:['one']},{case_id:'B',label:'Case B',session_ids:['two']}]}) }));
 vi.mock('@/plugins', () => ({
   usePlugins: () => ({ loading: state.loading }),
   PluginSlot: ({ fallback }: { fallback: ReactNode }) => fallback,
@@ -45,7 +46,7 @@ it('keeps loading and plugin-failure navigation product-only without starting a 
   state.loading = false;
   await act(async () => root.render(view('/forsic')));
   expect(Array.from(container.querySelectorAll('nav a')).map(a => a.getAttribute('href')))
-    .toEqual(['/chat', '/sessions']);
+    .toEqual(['/forsic?view=new', '/forsic?view=history']);
   expect(container.textContent).toContain('session authentication');
   expect(state.mounts).toBe(0);
 });
@@ -54,11 +55,11 @@ it('keeps the same native terminal mounted across board/history navigation and r
   state.loading = false;
   await act(async () => root.render(view('/forsic')));
   expect(state.mounts).toBe(0);
-  await act(async () => { await navigate('/chat'); });
+  await act(async () => { await navigate('/chat?case=A&resume=one'); });
   expect(state.mounts).toBe(1);
   await act(async () => { await navigate('/forsic?view=history'); });
   expect(container.querySelector('[data-chat-active]')?.getAttribute('aria-hidden')).toBe('true');
-  await act(async () => { await navigate('/chat'); });
+  await act(async () => { await navigate('/chat?case=A&resume=one'); });
   expect(state.mounts).toBe(1);
   expect(state.unmounts).toBe(0);
   await act(async () => { await navigate('/models'); });
@@ -74,4 +75,17 @@ it('closes the mobile navigation when switching board views', async () => {
   await act(async () => { await navigate('/forsic?view=history'); });
   expect(container.querySelector('#app-sidebar')?.getAttribute('data-open')).toBe('false');
   expect(state.mounts).toBe(0);
+});
+
+it('does not open a native terminal when a session belongs to another case', async () => {
+  state.loading=false;
+  await act(async () => root.render(view('/chat?case=A&resume=two')));
+  expect(state.mounts).toBe(0);
+  expect(container.textContent).toContain('이 대화와 사건의 연결이 일치하지 않습니다.');
+});
+it('opens evidence intake for a new case without starting an agent', async () => {
+  state.loading=false;
+  await act(async () => root.render(view('/chat?fresh=1')));
+  expect(state.mounts).toBe(0);
+  expect(container.textContent).toContain('investigation board');
 });
