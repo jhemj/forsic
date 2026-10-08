@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from forsic_plugin import register
 from forsic_plugin.intake import Intake, write_json
@@ -24,7 +24,11 @@ class NoteModelViewTests(unittest.TestCase):
         self.case = self.intake.case('session')
         ctx = Mock()
         ctx.get_config.side_effect = {'intake_root': str(root / 'intake'), 'synthetic_roots': [str(evidence)]}.get
-        register(ctx)
+        # This suite isolates model presentation; the separate context tests use
+        # a real native DB and verify missing/unreadable binding behavior.
+        with patch('forsic_plugin.investigation_context.native_goal_binding',return_value={
+                'status':'ready','goal_id':'','conversation_id':'session'}):
+            register(ctx)
         call = next(c for c in ctx.register_tool.call_args_list if c.kwargs['name'] == 'forsic_note')
         self.schema = call.kwargs['schema']
         self.handler = call.kwargs['handler']

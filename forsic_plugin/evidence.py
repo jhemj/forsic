@@ -13,22 +13,29 @@ import uuid
 
 
 class Case:
-    def __init__(self, manifest):
+    def __init__(self, manifest, *, read_only=False):
+        self.read_only = read_only
         self.manifest = Path(manifest).resolve(strict=True)
         self.config = json.loads(self.manifest.read_text())
         self.root = Path(self.config["evidence_root"]).resolve(strict=True)
         self.output = Path(self.config["output_root"]).resolve()
         if self.output == self.root or self.output.is_relative_to(self.root):
             raise ValueError("Results must be outside the evidence directory")
-        self.output.mkdir(parents=True, exist_ok=True)
         self.db = self.output / "activity.sqlite3"
-        with self.connect() as db:
-            db.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, time REAL, kind TEXT, session TEXT, data TEXT)")
+        if read_only:
+            if not self.db.is_file():
+                raise ValueError('The existing case ledger is unavailable')
+        else:
+            self.output.mkdir(parents=True, exist_ok=True)
+            with self.connect() as db:
+                db.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, time REAL, kind TEXT, session TEXT, data TEXT)")
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.db, timeout=15)
+        db = sqlite3.connect(self.db.as_uri() + '?mode=ro', uri=True, timeout=15) if self.read_only else sqlite3.connect(self.db, timeout=15)
         db.row_factory = sqlite3.Row
+        if self.read_only:
+            db.execute('PRAGMA query_only=ON')
         try:
             # sqlite's transaction context commits/rolls back, but does not close.
             with db:
@@ -268,8 +275,38 @@ class Case:
         (self.output / name).write_text(body + appendix, encoding="utf-8")
         return {"report": name, "evidence_ids": citations, "meaning": "Saved model-authored report; citations resolve to recorded results, not independent analyst approval."}
 
-    def invoke(self, tool, args, session=""):
-        started = self.record("tool_start", {"tool": tool, "reason": args.get("reason", ""), "path": args.get("file_path") or args.get("path", ""), "text": args.get("text", ""), 'arguments': args}, session)
+    def invoke(self, tool, args, session="", *, request_context=None):
+        if self.read_only:
+            raise ValueError('Read-only case projections cannot invoke tools')
+        request_context = request_context or {}
+        conversation_id = request_context.get('conversation_id') or request_context.get('session_id') or session
+        # Model-only linkage fields never become evidence-parser arguments.
+        call_args = {k: v for k, v in args.items() if k not in ('mission_id', 'mission_version') and not k.startswith('_')}
+        mission_context, admission_error = None, None
+        writes_question = (tool == 'forsic_note' and args.get('action') == 'save') or (
+            tool == 'forsic_reporting' and args.get('action') in ('question', 'mission', 'assess', 'gap', 'requirement'))
+        if request_context.get('status') == 'unavailable' and (writes_question or args.get('mission_id') or args.get('mission_version')):
+            admission_error = 'Native session/goal binding is unavailable; retry this state change only after that binding can be read. No unrelated goal was selected.'
+        started = uuid.uuid4().hex
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                if not admission_error and (args.get('mission_id') or args.get('mission_version')):
+                    from .report_driven.investigation_state import validate_execution_context
+                    mission_context = validate_execution_context(
+                        self, args.get('mission_id'), args.get('mission_version'), tool, call_args,
+                        goal_id=request_context.get('goal_id', ''), session_id=conversation_id)
+            except (ValueError, KeyError, TypeError, StopIteration) as exc:
+                admission_error = str(exc)
+            start_data = {"tool": tool, "reason": args.get("reason", ""),
+                          "path": args.get("file_path") or args.get("path", ""),
+                          "text": args.get("text", ""), 'arguments': call_args}
+            if mission_context:
+                start_data['mission_context'] = mission_context
+            if admission_error:
+                start_data['execution_rejected'] = True
+            db.execute('INSERT INTO events VALUES (?,?,?,?,?)',
+                       (started, time.time(), 'tool_start', session, json.dumps(start_data, ensure_ascii=False)))
         handlers = {"forsic_case": self.info, "forsic_list": self.list_files, "forsic_read": self.read,
                     "forsic_search": self.search, "forsic_hash": self.hash_file,
                     "forsic_image_info": self.image_info, "forsic_report": self.report}
@@ -285,6 +322,8 @@ class Case:
             from forsic_plugin.indicators import invoke as indicators
             handlers['forsic_indicators'] = lambda args: indicators(self, args)
         try:
+            if admission_error:
+                raise ValueError(admission_error)
             if args.get('cursor') is not None and (tool == 'forsic_search' or (tool == 'forsic_image_files' and args.get('action') == 'search')):
                 # A cursor carries unfinished text. Only reuse one actually returned
                 # in this case; accepting model-authored preview/matched state would
@@ -296,13 +335,19 @@ class Case:
                     saved = db.execute("SELECT data FROM events WHERE kind='tool_result' AND json_extract(data,'$.tool')=? AND json_extract(data,'$.next_cursor.checksum')=?", (tool, cursor.get('checksum'))).fetchall()
                 if not any(json.loads(row['data']).get('next_cursor') == cursor for row in saved):
                     raise ValueError('Use the unchanged next_cursor from a saved search result in this case')
-            result = handlers[tool](args)
+            if tool in ('forsic_note', 'forsic_reporting'):
+                call_args.update(_goal_id=request_context.get('goal_id', ''), _session_id=conversation_id)
+            result = handlers[tool](call_args)
         except (OSError, ValueError, KeyError, TypeError, StopIteration, ImportError, sqlite3.Error, subprocess.SubprocessError) as exc:
             result = {"error": str(exc), "error_type": type(exc).__name__, "next_step": "Explain the limitation; change the path/scope/tool if supported. Do not repeat the identical failed call."}
             if isinstance(exc, FileNotFoundError) and tool in ('forsic_read', 'forsic_read_bytes', 'forsic_search', 'forsic_list'):
                 result.update(outcome='not_found', path=args.get('path', ''),
                               meaning='Requested path was not found in the selected evidence; deletion history is not established.')
         result = {"tool": tool, "started_id": started, **result}
+        if mission_context:
+            result['mission_context'] = mission_context
+        if admission_error:
+            result['execution_rejected'] = True
         eid = self.record("tool_result", result, session)
         if tool == 'forsic_intel':
             from .intelligence import model_view

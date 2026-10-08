@@ -1635,6 +1635,17 @@ class SessionDB(
         else:
             self._write_sql(sql, (key, value))
 
+    def compare_and_swap_meta(self, key: str, expected: str, value: str) -> bool:
+        """Replace an existing value only when its exact serialized snapshot still matches.
+
+        The comparison and update are one SQLite statement in the normal write transaction.
+        A removed row is a conflict, never an instruction to recreate it.
+        """
+        return self._write_rowcount(
+            "UPDATE state_meta SET value = ? WHERE key = ? AND value = ?",
+            (value, key, expected),
+        ) == 1
+
     def retag_kanban_worker_sessions(self, workspaces_root: str) -> int:
         """Retag legacy kanban worker rows from ``cli`` to ``kanban`` by cwd under the board's workspaces
         root; gated once per root via state_meta. Returns rows retagged."""

@@ -38,6 +38,19 @@ Maintained integration areas
   retain observation/interpretation distinctions, source references, uncertainty
   and superseding corrections. This does not introduce a separate compressor,
   and its forensic semantic accuracy is not established by packaging tests.
+- Two bounded, optional plugin hooks project current case workflow state into
+  native goal evaluation and the existing compaction boundary. They receive
+  explicit owning-session identity; they do not rerun turn hooks, start models,
+  execute missions, or introduce another scheduler. Unavailable/stale state is
+  not an empty or completed workload. Sessions without a provider keep native behavior.
+- Compaction replaces one derived-state block inside native summary framing,
+  including merged carriers, while preserving live content, message identity,
+  ordering, token growth checks and native cancellation/transaction rollback.
+  Goal evaluation keeps its native candidate decision and revision checks.
+- Forsic question mutations and mission plans bind actual native tool receipts
+  to explicit question, mission and source versions. Source-span checks enforce
+  provenance, not semantic approval; scope closure and reopening remain explicit
+  analytical decisions in the case-local record.
 - The native owner-pinned mailbox accepts approved same-case Telegram input at
   idle turn boundaries. Lazy owner wakeup is demand-driven; queued delivery may
   follow a verified replacement owner in the same conversation lineage. Claimed
@@ -60,3 +73,7 @@ requirements-forsic.txt. Other transitive components retain their own notices.
 
 This attribution document does not replace any component's license or grant a
 license to model weights, external APIs, evidence, or third-party case material.
+
+Maintained goal-judge prompt clarification: distinguish partial external dependencies
+from global blockage when useful authorized work remains. Forsic supplies bounded
+agent-declared work-state counts before projection clipping, not a new gate or executor.

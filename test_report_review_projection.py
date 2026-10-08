@@ -138,7 +138,7 @@ class ReportReviewProjectionTests(unittest.TestCase):
             self.case.record('turn_start', {'status':'investigating'}, 'synthetic-native-session')
             second = self.call('review')
             result = self.call('render', review_id=first['review_id'])
-        self.assertNotEqual(first['snapshot_id'], second['snapshot_id'])
+        self.assertEqual(first['snapshot_id'], second['snapshot_id'])
         self.assertTrue(second['reused'])
         self.assertEqual(first['review_id'], second['review_id'])
         self.assertEqual(model.call_count, 1)

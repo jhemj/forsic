@@ -46,7 +46,7 @@ class ReportDrivenTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.c,self.results,self.n=fixture(self.tmp.name)
     def tearDown(self):self.tmp.cleanup()
     def call(self,action,p=None):
-        return invoke(self.c,dict(action=action,snapshot_id=current(self.c)['meta']['snapshot_id'],payload=p))
+        return invoke(self.c,dict(action=action,snapshot_id=current(self.c)['meta']['snapshot_id'],payload=p if p is not None else {}))
     def start(self):self.call('mission',mission(current(self.c)));return current(self.c)
     def test_T01_empty_not_final(self):
         with tempfile.TemporaryDirectory() as t:
@@ -96,7 +96,8 @@ class ReportDrivenTests(unittest.TestCase):
         self.assertEqual(r['snapshot_id'],s['meta']['snapshot_id'])
     def test_T14_correction_preserves_old_and_stales_current(self):
         s=worked(self.c);r=bundle(self.c,s);before={p:Path(p).read_bytes() for p in r['files']}
-        note(self.c,dict(action='save',note_id=self.n['note_id'],revision=1,question='정정된 질문',answer='미확인',evidence_ids=[self.results[0]['evidence_id']],correction_reason='정의 변경'))
+        latest=note(self.c,dict(action='get',note_id=self.n['note_id']))['note']
+        note(self.c,dict(action='save',note_id=self.n['note_id'],revision=latest['revision'],question='정정된 질문',answer='미확인',evidence_ids=[self.results[0]['evidence_id']],correction_reason='정의 변경'))
         now=current(self.c);self.assertFalse(now['assessments']);self.assertTrue(bundles(self.c)[0]['stale']);checked(now)
         self.assertEqual(before,{p:Path(p).read_bytes() for p in before})
     def test_T15_escape_and_download_path(self):

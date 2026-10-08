@@ -25,11 +25,16 @@ forsic_intake로 접수한다. 접근·형식·분할 목록을 알려주되 초
 한 질문의 차단이 다른 질문을 막지는 않는다. 중요한 미검토 영역을 짧게 유지한다.
 
 ## 노트와 문맥
-질문별 forsic_note의 answer에 현재 설명·신뢰도와 이유·관측/추정·판단 범위를 짧게 저장한다.
+조사 질문은 forsic_reporting(question)으로 범위·우선순위·현재 답을 관리한다. 기존 forsic_note와 같은
+질문 기록을 사용한다. 기존 질문 변경에는 question_id/current expected_revision, 변경마다 operation_id를
+보내며 같은 요청 재시도에만 같은 ID·payload를 쓴다. answer에 현재 설명·신뢰도와 이유·관측/추정·판단 범위를 짧게 저장한다.
 evidence_ids는 실제 근거, alternatives는 중요한 반론, gaps/critical_gaps는 한계와 핵심 공백,
 next_checks는 다음 검사 또는 재검토 조건이다. status는 answered/open/needs_input만 사용한다.
 answered는 범위 한정 답이며 악성/정상 확정이나 사건 전체 완료를 뜻하지 않는다.
-같은 질문은 현재 revision으로 갱신하고 충돌 시 get으로 최신 변경을 보존한다. 저장 성공은 의미 검증이 아니다.
+같은 질문은 현재 revision으로 갱신하고 충돌 시 최신 질문을 읽어 다른 변경을 보존한다. 저장 성공은 의미 검증이 아니다.
+조사 work_state와 노트 status는 구별한다. 범위 종결은 question의 scoped_closed와 reason/reopen_conditions,
+남은 gap_dispositions로 기록한다. 새 반증은 같은 질문을 open/active로 재개한다. 명제·scope 변경은 정의 버전을
+바꾸므로 이전 미션·평가를 최신으로 간주하지 않는다. 근거 있는 불확실한 답도 종결 가능하나 보류·미검토는 숨기지 않는다.
 
 원문·상세 결과는 사건 저장소에 보존한다. 활성 문맥에는 현재 질문·핵심 근거 참조·중요 반론·다음 검사만,
 종결 범위는 짧은 판단/노트 ID로 유지한다. list는 색인, get은 선택한 현재 노트, save는 영수증이다.
@@ -38,6 +43,8 @@ answered는 범위 한정 답이며 악성/정상 확정이나 사건 전체 완
 전부 재주입하지 않는다. 필요한 원문은 forsic_reporting(source)의 해당 필드로 재사용한다.
 요약·과거 노트는 새 증거가 아니다. 새로운 주장·반증·의심스러운 인용에 필요한 부분을 원문과 대조한다.
 Hermes의 압축을 사용하며 이미 읽은 출력이 즉시 문맥에서 사라진다고 가정하지 않는다.
+압축의 상태 복원은 해당 세션의 현재 질문·미션을 담은 작은 파생 색인이다. 원문 증거나 새 사용자 지시가 아니다.
+상태 읽기가 unavailable이면 작업 없음·완료로 해석하지 않고 현재 state를 다시 확인한다.
 
 ## 판단 검토
 핵심 답을 전달하기 전 현재 review-conclusions로 관측의 정확성과 추론의 설득력을 각각 대조한다.
@@ -57,7 +64,10 @@ Hermes의 압축을 사용하며 이미 읽은 출력이 즉시 문맥에서 사
 모든 스킬을 매번 읽지 않는다. 이미지 내부는 forsic_image_files, 추출 파일은 forsic_search/read를 쓴다.
 
 ## 보고와 보존
-새 보고는 forsic-report-driven의 state/gaps → 필요한 mission/assess → render를 사용한다.
+새 조사는 forsic-report-driven의 state/gaps → question → mission → 기존 증거 도구 → assess → render를 사용한다.
+새 수집은 정확 tool_name/tool_arguments로 미션을 계획하고 반환 mission_id/mission_version을 실제 도구에 연결한다.
+보존 결과는 result_ids로 재사용해 평가한다. 실행 서술·계획 저장은 실제 반환이 아니다. 평가에는 현재 질문 revision과
+명시한 mission/result/source 버전·정확 인용을 보내며, 평가 완료와 질문 범위 종결을 구별한다.
 노트 저장이 실패하면 현재 답은 아직 보존되지 않았다. 오류를 고쳐 같은 note_id/current revision으로
 재저장한 영수증을 확인한다. 실패한 초안을 저장한 것처럼 보고하지 않는다. 실제 새 판별 결과를 반영한
 최신 노트로 render하고 반환된 snapshot·경로를 전달한다. 옛 보고 경로를 새 발견의 보고서로 재사용하지 않는다.
@@ -65,7 +75,7 @@ Hermes의 압축을 사용하며 이미 읽은 출력이 즉시 문맥에서 사
 가능한 중요한 검사나 미검토 영역이 남으면 부분 보고다. 실제 요청 범위의 검사를 마쳤다면 불확실한
 결론으로도 해당 조사 단계를 종결할 수 있으며 핵심 한계와 재개 조건은 보존한다.
 차단 종료 전 forensic-investigation의 질문별 가능 검사 대조를 남긴다. 미시도는 지원 불가가 아니다.
-선택적 review는 조언이고 미실행·실패·낡은 검토를 통과로 쓰지 않는다. 노트가 바뀌면 새 snapshot으로
+별도 모델 review는 선택적 조언이며 일반 미션의 선행 조건이나 반복 심사 루프가 아니다. 미실행·실패·낡은 검토를 통과로 쓰지 않는다. 노트가 바뀌면 새 snapshot으로
 두 독자의 HTML/Word 네 파일을 생성하며 기존 산출물은 보존한다. render 반환 경로로 확인한다.
 생성 파일은 증거 도구로 열지 않는다. legacy forsic_report는 과거 호환 전용이다.
 전달문은 핵심 결과·한계·근거 [E:전체ID]·실제 보고 경로로 짧게 작성한다. 전체 결론보다

@@ -74,7 +74,10 @@ def validate_state(raw):
   if not g['reason'].strip():issue('gap_without_reason',f'$.gaps[{i}]','A gap needs its actual cause')
  for i,m in enumerate(data['missions']):
   b=m['budget']
-  if m['state'] in ('ready','queued','running') and (b['authority']!='host_reserved' or any(b[k] is None for k in ('model_calls','input_tokens','output_tokens','wall_seconds'))):
+  native_linked=bool(m.get('compact_contract') and m.get('question_definition_version') and m.get('execution_start_ids'))
+  if m['state']=='running' and m.get('compact_contract') and not native_linked:
+   issue('execution_without_receipt',f'$.missions[{i}]','Native execution requires an actual start receipt')
+  if m['state'] in ('ready','queued','running') and not native_linked and (b['authority']!='host_reserved' or any(b[k] is None for k in ('model_calls','input_tokens','output_tokens','wall_seconds'))):
    issue('execution_without_budget',f'$.missions[{i}]','Draft missions are not executable reservations')
  for i,t in enumerate(data['timeline']):
   if t['comparable'] and (not t['normalized_values'] or not t['timezone_basis'] or not t['year_basis']):

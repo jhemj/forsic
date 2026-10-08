@@ -54,14 +54,14 @@ def register(ctx):
         desc, props, req = specs[key]
         props.update(max_files={'type':'integer','minimum':1,'maximum':500},max_bytes={'type':'integer','minimum':1,'maximum':33554432},max_matches={'type':'integer','minimum':1,'maximum':60},max_seconds={'type':'number','exclusiveMinimum':0,'maximum':25})
         specs[key] = (desc + ' Search streams large text files; follow next_cursor to continue inside a file. Skipped/partial files remain explicit. Image hash returns a whole allocated file SHA-256, not a slice or the E01 container hash.', props, req)
-    from .report_driven.contracts import Mission, Gap, Requirement
-    mission_schema, gap_schema = Mission.model_json_schema(), Gap.model_json_schema()
-    report_defs = {**mission_schema.pop('$defs', {}), **gap_schema.pop('$defs', {})}
+    from .report_driven.contracts import Gap, Requirement
+    from .report_driven.investigation_state import compact_input_schemas
+    gap_schema = Gap.model_json_schema()
+    report_defs = gap_schema.pop('$defs', {})
     req_schema = Requirement.model_json_schema(); req_schema.pop('$defs', None)
-    report_defs.update(Mission=mission_schema, Gap=gap_schema, Requirement=req_schema)
-    citation = {'type':'object','properties':{'source_id':string,'source_version':string,'pointer':string,'literal':string,'byte_start':{'type':'integer','minimum':0}},'required':['source_id','source_version','pointer','literal','byte_start'],'additionalProperties':False}
-    assessment = {'type':'object','properties':{'mission_id':string,'mission_version':string,'result_id':string,'result_version':string,'outcome':{'type':'string','enum':['supports','refutes','inconclusive','found','no_match_in_scope','partial','unavailable']},'reasoning_summary':string,'answer':string,'citations':{'type':'array','items':citation},'limitations':strings,'next_check':string},'required':['mission_id','mission_version','result_id','result_version','outcome','reasoning_summary','answer','citations','limitations','next_check'],'additionalProperties':False}
-    specs['reporting'] = ('Primary report-driven investigation in the existing Hermes loop. Load forsic-report-driven. state/gaps/source are passive. Record draft missions, evaluate retained results, then render one immutable four-file partial bundle. Optional review uses the configured local model on the current snapshot and cited originals; select question_ids for focused review and pass its review_id to render to preserve advisory coverage/status. Review is not approval; changed answers/sources make old advice stale. No review is required to save a partial report. Native tools still collect; legacy notes remain candidate interpretations.', {'action':{'type':'string','enum':['state','gaps','source','requirement','gap','mission','assess','review','render','publish']},'snapshot_id':string,'source_id':string,'review_id':string,'question_ids':{'type':'array','items':string,'description':'Optional current question IDs for review only. Omitted means all questions. Unselected questions remain unreviewed.'},'redact':strings,'payload':{'oneOf':[{'$ref':'#/$defs/Mission'},{'$ref':'#/$defs/Gap'},{'$ref':'#/$defs/Requirement'},assessment]}},['action'])
+    report_defs.update(Gap=gap_schema, Requirement=req_schema)
+    compact = compact_input_schemas()
+    specs['reporting'] = ('Case-local investigation state within the existing Hermes loop. Load forsic-report-driven. state/gaps/source are passive. question creates or revises scoped answers, priority and closure/reopening with current revision. mission plans one discriminating check or retained-result evaluation; native evidence tools execute with its mission_id and mission_version. assess binds the actual result and exact source versions, updates the answer, and completes the check separately from question closure. Use a stable operation_id for a write retry; never reuse it with changed content. render saves an immutable report bundle; it does not complete the investigation. Optional review is advisory, never required to save a partial report.', {'action':{'type':'string','enum':['state','gaps','source','question','requirement','gap','mission','assess','review','render','publish']},'snapshot_id':string,'source_id':string,'review_id':string,'question_ids':{'type':'array','items':string,'description':'Optional current question IDs for advisory review. Unselected questions remain unreviewed.'},'redact':strings,'payload':{'type':'object','description':'A JSON object, never a JSON-encoded string. Use the fields for the selected action.','oneOf':[compact['question'],compact['mission'],compact['assess'],{'$ref':'#/$defs/Gap'},{'$ref':'#/$defs/Requirement'}]}},['action'])
     description, properties, required = specs['reporting']
     properties['action']['enum'].append('finalize')
     properties['bundle_id'] = {'type':'string','description':'Exact rendered bundle_id for action=finalize. Select the completed delivery copy only, never intermediate drafts. Also pass its current snapshot_id. This queues only its four HTML/Word files for the approved case topic; not investigation closure or publication approval.'}
@@ -73,6 +73,15 @@ def register(ctx):
     _, note_properties, note_required = specs['note']
     note_properties['include_history'] = {'type': 'boolean', 'description': 'For get only: explicitly request revision history, paginated with offset/limit (default 1, maximum 10). Omit for the complete current note only.'}
     specs['note'] = ('Case-local question notes. list returns an index, get returns the complete CURRENT note, save returns a compact receipt. Full notes and revisions remain stored. Read history only for an explicit revision audit. Use one note per discriminating question and update when its answer/gap changes. Save with the CURRENT revision; the tool increments it. On conflict get again and preserve concurrent changes.', note_properties, note_required)
+    from .notes import EVIDENCE_TOOLS
+    from hermes_constants import get_hermes_home
+    from .investigation_context import native_goal_binding, goal_evaluation_context, post_context_compaction
+    projection_options = dict(intake_root=intake.root, native_db=get_hermes_home() / 'state.db')
+    for suffix, (_, properties, _) in specs.items():
+        if 'forsic_' + suffix in EVIDENCE_TOOLS:
+            properties.update(
+                mission_id={'type':'string','description':'Optional exact planned mission ID for this native evidence check.'},
+                mission_version={'type':'string','description':'Required with mission_id: unchanged version from its planning receipt/current state.'})
     for suffix, (description, properties, required) in specs.items():
         name = "forsic_" + suffix
         schema = {"name": name, "description": description, "parameters": {
@@ -82,7 +91,9 @@ def register(ctx):
 
         def handler(args, tool=name, task_id="", session_id="", **kwargs):
             try:
-                raw = session_case(session_id or task_id).invoke(tool, args, session_id or task_id)
+                sid = session_id or task_id
+                request_context = native_goal_binding(sid, **projection_options)
+                raw = session_case(sid).invoke(tool, args, sid, request_context=request_context)
                 if tool == 'forsic_note':
                     from .notes import model_view
                     return json.dumps(model_view(json.loads(raw), args), ensure_ascii=False)
@@ -124,6 +135,8 @@ def register(ctx):
         if case:
             case.record("turn_start", {"status": "investigating"}, session_id)
             context += '\n현재 사건: ' + json.dumps(case.info({}), ensure_ascii=False)
+            projection = post_context_compaction(session_id=session_id, max_bytes=6000, **projection_options)
+            context += '\n현재 조사 상태(보존 원문과 별개): ' + json.dumps(projection, ensure_ascii=False)
         return {"context": procedure + '\n접수 안내: ' + context}
 
     def after_turn(session_id="", assistant_response="", **kwargs):
@@ -138,6 +151,8 @@ def register(ctx):
         if case:
             case.record(kind, {key: kwargs[key] for key in fields if key in kwargs}, session_id)
 
+    ctx.register_hook("post_context_compaction", partial(post_context_compaction, **projection_options))
+    ctx.register_hook("goal_evaluation_context", partial(goal_evaluation_context, **projection_options))
     ctx.register_hook("pre_llm_call", before_turn)
     ctx.register_hook("post_llm_call", after_turn)
     for hook in ("pre_api_request", "post_api_request", "api_request_error", "pre_auxiliary_call", "post_auxiliary_call"):

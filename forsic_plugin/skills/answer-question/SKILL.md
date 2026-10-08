@@ -16,6 +16,10 @@ description: 현재 조사 현황·질문에 근거 범위 안에서 답하고, 
 
 ## 답변 저장·정정
 
+미션을 진행하는 조사 질문은 forsic-report-driven의 forsic_reporting(question/assess) 경로로 답·범위·조사 상태를
+같이 관리한다. 기존 노트와 같은 저장 경로이며 별도 질문 사본을 만들지 않는다. 아래 forsic_note는 같은 노트의
+일반 조회·답변 정정 계약이다. answered만으로 scoped_closed를 대신하거나 닫힌 질문의 미션을 실행하지 않는다.
+
 사용자의 실제 질문에 먼저 답하고 핵심 주장에 실제 evidence_id를 인용한다.
 중요한 질문의 답이 바뀔 때 바로 저장한다. answer에는 '확인 사실 / 현재 해석 / 아직
 답하지 못한 부분'을 구별한다. 현재 해석에는 가장 유력한 설명과 질적 신뢰도·이유를 쓴다. forsic_note action=save에 question, answer, evidence_ids,

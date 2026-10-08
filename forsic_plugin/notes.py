@@ -134,7 +134,7 @@ def timeline(items, case=None):
 
 def current_notes(case):
     with case.connect() as db:
-        rows = db.execute("SELECT data FROM events WHERE kind='note' ORDER BY time DESC, rowid DESC").fetchall()
+        rows = db.execute("SELECT data FROM events WHERE kind='note' ORDER BY rowid DESC").fetchall()
     latest = {}
     for row in rows:
         value = json.loads(row['data'])
@@ -195,7 +195,7 @@ def note(case, args):
                 'next_offset': end if end < len(notes) else None}
     if action == 'get':
         with case.connect() as db:
-            rows = db.execute("SELECT data FROM events WHERE kind='note' AND json_extract(data, '$.note_id')=? ORDER BY time DESC, rowid DESC", (args['note_id'],)).fetchall()
+            rows = db.execute("SELECT data FROM events WHERE kind='note' AND json_extract(data, '$.note_id')=? ORDER BY rowid DESC", (args['note_id'],)).fetchall()
         if not rows:
             raise ValueError('Unknown note_id in this case')
         history = [json.loads(r['data']) for r in rows]
@@ -213,26 +213,16 @@ def note(case, args):
     sources(case, ids)
     if args.get('status', 'open') not in ('answered', 'open', 'needs_input'):
         raise ValueError('Note status must be answered, open or needs_input')
-    fields = ('question', 'answer', 'evidence_ids', 'status', 'alternatives', 'gaps', 'critical_gaps', 'next_checks', 'correction_reason')
-    value = {key: args[key] for key in fields if key in args}
-    value['timeline'] = timeline(args.get('timeline', []), case)
-    value['note_id'] = args.get('note_id') or uuid.uuid4().hex
+    from .report_driven.investigation_state import save_note_locked, mutation_replay, record_mutation
+    value = dict(args)
+    if 'timeline' in value:
+        value['timeline'] = timeline(value['timeline'], case)
+    operation = args.get('operation_id')
     with case.connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        prev = db.execute("SELECT data FROM events WHERE kind='note' AND json_extract(data, '$.note_id')=? ORDER BY time DESC, rowid DESC LIMIT 1", (value['note_id'],)).fetchone()
-        old = json.loads(prev['data']) if prev else None
-        if args.get('note_id') and not old:
-            raise ValueError('Unknown note_id in this case')
-        if old and args.get('revision') != old['revision']:
-            raise ValueError(
-                f"Note revision conflict: expected current revision={old['revision']}, "
-                f"received revision={args.get('revision')!r}. No note was saved. "
-                f"Call forsic_note(action='get', note_id={value['note_id']!r}), review its "
-                "current note and preserve other changes, then save with that note.revision; "
-                "do not increment revision yourself. The tool creates the next revision.")
-        if old and all(old.get(k) == value.get(k) for k in fields if k != 'correction_reason') and old.get('timeline') == value['timeline']:
-            return {'note': old, 'reused': True}
-        value['revision'] = old['revision'] + 1 if old else 1
-        value['updated_at'] = time.time()
-        db.execute('INSERT INTO events VALUES (?,?,?,?,?)', (uuid.uuid4().hex, value['updated_at'], 'note', '', json.dumps(value, ensure_ascii=False)))
-    return {'note': value}
+        replay = mutation_replay(db, operation, args)
+        if replay is not None:
+            return replay
+        result = save_note_locked(case, db, value)
+        record_mutation(db, operation, args, result)
+        return result

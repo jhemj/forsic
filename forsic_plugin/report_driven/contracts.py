@@ -23,6 +23,7 @@ class Meta(Strict):
     report_id: str
     snapshot_id: str
     ledger_cutoff: str
+    content_revision: str = ""
     generated_at: str
     classification: str
     prepared_by: str
@@ -73,6 +74,16 @@ class Claim(BaseRecord):
     semantic_review: Literal['not_reviewed','sampled','reviewed_for_scope']
 
 class Question(BaseRecord):
+    goal_id: str = ""
+    session_id: str = ""
+    next_checks: list[str] = Field(default_factory=list)
+    alternatives: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    revision: int = 1
+    definition_version: str = ""
+    priority: Literal["decision_critical","material","contextual","unassessed"] = "unassessed"
+    reopen_conditions: list[str] = Field(default_factory=list)
+    deferred_reason: str | None = None
     question: str
     target_proposition: str
     answer: str
@@ -168,13 +179,18 @@ class Mission(BaseRecord):
     refute_rule: str | None
     inconclusive_rule: str
     preserved_counterevidence_refs: list[Ref]
-    state: Literal['draft','candidate','ready','queued','running','blocked','completed','partial','failed']
+    state: Literal['draft','candidate','ready','queued','running','unassessed','blocked','completed','partial','failed']
     budget: Budget
     material_change_required: str
     completion_proof: list[str]
     does_not_resolve: list[str]
     reopen_conditions: list[str]
     readonly: Literal[True] = True
+    tool_arguments: dict = Field(default_factory=dict)
+    question_definition_version: str = ""
+    execution_start_ids: list[str] = Field(default_factory=list)
+    result_ids: list[str] = Field(default_factory=list)
+    compact_contract: bool = False
 
 class TimeAssertion(BaseRecord):
     observation_ref: Ref

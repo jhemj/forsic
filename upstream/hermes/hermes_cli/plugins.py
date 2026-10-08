@@ -110,6 +110,13 @@ VALID_HOOKS: Set[str] = {
     "pre_tool_call", "post_tool_call", "transform_terminal_output", "transform_tool_result",
     # transform_llm_output: return a replacement string (first non-None wins) or None.
     "transform_llm_output", "pre_llm_call", "post_llm_call",
+    # Read-only durable-state projections, separate from visible assistant output. Goal kwargs:
+    # session_id, conversation_id, goal_id, goal_text, contract, phase=prepare|validate,
+    # expected_revision (provider map), max_chars.
+    # Returns provider/status/revision/context/reason; unavailable or missing results fail closed.
+    "goal_evaluation_context",
+    # Compaction kwargs: owning session_id, max_bytes; same bounded projection envelope.
+    "post_context_compaction",
     # Streaming observers (agent.plugin_stream_hooks), off the token path; payloads are immutable
     # normalized text/lifecycle and cannot transform the stream.
     "on_stream_start", "on_stream_delta", "on_stream_end", "on_interim_message",

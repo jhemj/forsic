@@ -52,9 +52,9 @@ class Intake:
         path = self.path(session)
         return json.loads(path.read_text()) if path.exists() else {'stage': 'awaiting_path'}
 
-    def case(self, session):
+    def case(self, session, *, read_only=False):
         state = self.state(session)
-        return Case(state['manifest']) if state.get('manifest') else None
+        return Case(state['manifest'], read_only=read_only) if state.get('manifest') else None
 
     def before(self, session, message='', parent=''):
         self.messages[session] = str(message or '')

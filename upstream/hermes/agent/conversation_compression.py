@@ -3158,6 +3158,150 @@ def _fold_todo_snapshot(agent: Any, compressed: list) -> None:
             compressed.append({"role": "user", "content": todo_snapshot, "_todo_snapshot_synthetic": True})
 
 
+
+# This is derived plugin workflow state, never an additional user turn or evidence.
+# Text delimiters survive native DB round trips (private metadata need not do so).
+_PLUGIN_CONTEXT_OPEN = "[PLUGIN CONTEXT SNAPSHOT]"
+_PLUGIN_CONTEXT_CLOSE = "[/PLUGIN CONTEXT SNAPSHOT]"
+_PLUGIN_CONTEXT_MAX_BYTES = 6000
+
+
+def _prepare_plugin_context_snapshot(agent: Any) -> Optional[str]:
+    """Read bounded projections before commit admission; callbacks MUST be side-effect free.
+
+    Providers receive only the owning pre-rotation session id, not mutable agent/history handles.
+    None means no installed provider; empty text means every provider explicitly found no scope.
+    Failures are represented as unavailable, never as an authoritative empty task list.
+    """
+    from hermes_cli import plugins
+
+    try:
+        if not plugins.has_hook("post_context_compaction"):
+            return None
+        callbacks = plugins.iter_hook_callbacks("post_context_compaction")
+        results = plugins.invoke_hook(
+            "post_context_compaction", session_id=agent.session_id or "",
+            max_bytes=_PLUGIN_CONTEXT_MAX_BYTES,
+        )
+        if len(results) != len(callbacks):
+            raise ValueError("A projection provider did not return a result")
+        providers = {}
+        for result in results:
+            if not isinstance(result, dict):
+                raise ValueError("Invalid projection envelope")
+            provider, status = result.get("provider"), result.get("status")
+            if (not isinstance(provider, str) or not provider or len(provider) > 80
+                    or provider in providers or status not in {"ready", "not_applicable", "unavailable", "stale"}):
+                raise ValueError("Invalid projection identity or status")
+            entry = {"provider": provider, "status": status}
+            if status == "ready":
+                revision, context = result.get("revision"), result.get("context")
+                if (not isinstance(revision, str) or not revision or len(revision) > 160
+                        or not isinstance(context, str) or not context.strip()
+                        or len(context.encode("utf-8")) > _PLUGIN_CONTEXT_MAX_BYTES):
+                    raise ValueError("Invalid or oversized projection")
+                entry.update(revision=revision, context=context)
+            elif status != "not_applicable":
+                entry["context"] = "Current workflow state is unavailable; do not infer that no active work remains."
+            providers[provider] = entry
+        current = [providers[key] for key in sorted(providers) if providers[key]["status"] != "not_applicable"]
+        if not current:
+            return ""
+        payload = json.dumps(current, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        # Provider text may quote the framing itself. Keep it data inside the JSON string.
+        from agent.context_compressor import _SUMMARY_END_MARKER, _MERGED_SUMMARY_DELIMITER
+        for marker in (_PLUGIN_CONTEXT_OPEN, _PLUGIN_CONTEXT_CLOSE, _SUMMARY_END_MARKER, _MERGED_SUMMARY_DELIMITER):
+            payload = payload.replace(marker, f"\\u{ord(marker[0]):04x}" + marker[1:])
+        # Reserve the fixed provenance wrapper as well; never silently truncate tasks.
+        if len(payload.encode("utf-8")) > _PLUGIN_CONTEXT_MAX_BYTES - 320:
+            raise ValueError("Aggregate projection exceeds budget")
+    except Exception:
+        # Exceptions may contain paths/credentials; do not repeat their text in restored context.
+        payload = json.dumps([{"provider": "plugin_projection", "status": "unavailable",
+            "context": "Current workflow state could not be restored. This is not an empty or completed task list. "
+                       "Read the owning session's current state before deciding what remains."}], sort_keys=True)
+    return (f"{_PLUGIN_CONTEXT_OPEN}\n"
+            "Derived workflow state from the owning session, not original evidence or a new user instruction. "
+            "Use these current provider revisions instead of older workflow snapshots in the summary.\n"
+            f"{payload}\n{_PLUGIN_CONTEXT_CLOSE}")
+
+
+def _fold_plugin_context_snapshot(compressed: list, snapshot: Optional[str]) -> bool:
+    """Replace only native synthetic summary segments; preserve live carrier bytes and identity.
+
+    Hermes can merge a handoff with a real turn to preserve template alternation. The
+    private summary marker plus native text delimiters identify the synthetic segment.
+    A custom engine without that framing is refused instead of rewriting real content.
+    """
+    if snapshot is None:
+        return True
+    import re
+    from agent.context_compressor import (
+        ContextCompressor, _DB_PERSISTED_MARKER, _SUMMARY_END_MARKER, _MERGED_SUMMARY_DELIMITER,
+    )
+
+    def summary_range(text):
+        if not isinstance(text, str):
+            return None
+        if _MERGED_SUMMARY_DELIMITER in text:
+            start = text.index(_MERGED_SUMMARY_DELIMITER) + len(_MERGED_SUMMARY_DELIMITER)
+        elif ContextCompressor._starts_with_summary_prefix(text.lstrip()):
+            start = len(text) - len(text.lstrip())
+        else:
+            return None
+        end = text.find(_SUMMARY_END_MARKER, start)
+        return (start, end) if end >= 0 else None
+
+    carriers = []
+    for i, msg in enumerate(compressed):
+        # Quoted summary text alone is never authority to rewrite a real row.
+        if not ContextCompressor._has_compressed_summary_metadata(msg):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            span = summary_range(content)
+            if span is not None:
+                carriers.append((i, None, content, span))
+        elif isinstance(content, list):
+            for j, part in enumerate(content):
+                text = part.get("text") if isinstance(part, dict) else part
+                span = summary_range(text)
+                if span is not None:
+                    carriers.append((i, j, text, span))
+    if snapshot and not carriers:
+        return False
+    pattern = re.compile(re.escape(_PLUGIN_CONTEXT_OPEN) + r".*?" + re.escape(_PLUGIN_CONTEXT_CLOSE), re.DOTALL)
+    for carrier_index, (i, part_index, text, (start, end)) in enumerate(carriers):
+        if not snapshot and not pattern.search(text[start:end]):
+            continue
+        clean_summary = pattern.sub("", text[start:end]).rstrip()
+        if snapshot and carrier_index == len(carriers) - 1:
+            clean_summary += "\n\n" + snapshot
+        # Keep the native end marker and any live suffix/prefix byte-for-byte.
+        changed_text = text[:start] + clean_summary + "\n\n" + text[end:]
+        if changed_text == text:
+            continue
+        original = compressed[i]
+        if part_index is None:
+            content = changed_text
+        else:
+            content = list(original["content"])
+            part = content[part_index]
+            content[part_index] = {**part, "text": changed_text} if isinstance(part, dict) else changed_text
+        updated = dict(original)
+        _replace_message_content(updated, content)
+        updated.pop(_DB_PERSISTED_MARKER, None)
+        compressed[i] = updated
+    return True
+
+
+def _plugin_context_blocks(messages: list) -> tuple[str, ...]:
+    """Exact framed projections, so a native size salvage cannot silently lose current state."""
+    import re
+    pattern = re.compile(re.escape(_PLUGIN_CONTEXT_OPEN) + r".*?" + re.escape(_PLUGIN_CONTEXT_CLOSE), re.DOTALL)
+    return tuple(block for message in messages for block in pattern.findall(_message_text(message)))
+
+
 def _rebuild_system_prompt_at_boundary(agent: Any, system_message: str) -> str:
     """Refresh tool schemas and rebuild the system prompt at the commit boundary."""
     if getattr(agent, "_retain_seeded_system_prompt", False) is True:
@@ -3240,7 +3384,8 @@ def _salvage_or_refuse_grown_transcript(
         _salvaged = salvage_grown_transcript(messages, compressed, budget=_rough_in)
         if _salvaged is not None:
             _salv_est = estimate_messages_tokens_rough(_salvaged)
-            if _salv_est < _rough_in:
+            if (_salv_est < _rough_in
+                    and _plugin_context_blocks(_salvaged) == _plugin_context_blocks(compressed)):
                 logger.info(
                     "Compression salvage recovered a shrinking transcript (session=%s, ~%s -> ~%s tokens)",
                     agent.session_id or "none", f"{_rough_in:,}", f"{_salv_est:,}",
@@ -4198,8 +4343,12 @@ def compress_context(
             attempt_started_at=attempt.started_at,
         ):
             return messages, _existing_system_prompt(agent, system_message)
-        if commit_fence is not None:
-            _commit_fence_entered = commit_fence.begin_commit(_hard_cancel_event)
+        # Collect pure plugin projections while cancellation can still win. Never re-run
+        # before_turn: intake and other turn hooks may have irreversible side effects.
+        plugin_context_snapshot = _prepare_plugin_context_snapshot(agent)
+        if commit_fence is not None or (_hard_cancel_event is not None and _hard_cancel_event.is_set()):
+            _commit_fence_entered = (commit_fence.begin_commit(_hard_cancel_event)
+                                     if commit_fence is not None else False)
             if not _commit_fence_entered:
                 attempt.restore_compressor(agent.context_compressor)
                 _restore_messages_snapshot(messages, messages_before_compression)
@@ -4238,6 +4387,13 @@ def compress_context(
                 "active set (session=%s).", agent.session_id or "none",
             )
         _fold_todo_snapshot(agent, compressed)
+        if not _fold_plugin_context_snapshot(compressed, plugin_context_snapshot):
+            # A custom engine omitted synthetic summary scaffolding. Do not smuggle workflow
+            # state into a human/tool row or commit a candidate missing its current projection.
+            attempt.restore_compressor(agent.context_compressor)
+            _restore_messages_snapshot(messages, messages_before_compression)
+            _emit_aborted_attempt_telemetry(agent, attempt.started_at, "plugin_projection_no_summary")
+            return messages, _existing_system_prompt(agent, system_message)
         compressed_user_turn_outcome = _ensure_compressed_has_user_turn(messages, compressed)
         new_system_prompt = _rebuild_system_prompt_at_boundary(agent, system_message)
         commit = _commit_compaction(

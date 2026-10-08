@@ -31,6 +31,8 @@ provides_hooks:
   - api_request_error
   - pre_auxiliary_call
   - post_auxiliary_call
+  - post_context_compaction
+  - goal_evaluation_context
 config_schema:
   case_file: {type: str, description: Operator-selected case manifest.}
   intake_root: {type: str, description: Session-local intake state directory.}

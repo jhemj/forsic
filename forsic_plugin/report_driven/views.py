@@ -29,7 +29,11 @@ def compile_views(s,review=None):
     explicit_selection=bool(chosen or chosen_claims)
     chosen_claims.update(r['id'] for q in executive_questions for r in q['claim_refs'])
     findings=[[c['id'],c['statement']+'\n'+('해석 후보' if c['status']=='candidate' else '근거 결속된 해석'),joined(c['limitations'])+'\n근거: '+refs(c['source_refs'])+'\n반론: '+refs(c['counterevidence_refs'])] for c in s['claims'] if c['status'] not in ('retracted','superseded')]
-    answers=table(['질문','현재 답과 범위','남은 확인'],[[q['id']+' '+q['question'],q['answer']+'\n'+q['scope'],', '.join(q['remaining_gap_ids']) or '남은 검사 기록 없음; 종결 승인과 다름'] for q in s['questions']],[25,45,30])
+    work_labels={'open':'검토할 질문','active':'조사 중','held':'보류','scoped_closed':'해당 범위 종결',
+                 'blocked_internal':'도구·내부 제약','blocked_external':'외부 자료 대기','budget_deferred':'예산으로 보류'}
+    def disposition(q):
+        return work_labels.get(q['work_state'],q['work_state'])+'\n'+str(q.get('closure_rationale') or q.get('deferred_reason') or '')
+    answers=table(['질문','현재 답과 범위','조사 상태와 남은 확인'],[[q['id']+' '+q['question'],q['answer']+'\n'+q['scope'],disposition(q)+'\n'+(', '.join(q['remaining_gap_ids']) or '남은 검사 기록 없음')+'\n재개: '+joined(q.get('reopen_conditions',[]))] for q in s['questions']],[25,45,30])
     gaps=table(['공백','판단에 미치는 한계','다음 확인 / 재개'],[[g['id']+'\n'+g['kind'],g['original_obligation']+'\n'+g['reason'],g['feasible_next_action']+'\n'+joined(g['reopen_conditions'])] for g in s['gaps'] if g['disposition']!='resolved'],[20,45,35])
     alternatives=table(['설명','평가 / 반론','다음 판별'],[[h['id']+' '+h['explanation'],h['status']+'\n'+refs(h['counterevidence_refs'])+'\n'+joined(h['assumptions']),h['prediction']+'\n'+h['compatibility']] for h in s['hypotheses']],[32,34,34])
     timeline=table(['시각과 종류','내용','한계'],[[joined(t['normalized_values'] or t['raw_values'])+'\n'+t['time_kind']+' '+str(t['file_time_type'] or ''),t['explanation'],t['limitation']] for t in s['timeline']],[28,36,36])
@@ -42,7 +46,7 @@ def compile_views(s,review=None):
     executive_answers=table(['경영진이 알아야 할 질문','현재까지의 답','확인 범위'],[[q['question'],q['answer'],q['scope']] for q in executive_questions],[28,48,24])
     executive_findings=table(['발견','판단 근거','중요한 제한'],[[c['id'],c['statement']+'\n'+('아직 평가하지 않은 해석 후보' if c['status']=='candidate' else '원문에 결속한 해석'),joined(c['limitations'])] for c in s['claims'] if c['status'] not in ('retracted','superseded') and (not explicit_selection or c['id'] in chosen_claims)],[20,44,36])
     executive_gaps=table(['아직 모르는 것','확인하지 못한 이유','다음 확인'],[[g['original_obligation'],g['reason'],joined(g['reopen_conditions'])] for g in s['gaps'] if g['disposition']!='resolved'],[28,38,34])
-    executive_missions=table(['다음 확인','왜 필요한가','어떤 결과면 구별되는가'],[[m['target_proposition'],m['why_it_matters'],joined([x for x in (m['support_rule'],m['refute_rule'],m['inconclusive_rule']) if x])] for m in s['missions']],[28,30,42])
+    executive_missions=table(['다음 확인','왜 필요한가','어떤 결과면 구별되는가'],[[m['target_proposition'],m['why_it_matters'],joined([x for x in (m['support_rule'],m['refute_rule'],m['inconclusive_rule']) if x])] for m in s['missions'] if m['state']!='completed'],[28,30,42])
     impact=requirements.get('REQ-IMPACT',{})
     impact_block=paragraph('업무 영향은 아직 평가하지 않았습니다.') if impact.get('basis_refs')==[{'kind':'scope','id':s['scope']['id'],'version':s['scope']['version']}] else paragraph(impact.get('rationale') or '업무 영향은 아직 평가하지 않았습니다.')
     executive=[page('E01','경영진을 위한 조사 요약',[executive_answers,{'kind':'heading','text':'업무 영향과 판단 근거'},impact_block,executive_findings]),
@@ -127,6 +131,7 @@ def bundle(case,s,redact=(),review_id=None):
             files.append(dict(name=p.name,sha256=hashlib.sha256(p.read_bytes()).hexdigest(),bytes=p.stat().st_size))
     manifest=dict(schema='forsic-report-bundle-1',bundle_id=revision,snapshot_id=s['meta']['snapshot_id'],case_id=s['meta']['case_id'],data_mode=s['meta']['data_mode'],ledger_cutoff=s['meta']['ledger_cutoff'],status=s['status'],publication='internal_partial_snapshot',findings=[c['id'] for c in s['claims']],question_ids=[q['id'] for q in s['questions']],gaps=[g['id'] for g in s['gaps']],audit=result,files=files,redacted=bool(redact),masking_scope='literal terms in reader blocks only; not a complete credential detector',template_version='Forsic_ReportDriven_Kit_v1',renderer_version='forsic-report-view-host-1')
     manifest.update(state_sha256=hashlib.sha256(encoded(s)).hexdigest(),renderer_sha256=renderer_hash,
+                    content_revision=s['meta'].get('content_revision',''),
                     review={k:v for k,v in review.items() if k!='advice'})
     (staging/'manifest.json').write_bytes(encoded(manifest))
     # Store private immutable state separately, not among downloadable defaults.
