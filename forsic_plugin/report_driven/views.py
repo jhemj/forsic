@@ -16,10 +16,14 @@ def table(headers, rows, widths=None):
     return {'kind':'table','headers':headers,'rows':rows or [['기록 없음']+['']*(len(headers)-1)],'widths':widths or [100/len(headers)]*len(headers)}
 def refs(values):return ', '.join(r['id'] for r in values) or '없음'
 def joined(values):return '\n'.join(values) or '기록 없음'
-def page(key,title,blocks):return dict(id=key,title=title,subtitle='동일 판단 스냅샷 · 부분 조사 / 내부 검토용',blocks=blocks)
+def page(key,title,blocks):return dict(id=key,title=title,subtitle='동일 판단 스냅샷 · 내부 검토용',blocks=blocks)
 
 
 def compile_views(s,review=None):
+    from .current_judgment import current_claims, current_judgment
+    judgments={q['id']:current_judgment(s,q) for q in s['questions']}
+    selected_claims=current_claims(s)
+    scope_status='기록된 질문의 범위를 종결했습니다. 잔여 불확실성과 재개 조건을 참조하세요.' if s['questions'] and all(q['work_state']=='scoped_closed' and not q.get('judgment_review_required') for q in s['questions']) else '질문별 진행·종결·보류 및 남은 확인 범위는 현재 조사 상태를 참조하세요.'
     requirements={r['requirement_id']:r for r in s['requirements']}
     # The skill selects questions via the supplied catalog contract. No incident
     # topic, artifact name, IOC or forced investigation checklist lives here.
@@ -28,14 +32,14 @@ def compile_views(s,review=None):
     chosen_claims={r['id'] for r in requirements.get('REQ-FINDINGS',{}).get('basis_refs',[]) if r['kind']=='claim'}
     explicit_selection=bool(chosen or chosen_claims)
     chosen_claims.update(r['id'] for q in executive_questions for r in q['claim_refs'])
-    findings=[[c['id'],c['statement']+'\n'+('해석 후보' if c['status']=='candidate' else '근거 결속된 해석'),joined(c['limitations'])+'\n근거: '+refs(c['source_refs'])+'\n반론: '+refs(c['counterevidence_refs'])] for c in s['claims'] if c['status'] not in ('retracted','superseded')]
+    findings=[[c['id'],c['statement']+'\n'+('해석 후보' if c['status']=='candidate' else '근거 결속된 해석'),joined(c['limitations'])+'\n가정: '+joined(c.get('assumptions',[]))+'\n판단 종류: '+c['assertion_kind']+' / '+c.get('inference_strength','unrated')+'\n근거: '+refs(c['source_refs'])+'\n반론: '+refs(c['counterevidence_refs'])] for c in selected_claims if c['status'] not in ('retracted','superseded')]
     work_labels={'open':'검토할 질문','active':'조사 중','held':'보류','scoped_closed':'해당 범위 종결',
                  'blocked_internal':'도구·내부 제약','blocked_external':'외부 자료 대기','budget_deferred':'예산으로 보류'}
     def disposition(q):
         return work_labels.get(q['work_state'],q['work_state'])+'\n'+str(q.get('closure_rationale') or q.get('deferred_reason') or '')
-    answers=table(['질문','현재 답과 범위','조사 상태와 남은 확인'],[[q['id']+' '+q['question'],q['answer']+'\n'+q['scope'],disposition(q)+'\n'+(', '.join(q['remaining_gap_ids']) or '남은 검사 기록 없음')+'\n재개: '+joined(q.get('reopen_conditions',[]))] for q in s['questions']],[25,45,30])
+    answers=table(['질문','현재 답과 범위','조사 상태와 남은 확인'],[[q['id']+' '+q['question'],judgments[q['id']]['answer']+'\n'+q['scope'],disposition(q)+'\n'+(', '.join(q['remaining_gap_ids']) or '남은 검사 기록 없음')+'\n재개: '+joined(q.get('reopen_conditions',[]))] for q in s['questions']],[25,45,30])
     gaps=table(['공백','판단에 미치는 한계','다음 확인 / 재개'],[[g['id']+'\n'+g['kind'],g['original_obligation']+'\n'+g['reason'],g['feasible_next_action']+'\n'+joined(g['reopen_conditions'])] for g in s['gaps'] if g['disposition']!='resolved'],[20,45,35])
-    alternatives=table(['설명','평가 / 반론','다음 판별'],[[h['id']+' '+h['explanation'],h['status']+'\n'+refs(h['counterevidence_refs'])+'\n'+joined(h['assumptions']),h['prediction']+'\n'+h['compatibility']] for h in s['hypotheses']],[32,34,34])
+    alternatives=table(['설명','평가 / 반론','다음 판별'],[[h['id']+' '+h['explanation'],h['status']+'\n'+refs(h['counterevidence_refs'])+'\n'+joined(h['assumptions']),h['prediction']+'\n'+h['compatibility']] for h in s['hypotheses'] if h['id'] in {r['id'] for q in s['questions'] for r in q['hypothesis_refs']}],[32,34,34])
     timeline=table(['시각과 종류','내용','한계'],[[joined(t['normalized_values'] or t['raw_values'])+'\n'+t['time_kind']+' '+str(t['file_time_type'] or ''),t['explanation'],t['limitation']] for t in s['timeline']],[28,36,36])
     # Historical recommendations stay in the ledger, but new reports do not
     # prescribe business decisions. Only evidenced performed actions appear.
@@ -44,14 +48,14 @@ def compile_views(s,review=None):
     status=table(['상태','현재 기록'],[[k,str(v)] for k,v in s['status'].items() if k!='explicit_limitations'],[35,65])
     limit=paragraph(joined(s['status']['explicit_limitations']))
     executive_answers=table(['경영진이 알아야 할 질문','현재까지의 답','확인 범위'],[[q['question'],q['answer'],q['scope']] for q in executive_questions],[28,48,24])
-    executive_findings=table(['발견','판단 근거','중요한 제한'],[[c['id'],c['statement']+'\n'+('아직 평가하지 않은 해석 후보' if c['status']=='candidate' else '원문에 결속한 해석'),joined(c['limitations'])] for c in s['claims'] if c['status'] not in ('retracted','superseded') and (not explicit_selection or c['id'] in chosen_claims)],[20,44,36])
+    executive_findings=table(['발견','판단 근거','중요한 제한'],[[c['id'],c['statement']+'\n'+('아직 평가하지 않은 해석 후보' if c['status']=='candidate' else '원문에 결속한 해석'),joined(c['limitations'])+'\n가정: '+joined(c.get('assumptions',[]))+'\n판단 종류: '+c['assertion_kind']+' / '+c.get('inference_strength','unrated')] for c in selected_claims if c['status'] not in ('retracted','superseded') and (not explicit_selection or c['id'] in chosen_claims)],[20,44,36])
     executive_gaps=table(['아직 모르는 것','확인하지 못한 이유','다음 확인'],[[g['original_obligation'],g['reason'],joined(g['reopen_conditions'])] for g in s['gaps'] if g['disposition']!='resolved'],[28,38,34])
     executive_missions=table(['다음 확인','왜 필요한가','어떤 결과면 구별되는가'],[[m['target_proposition'],m['why_it_matters'],joined([x for x in (m['support_rule'],m['refute_rule'],m['inconclusive_rule']) if x])] for m in s['missions'] if m['state']!='completed'],[28,30,42])
     impact=requirements.get('REQ-IMPACT',{})
     impact_block=paragraph('업무 영향은 아직 평가하지 않았습니다.') if impact.get('basis_refs')==[{'kind':'scope','id':s['scope']['id'],'version':s['scope']['version']}] else paragraph(impact.get('rationale') or '업무 영향은 아직 평가하지 않았습니다.')
     executive=[page('E01','경영진을 위한 조사 요약',[executive_answers,{'kind':'heading','text':'업무 영향과 판단 근거'},impact_block,executive_findings]),
                page('E02','사건 경과와 중요한 공백',([timeline] if s['timeline'] else [])+[alternatives,executive_gaps,limit]),
-               page('E03','남은 조사와 확인할 자료',[actions,executive_missions,paragraph('내부 검토용 부분 보고서입니다. 아직 답하지 못한 질문과 다음 확인이 남아 있습니다.'),paragraph('기관의 검토자·배포 승인자는 아직 지정되지 않았습니다.')])]
+               page('E03','남은 조사와 확인할 자료',[actions,executive_missions,paragraph(scope_status),paragraph('기관의 검토자·배포 승인자는 아직 지정되지 않았습니다.')])]
     sources=table(['근거 / 생성 계보','출처와 보존 지문','실제 반환 범위'],[[x['id']+'\n'+x['source_generation_group'],x['label']+'\n'+x['locator']+'\nSHA-256 '+x['content_sha256'],x['coverage']] for x in s['sources']],[23,42,35])
     observations=table(['관측 / 원문 위치','정확히 제시된 문자열','해석 한계'],[[o['id']+'\n'+o['source_ref']['id']+o['field_pointer']+f"\nUTF-8 [{o['byte_start']},{o['byte_end']})",o['literal'],o['presented_view']+'\n'+o['interpretation_limit']] for o in s['observations']],[30,38,32])
     sources['row_ids']=[x['id'] for x in s['sources']]
@@ -69,7 +73,7 @@ def compile_views(s,review=None):
         page('A09','반론과 정정',[alternatives,limit,paragraph('과거 스냅샷은 보존됩니다. 최신 질문 정의가 바뀌면 이전 정의에 대한 미션·평가는 현재 답에서 제외합니다. 같은 물리 반환의 재사용은 독립 근거가 아닙니다.')]),
         page('A10','검사 결과와 남은 의무',[tests,assessments,paragraph('판별 결과의 채택 영수증은 참조·원문 결속 검증입니다. 자연어 의미 승인·원의무 해소 증명은 별도입니다.'),paragraph('미제공 비용: '+joined(s['missing_metrics']))]),
         page('A11','조치와 다음 미션',[actions,gaps,missions]),
-        page('A12','근거 탐색과 배포 상태',[paragraph('정확한 source ID, 반환 필드와 span은 A02·A05에 있습니다. 동봉 manifest.json은 네 파일과 같은 판단 스냅샷의 지문을 제공합니다. 원시 증거 전문은 기본 배포물에 넣지 않습니다.'),status,paragraph('기관 승인·수신자 정책은 연결되지 않았습니다. 이 묶음은 내부 부분 보고서이며 발행 승인본이 아닙니다.')])]
+        page('A12','근거 탐색과 배포 상태',[paragraph('정확한 source ID, 반환 필드와 span은 A02·A05에 있습니다. 동봉 manifest.json은 네 파일과 같은 판단 스냅샷의 지문을 제공합니다. 원시 증거 전문은 기본 배포물에 넣지 않습니다.'),status,paragraph('기관 승인·수신자 정책은 연결되지 않았습니다. 이 묶음은 내부 검토용이며 발행 승인본이 아닙니다.')])]
     review=review or {'review_status':'not_reviewed','advice':''}
     label={'not_reviewed':'별도 결론 검토를 하지 않았습니다.',
            'not_sent':'별도 결론 검토 요청을 전송하지 못했습니다.',
@@ -91,7 +95,7 @@ def compile_views(s,review=None):
         practitioner.append(page('A13','IOC와 관측 지표',[paragraph('관측과 사건상 판단을 구별한 로컬 목록입니다. 외부 평판은 별도 출처이며 이 목록은 자동 차단목록이 아닙니다.'),table(['지표','현재 해석','출처와 위치','한계'],rows,[25,25,30,20])]))
         active=[r for r in s['indicators'] if r['status']!='withdrawn']
         executive[0]['blocks'].append(paragraph(f'출처에 연결한 지표 {len(active)}개를 정리했습니다. 지표 수는 침해 건수가 아닙니다. 값·판단·원문 위치는 실무자용 IOC 부록에서 확인할 수 있습니다.'))
-    def view(reader,pages):return dict(schema_version='forsic-report-view-1',reader=reader,title='침해사고 조사 보고서',data_mode=s['meta']['data_mode'],report_id=s['meta']['report_id'],snapshot_revision=s['meta']['snapshot_id'],security=s['meta']['classification'],pages=pages)
+    def view(reader,pages):return dict(schema_version='forsic-report-view-1',reader=reader,title='디지털 포렌식 조사 보고서',data_mode=s['meta']['data_mode'],report_id=s['meta']['report_id'],snapshot_revision=s['meta']['snapshot_id'],security=s['meta']['classification'],pages=pages)
     return {'executive':view('executive',executive),'practitioner':view('practitioner',practitioner)}
 
 

@@ -242,6 +242,22 @@ def current(case):
             d=migrate(d);qref=d.get('question_ref')
         if any(definitions.get(key)!=old_definitions.get((key,ver),ver) for key,ver in d.get('definition_versions',{}).items()):
             stale.append(e['id']);continue
+        # A removed alternative remains part of the historical test design,
+        # not an active alternative of the newly edited answer.
+        for dependency in d.get('basis_definitions',[]):
+            if dependency['kind']!='hypothesis' or reference_definition(state,'hypothesis',dependency['id']) is not None:
+                continue
+            for qid,n in historical_notes.items():
+                if definition_version(n,scope_text)!=definitions.get(qid):continue
+                for explanation in n.get('alternatives',[]):
+                    hid=f'H-{qid}-{digest(explanation)[:16]}'
+                    if hid!=dependency['id']:continue
+                    q=next(q for q in state['questions'] if q['id']==qid)
+                    cited=[ref('source',source_map[x]) for x in n.get('evidence_ids',[]) if x in source_map]
+                    state['hypotheses'].append(dict(id=hid,version=str(n['revision']),question_ref=ref('question',q),
+                        explanation=explanation,trigger_refs=cited,support_refs=[],counterevidence_refs=[],
+                        assumptions=['기존 노트의 경쟁 설명; 판별 미완료'],prediction='다음 미션에서 판별 조건 설정',
+                        compatibility='양립 가능성 미평가',status='candidate'))
         if any(reference_definition(state,item['kind'],item['id'])!=item['definition'] for item in d.get('basis_definitions',[])):
             stale.append(e['id']);continue
         if 'requirement' in d:
@@ -256,7 +272,7 @@ def current(case):
     gap_ids={r['id'] for r in state['gaps']}
     for q in state['questions']:
         old_refs=q['claim_refs']
-        q['claim_refs']=[r for r in old_refs if r['id'] in claim_ids]
+        q['claim_refs']=[r for r in old_refs if r['id'] in claim_ids and find(state,'claims',r['id'])['status'] not in ('retracted','superseded')]
         q['remaining_gap_ids']=[key for key in q['remaining_gap_ids'] if key in gap_ids]
         if len(old_refs)!=len(q['claim_refs']):
             q.update(assessment='undetermined',work_state='open',closure_rationale=None)
@@ -264,6 +280,9 @@ def current(case):
     for item in catalog():
         candidate=requirements.get(item['id'])
         state['requirements'].append(candidate or dict(requirement_id=item['id'],section_targets=item['section_targets'],applicability='applicable' if item['class']=='core' else 'conditional_unassessed',disposition='open',rationale=item['applicability_trigger']+' / '+item['sufficiency'],basis_refs=[ref('scope',scope)],gap_ids=[g['id'] for g in state['gaps'] if set(g['section_targets'])&set(item['section_targets'])]))
+    state['meta']['excluded_history_records']=len(stale)
+    if state['questions'] and all(q['work_state']=='scoped_closed' and not q.get('judgment_review_required') for q in state['questions']):
+        state['status']['investigation']='supported_scope_closed'
     if stale: state['status']['explicit_limitations'].append(f'질문 정정으로 과거 미션·평가 {len(stale)}건을 현재 판단에서 제외; 이전 원장 보존')
     state['status']['explicit_limitations'].extend(g['reason'] for g in state['gaps'] if g['impact'] in ('material','decision_critical') and g['disposition']!='resolved')
     project_execution(state, events)
@@ -517,12 +536,8 @@ def _invoke(case,args):
 
 
 def assess(case,s,p):
-    allowed={'mission_id','mission_version','result_id','result_version','outcome','reasoning_summary','answer','citations','limitations','next_check'}
-    unknown=sorted(set(p)-allowed)
-    if unknown:
-        raise ValueError('Unsupported assess fields: '+', '.join(unknown)+'. Read forsic-report-driven evaluation input; use outcome, reasoning_summary, answer, citations and the returned mission_id/mission_version/result_id/result_version. Compact input also needs operation_id and expected_revision, not question_revision. Plan a retained-result mission first if none exists. No assessment was saved; adoption, resolution and approval are host-owned.')
-    missing=sorted({'mission_id','mission_version','result_id','result_version','outcome'}-set(p))
-    if missing:raise ValueError('Missing assess fields: '+', '.join(missing)+'. Read current mission and source versions; plan a retained-result mission if needed. No assessment was saved.')
+    from .investigation_state import validate_input
+    validate_input('assess',p,compact=False)
     m=find(s,'missions',p['mission_id']);g=find(s,'gaps',m['gap_ref']['id'])
     if m['version']!=p['mission_version']:raise ValueError('Stale mission')
     result=find(s,'sources',p['result_id'])
@@ -535,8 +550,10 @@ def assess(case,s,p):
     outcome=p['outcome']
     if outcome not in ('supports','refutes','inconclusive','found','no_match_in_scope','partial','unavailable'):raise ValueError('Invalid outcome')
     if outcome in ('supports','refutes') and not m['support_rule' if outcome=='supports' else 'refute_rule']:raise ValueError('Missing discriminating condition')
-    if not p.get('reasoning_summary') or not p.get('answer') or not p.get('limitations') or not p.get('next_check'):
-        raise ValueError('Assessment requires answer, reasoning, limitations and next/reopening check')
+    if not p.get('reasoning_summary') or not p.get('limitations') or not p.get('next_check'):
+        raise ValueError('Assessment requires reasoning, limitations and next/reopening check')
+    if 'question_update' in p and 'answer' in p:
+        raise ValueError('Use question_update or legacy flat answer, not both')
     data=case.event(result['id'])['data'];observations=[]
     for c in p.get('citations',[]):
         src=find(s,'sources',c['source_id'])
@@ -546,11 +563,16 @@ def assess(case,s,p):
         raw=pointer(case.event(src['id'])['data'],c['pointer']);literal=c['literal'];start=int(c['byte_start']);end=start+len(literal.encode())
         if start<0 or not literal or raw.encode()[start:end]!=literal.encode():raise ValueError('Literal is not the exact retained UTF-8 field span')
         # Quoting the value of /path or /scope is metadata, not body access.
-        body=('/text' in c['pointer'] or c['pointer']=='/stdout')
+        from .measurement import field_role
+        body=field_role(case.event(src['id'])['data'],c['pointer'])=='body'
         presented='full_field' if start==0 and end==len(raw.encode()) else 'exact_excerpt'
         if not body:presented='metadata'
-        if m['required_view']=='full_field' and presented!='full_field':raise ValueError('Mission requires a complete original body field, not metadata or a fragment')
+        compatible={'metadata':{'metadata','exact_excerpt','full_field'},'exact_excerpt':{'exact_excerpt','full_field'},'full_field':{'full_field'}}
+        if presented not in compatible[m['required_view']]:
+            raise ValueError('Mission requires '+m['required_view']+' body access; presented '+presented+' is not compatible. Use a retained body field or plan a metadata inspection.')
         ob=dict(id='O-'+digest(c)[:20],version=src['version'],source_ref=ref('source',src),statement='원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=literal,canonical_sha256=hashlib.sha256(literal.encode()).hexdigest(),presented_view=presented,coordinate_basis='retained tool-result scalar UTF-8 bytes; not original image offset',byte_start=start,byte_end=end,interpretation_limit='이 필드·제시 구간의 기록만 확인; 성공·승인·귀속·전체 부재는 별도 판별')
+        prior=next((x for x in s['observations'] if x['id']==ob['id']),None)
+        if prior and definition(prior)==definition(ob):ob=deepcopy(prior)
         observations.append(ob)
     if outcome in ('supports','refutes','found') and not observations:raise ValueError('Substantive outcomes require exact source observations')
     if failed_result(data):
@@ -559,27 +581,61 @@ def assess(case,s,p):
     existing=next((a for a in s['assessments'] if a['id']=='AS-'+ident),None)
     if existing:return {'assessment':existing,'reused':True}
     tid='T-'+m['id'];test=dict(id=tid,version=result['version'],question_ref=m['question_ref'],target_proposition=m['target_proposition'],purpose='discriminate' if m['support_rule'] or m['refute_rule'] else 'discover',immediate_observable=m['capability_requirement'],input_refs=m['input_refs'],required_view=m['required_view'],tool_capability='retained_result_read',target_scope=m['exact_target_scope'],support_rule=m['support_rule'],refute_rule=m['refute_rule'],inconclusive_rule=m['inconclusive_rule'],physical_job_ref=data.get('started_id'),result_ref=ref('source',result),result_scope=result['coverage'],execution_state='returned' if not data.get('error') else 'failed',assessment_state='assessed',design_timing=m['design_timing'])
+    prior_test=next((x for x in s['tests'] if x['id']==test['id'] and x['assessment_state']=='assessed'),None)
+    if prior_test:
+        if definition(prior_test)!=definition(test):
+            raise ValueError('This mission already has a different assessed test; preserve it and plan a retained-result mission')
+        test=deepcopy(prior_test)
     if test['purpose']=='discover' and outcome in ('supports','refutes'):raise ValueError('Discovery is not hypothesis discrimination')
     receipt='report-adoption-'+ident
     assessment=dict(id='AS-'+ident,version='1',test_ref=ref('test',test),result_ref=ref('source',result),observation_refs=[ref('observation',o) for o in observations],outcome=outcome,reasoning_summary=p['reasoning_summary'],validation_receipt=receipt,adoption_receipt=receipt,resolved_gap_ids=[],remaining_gap_ids=[g['id']])
-    claim=dict(id='F-'+m['id'],version=ident,title=m['target_proposition'],statement=p['answer'],assertion_kind='interpretation',status='adopted',scope=m['exact_target_scope'],source_refs=[ref('observation',o) for o in observations] or [ref('source',result)],counterevidence_refs=m['preserved_counterevidence_refs'],limitations=p['limitations']+m['does_not_resolve']+['근거 결속을 확인한 모델 해석; 독립 의미 검토 미완료'],adoption_receipt=receipt,semantic_review='not_reviewed')
-    # Completing an evaluation is not resolving the underlying forensic obligation.
-    gap={**g,'disposition':'assessed_unresolved','reason':p['reasoning_summary'],'feasible_next_action':'design_test','reopen_conditions':[p['next_check']]+g['reopen_conditions']}
+    q=find(s,'questions',m['question_ref']['id'])
+    # A local test outcome never selects the assessment of the whole question.
+    synthesis=deepcopy(p.get('question_update'))
+    legacy='answer' in p
+    if legacy:
+        synthesis={'answer':p['answer'],'reason':'Legacy flat answer update; aggregate assessment requires explicit review',
+                   'limitations':p['limitations'],'next_checks':[p['next_check']]}
+    claims=[];answer={};note_update=None
+    if synthesis is not None:
+        if not synthesis.get('answer','').strip() or not synthesis.get('reason','').strip():
+            raise ValueError('question_update needs a nonempty answer and reason')
+        if synthesis.get('assertion_kind')=='fact' and synthesis.get('inference_strength','unrated')!='unrated':
+            raise ValueError('inference_strength describes interpretations, not observed facts')
+        claim=dict(id='F-'+m['id']+'-'+ident,version=ident,title=q['target_proposition'],statement=synthesis['answer'],
+                   assertion_kind=synthesis.get('assertion_kind','interpretation'),status='adopted',scope=q['scope'],
+                   inference_strength=synthesis.get('inference_strength','unrated'),assumptions=synthesis.get('assumptions',[]),
+                   reasoning_summary=synthesis.get('reasoning_summary',''),
+                   source_refs=[ref('observation',o) for o in observations] or [ref('source',result)],
+                   counterevidence_refs=m['preserved_counterevidence_refs'],
+                   limitations=synthesis.get('limitations',p['limitations'])+m['does_not_resolve'],
+                   adoption_receipt=receipt,semantic_review='not_reviewed')
+        claims=[claim]
+        answer=dict(answer=synthesis['answer'],assessment=synthesis.get('assessment','undetermined'),
+                    judgment_review_required=legacy,claim_refs=[ref('claim',claim)])
+        for key in ('alternatives','next_checks','reopen_conditions'):
+            if key in synthesis:answer[key]=deepcopy(synthesis[key])
+        if q['id']!='Q-intake':
+            host_args=(_MUTATION.get() or {}).get('request',{})
+            note_args=dict(note_id=q['id'].removeprefix('Q-'),revision=q['revision'],answer=synthesis['answer'],
+                evidence_ids=list(dict.fromkeys(c['source_id'] for c in p.get('citations',[]))),
+                correction_reason=synthesis['reason'],_claim_action='replace')
+            note_args.update({k:synthesis[k] for k in ('alternatives','next_checks') if k in synthesis})
+            note_args.update({k:host_args[k] for k in ('_goal_id','_session_id') if k in host_args})
+            note_update={'args':note_args,'question_update':{k:v for k,v in answer.items() if k not in ('answer','alternatives','next_checks')}}
+    # Test limitations/reason remain local. Its next check is not a reopening condition.
+    assessment['limitations']=p['limitations']
+    assessment['next_check']=p['next_check']
+    gap={**g,'disposition':'assessed_unresolved','reason':p['reasoning_summary'],'feasible_next_action':'design_test'}
     mission={**m,'state':'completed' if m['compact_contract'] else 'partial'}
-    answer=dict(answer=p['answer'],assessment={'supports':'supported','refutes':'refuted'}.get(outcome,'undetermined'),work_state='open',claim_refs=[ref('claim',claim)],remaining_gap_ids=list(dict.fromkeys(find(s,'questions',m['question_ref']['id'])['remaining_gap_ids']+[g['id']])))
-    records=dict(tests=[test],observations=observations,assessments=[assessment],claims=[claim],gaps=[gap],missions=[mission])
+    records=dict(tests=[test],observations=observations,assessments=[assessment],claims=claims,gaps=[gap],missions=[mission])
     trial=deepcopy(s)
     for field,rows in records.items():trial[field]=[x for x in trial[field] if x['id'] not in {r['id'] for r in rows}]+rows
-    find(trial,'questions',m['question_ref']['id']).update(answer);checked(trial)
-    q=find(s,'questions',m['question_ref']['id'])
-    note_update=None
-    if q['id']!='Q-intake':
-        host_args=(_MUTATION.get() or {}).get('request',{})
-        note_args=dict(note_id=q['id'].removeprefix('Q-'),revision=q['revision'],answer=p['answer'],
-                       evidence_ids=list(dict.fromkeys(c['source_id'] for c in p.get('citations',[]))),
-                       correction_reason='Source-bound assessment '+assessment['id'])
-        note_args.update({k:host_args[k] for k in ('_goal_id','_session_id') if k in host_args})
-        note_update={'args':note_args,'question_update':{k:v for k,v in answer.items() if k!='answer'}}
+    find(trial,'questions',q['id']).update(answer);checked(trial)
     response={'assessment':assessment,'question_update':answer,'original_obligation_resolved':False}
-    eid=write(case,s,dict(question_ref=m['question_ref'],records=records,answer=answer,validation={'receipt':receipt,'checks':['case/owner/version','canonical field/span','purpose/outcome','counterevidence retained'],'semantic_approval':False}),note_update=note_update,response=response)
+    change=dict(question_ref=m['question_ref'],records=records,validation={'receipt':receipt,
+        'checks':['case/owner/version','canonical field/span','presentation compatibility','purpose/outcome','counterevidence retained'],
+        'semantic_approval':False})
+    if answer:change['answer']=answer
+    eid=write(case,s,change,note_update=note_update,response=response)
     return {'receipt':eid,**response}

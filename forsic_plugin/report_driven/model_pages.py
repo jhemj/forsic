@@ -140,7 +140,8 @@ def state_view(state, audit, args):
         return page(state['gaps'], '/gaps', args, {'snapshot_id': snapshot, 'view_kind': 'report_state',
                     'audit': audit_view(audit), 'requirement_count': len(state['requirements']),
                     'requirements_pointer': '/requirements'})
-    questions = [dict(id=q['id'], version=q['version'], question_preview=q['question'][:120],
+    from .current_judgment import navigation_view
+    questions = [dict(current_judgment=navigation_view(state,q), id=q['id'], version=q['version'], revision=q['revision'], definition_version=q['definition_version'], question_preview=q['question'][:120],
                       answer_preview=q['answer'][:160], assessment=q['assessment'], work_state=q['work_state'],
                       pointer='/questions/' + str(i)) for i, q in enumerate(state['questions'][:2])]
     result = {'snapshot_id': snapshot, 'state': {'meta': state['meta'],
@@ -150,7 +151,7 @@ def state_view(state, audit, args):
               'sections': {k: {'count': len(v), 'pointer': '/' + k} for k, v in state.items() if isinstance(v, list)},
               'omitted_counts': {k: len(v) - (len(questions) if k == 'questions' else 0)
                                  for k, v in state.items() if isinstance(v, list)},
-              'next_step': 'Read needed pointer with this snapshot_id, offset and limit. Previews/indexes are not original evidence; omitted records are unreviewed.'}
+              'next_step': 'Read needed pointer with this snapshot_id, offset and limit. Previews/indexes are not original evidence; omitted records are not shown on this page; their review status belongs to the records.'}
     if size(result) > MAX_BYTES:
         result['state']['questions'] = []
         result['omitted_counts']['questions'] = len(state['questions'])
@@ -163,10 +164,21 @@ def state_view(state, audit, args):
 def source_view(source, data, args):
     continuation = 'pointer' in args or args.get('offset', 0) != 0
     if continuation and args.get('source_version') != source['version']:
-        raise ValueError('Use this retained source_version for each source page')
+        raise ValueError(
+            'Source page rejected: source_version is missing or does not match the retained result; '
+            'snapshot_id belongs to report state and cannot replace source_version. '
+            'No source page was returned or investigation judgment changed. '
+            'Discover the retained reference with ' + json.dumps({'action': 'source', 'source_id': source['id']}) +
+            ' (omit pointer, offset, source_version and snapshot_id). '
+            'Read source_ref.version, then explicitly retry the needed pointer/offset/limit with '
+            'source_version set to that returned version. If an earlier citation used a different '
+            'version, recheck its original field before adopting it; do not silently replace citation versions.')
     envelope = {'source_ref': {'id': source['id'], 'version': source['version']},
                 'meaning': '보존된 도구 반환 재제시; 새 수집·독립 근거가 아님'}
-    original = {'source': source, 'result': data, 'meaning': envelope['meaning']}
+    from .measurement import measurement_view
+    measurement=measurement_view(data)
+    if measurement:envelope['measurement']=measurement
+    original = {**envelope, 'source': source, 'result': data}
     if not continuation and size(original) <= MAX_BYTES:
         return original
     path = args.get('pointer', '')

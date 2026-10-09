@@ -8,7 +8,7 @@ import uuid
 PRIORITIES = {'decision_critical', 'material', 'contextual', 'unassessed'}
 WORK_STATES = {'open', 'active', 'held', 'scoped_closed', 'blocked_internal', 'blocked_external', 'budget_deferred'}
 QUESTION_FIELDS = ('work_state', 'assessment', 'priority', 'closure_rationale', 'deferred_reason',
-                   'reopen_conditions', 'claim_refs', 'remaining_gap_ids')
+                   'reopen_conditions', 'claim_refs', 'remaining_gap_ids', 'judgment_review_required')
 NOTE_FIELDS = ('question', 'target_proposition', 'scope', 'answer', 'evidence_ids', 'status',
                'alternatives', 'gaps', 'critical_gaps', 'next_checks', 'timeline', 'correction_reason')
 
@@ -83,6 +83,28 @@ def save_note_locked(case, db, args, *, question_update=None):
         value['investigation'] = {'work_state': 'open', 'assessment': 'undetermined', 'claim_refs': [],
                                   'remaining_gap_ids': [], 'closure_rationale': None, 'deferred_reason': None,
                                   'reopen_conditions': [], 'priority': old.get('investigation', {}).get('priority', 'unassessed')}
+    changed = old and any(old.get(k) != value.get(k) for k in
+                          ('answer', 'evidence_ids', 'alternatives'))
+    claim_action = args.get('_claim_action')
+    if claim_action == 'retain' and not args.get('correction_reason'):
+        raise ValueError('Retaining a judgment across an edit requires a reason explaining unchanged meaning')
+    if old and (changed or claim_action in ('replace', 'retract')) and claim_action != 'retain':
+        # Read the committed prior judgment; the caller may already have inserted
+        # the replacement claim in this uncommitted write transaction.
+        from .host import current
+        previous = current(case)
+        selected = {x['id'] for x in old.get('investigation', {}).get('claim_refs', [])}
+        retired = [{**c, 'status': 'retracted' if claim_action == 'retract' else 'superseded'}
+                   for c in previous['claims'] if c['id'] in selected]
+        if retired:
+            change = {'question_ref': {'kind':'question','id':'Q-'+note_id,'version':str(old['revision'])},
+                      'definition_versions': {'Q-'+note_id: definition_version(old,default_scope)},
+                      'basis_definitions': [], 'records': {'claims':retired},
+                      'correction_reason':args.get('correction_reason','Current answer changed')}
+            db.execute('INSERT INTO events VALUES (?,?,?,?,?)',
+                       (uuid.uuid4().hex,time.time(),'report_change','',json.dumps(change,ensure_ascii=False)))
+        value.setdefault('investigation', {}).update(claim_refs=[], assessment='undetermined',
+                                                     judgment_review_required=True)
     if question_update:
         value.setdefault('investigation', {}).update(deepcopy(question_update))
     if old and all(old.get(k) == value.get(k) for k in value if k not in ('correction_reason', 'updated_at', 'revision')):
@@ -112,6 +134,7 @@ def compact_input_schemas():
                 'gap_dispositions': {'type': 'array', 'items': {'type': 'object', 'properties': {
                     'gap_id': string, 'disposition': {'type': 'string', 'enum': ['resolved', 'not_applicable', 'assessed_unresolved']},
                     'reason': string, 'reopen_conditions': strings}, 'required': ['gap_id', 'disposition', 'reason', 'reopen_conditions'], 'additionalProperties': False}}}
+    question['claim_action'] = {'type':'string','enum':['retain','replace','retract']}
     mission = {**common, **{k: string for k in ('gap_id', 'why_it_matters', 'tool_name', 'support_rule', 'refute_rule', 'inconclusive_rule', 'target_proposition')},
                'tool_arguments': {'type': 'object'},
                'required_view': {'type': 'string', 'enum': ['metadata', 'exact_excerpt', 'full_field']},
@@ -121,11 +144,56 @@ def compact_input_schemas():
               'limitations': strings, 'citations': {'type': 'array', 'items': {'type': 'object', 'properties': {
                   'source_id': string, 'source_version': string, 'pointer': string, 'literal': string, 'byte_start': {'type': 'integer', 'minimum': 0}},
                   'required': ['source_id', 'source_version', 'pointer', 'literal', 'byte_start'], 'additionalProperties': False}}}
+    assess['question_update'] = {'type':'object','properties': {
+        **{k:string for k in ('answer','reason','reasoning_summary')},
+        'assessment':question['assessment'], 'assertion_kind':{'type':'string','enum':['fact','interpretation']},
+        'inference_strength':{'type':'string','enum':['favored','plausible','unrated']},
+        **{k:strings for k in ('assumptions','alternatives','limitations','next_checks','reopen_conditions')}
+        }, 'required':['answer','assessment','reason'], 'additionalProperties':False}
     def schema(properties, required):
         return {'type': 'object', 'properties': properties, 'required': required, 'additionalProperties': False}
     return {'question': schema(question, ['operation_id']),
             'mission': schema(mission, ['operation_id', 'question_id', 'expected_revision', 'why_it_matters', 'inconclusive_rule', 'limits', 'reopen_conditions']),
-            'assess': schema(assess, ['operation_id', 'expected_revision', 'mission_id', 'mission_version', 'result_id', 'result_version', 'outcome', 'reasoning_summary', 'answer', 'limitations', 'next_check', 'citations'])}
+            'assess': schema(assess, ['operation_id', 'expected_revision', 'mission_id', 'mission_version', 'result_id', 'result_version', 'outcome', 'reasoning_summary', 'limitations', 'next_check', 'citations'])}
+
+
+
+def validate_input(action, payload, *, compact=True):
+    schema = deepcopy(compact_input_schemas()[action])
+    if not compact:
+        for key in ('operation_id','expected_revision'):
+            schema['properties'].pop(key,None)
+        schema['required'] = ['mission_id','mission_version','result_id','result_version','outcome']
+    problems=[]
+    def check(value, spec, path):
+        kind=spec.get('type')
+        valid={'object':isinstance(value,dict),'array':isinstance(value,list),
+               'string':isinstance(value,str),'integer':type(value) is int}.get(kind,True)
+        if not valid:
+            problems.append({'path':path,'expected_type':kind});return
+        if 'enum' in spec and value not in spec['enum']:
+            problems.append({'path':path,'allowed_values':spec['enum']})
+        if kind=='integer' and value<spec.get('minimum',value):
+            problems.append({'path':path,'minimum':spec['minimum']})
+        if kind=='object':
+            unknown=sorted(set(value)-set(spec.get('properties',{}))) if spec.get('additionalProperties') is False else []
+            missing=sorted(set(spec.get('required',[]))-set(value))
+            if unknown or missing:problems.append({'path':path,'unknown_fields':unknown,'missing_fields':missing})
+            for k,v in value.items():
+                if k in spec.get('properties',{}):check(v,spec['properties'][k],path+'.'+k)
+        if kind=='array':
+            for i,v in enumerate(value):check(v,spec['items'],path+f'[{i}]')
+    check(payload,schema,'payload')
+    if problems:
+        prefix=('Unsupported assess fields' if any(x.get('unknown_fields') for x in problems) else 'Missing assess fields') if action=='assess' else 'Invalid '+action+' fields'
+        raise ValueError(prefix+': '+json.dumps(problems,ensure_ascii=False)+
+            '. action='+action+'; allowed_fields='+','.join(schema['properties'])+
+            '. No assessment was saved; no question or mission was changed. Read current state for question revision, mission/result/source versions. '
+            'Use payload.reason for question correction/disposition; outer reason is the call purpose. '+
+            ('Example: '+json.dumps({'operation_id':'new-request-id','expected_revision':'<current integer>',
+              'mission_id':'<mission.id>','mission_version':'<mission.version>','result_id':'<source.id>',
+              'result_version':'<source.version>','outcome':'inconclusive','reasoning_summary':'Meaning of this test only',
+              'limitations':['Remaining limit'],'next_check':'Next useful check or no useful check with reason','citations':[]}) if action=='assess' else 'Read the registered action input schema.'))
 
 
 def mission_version(mission):
@@ -251,9 +319,7 @@ def check_question_revision(question, payload, *, goal_id='', session_id=''):
 def update_question(case, state, payload, host_args):
     from .host import find, ref, write, checked
     from ..notes import sources
-    allowed=set(compact_input_schemas()['question']['properties'])
-    if set(payload)-allowed:
-        raise ValueError('Unknown compact question fields: '+','.join(sorted(set(payload)-allowed)))
+    validate_input('question',payload)
     question_id=payload.get('question_id')
     old=find(state,'questions',question_id) if question_id else None
     if old:check_question_revision(old,payload,goal_id=host_args.get('_goal_id',''),session_id=host_args.get('_session_id',''))
@@ -271,6 +337,8 @@ def update_question(case, state, payload, host_args):
         raise ValueError('Unknown work_state or priority')
     if update.get('assessment','undetermined') not in ('supported','refuted','conflicting','undetermined'):
         raise ValueError('Unknown assessment')
+    if 'assessment' in payload:
+        update['judgment_review_required']=False
     destination=update.get('work_state')
     if old and destination not in (None,'open','active'):
         proposed={'question':payload.get('question',old['question']),'target_proposition':payload.get('target_proposition',old['target_proposition']),'scope':payload.get('scope',old['scope'])}
@@ -312,6 +380,7 @@ def update_question(case, state, payload, host_args):
         if not old.get('claim_refs') and not (payload.get('evidence_ids') or old.get('evidence_ids')):
             raise ValueError('Scope closure requires retained basis; it is not an incident verdict')
     args['correction_reason']=reason or payload.get('reason','')
+    args['_claim_action']=payload.get('claim_action')
     if not old or question_id=='Q-intake':
         with case.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -331,7 +400,7 @@ def update_question(case, state, payload, host_args):
 
 def expand_mission(state, payload, *, goal_id='', session_id=''):
     from .host import find, ref
-    if set(payload)-set(compact_input_schemas()['mission']['properties']):raise ValueError('Unknown compact mission fields')
+    validate_input('mission',payload)
     q=find(state,'questions',payload['question_id']);check_question_revision(q,payload,goal_id=goal_id,session_id=session_id)
     if q['work_state'] not in ('open','active'):raise ValueError('Reopen a question before planning another mission')
     gaps=[g for g in state['gaps'] if g['question_ref']['id']==q['id'] and g['disposition'] not in ('resolved','not_applicable')]
@@ -358,7 +427,7 @@ def expand_mission(state, payload, *, goal_id='', session_id=''):
 
 def expand_assessment(state,payload,*,goal_id='',session_id=''):
     from .host import find
-    if set(payload)-set(compact_input_schemas()['assess']['properties']):raise ValueError('Unknown compact assessment fields')
+    validate_input('assess',payload)
     m=find(state,'missions',payload['mission_id']);q=find(state,'questions',m['question_ref']['id'])
     check_question_revision(q,payload,goal_id=goal_id,session_id=session_id)
     result=find(state,'sources',payload['result_id'])

@@ -221,3 +221,7 @@ model adapter, gateway or recovery scheduler. A clean-machine install/build,
 browser behavior, group mention round-trip and corrected real-case report quality
 must be measured separately. Existing-machine offline tests are not evidence that
 all those acceptance tests have passed. No semantic-completion claim is made here.
+
+Native compression for the 65,536-token local model
+-------------------------------------------------
+compression.threshold_tokens=40000 starts compaction earlier using the native absolute trigger cap; percentage-only changes can be raised by the small-context floor. auxiliary.compression.timeout=600 and compression.context_timeout_seconds=600 allow slow long-input summarization; context_total_ceiling_seconds=900 bounds pre-commit waiting. Native over-window recovery may cap the total wait to the 600-second context timeout. These are operational limits, not proof of full-window model comprehension. Keep context_length and model unchanged. Apply config/config.yaml and state/hermes/config.yaml only at a paused, idle native boundary; preserve case records and verify resolved settings plus actual resume.

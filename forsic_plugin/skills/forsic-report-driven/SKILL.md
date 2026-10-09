@@ -25,7 +25,7 @@ Hermes의 기존 goal·도구 루프를 쓴다. 별도 Controller·실행 큐·�
 
 ### 입력 오류에서 회복
 
-payload는 JSON 문자열이 아니라 객체다. action/reason은 바깥에, operation_id와 질문 필드는 payload 안에 둔다.
+payload는 JSON 문자열이 아니라 객체다. action과 호출 목적 reason은 바깥에, operation_id와 질문 필드는 payload 안에 둔다.
 새 질문의 최소 형태는 다음과 같다. 예시 값은 사건에 맞게 직접 판단해 바꾼다.
 
 ```json
@@ -43,12 +43,20 @@ assess에 미션이 없으면 먼저 result_ids를 지정한 작은 mission을 �
 ### 문맥을 작게 읽기
 
 `state`의 snapshot_id와 반환된 pointer로 필요한 질문·미션·공백만 읽는다. 목록 offset은 항목 번호이고
-next_offset이 있으면 다음 페이지가 남는다. presented=false 항목은 판단 전에 해당 pointer를 읽는다.
-`source(source_id)`가 큰 결과의 색인을 주면 source_version과 pointer로 필요한 원문 필드를 이어 읽는다.
+next_offset이 있으면 다음 페이지가 남는다. presented=false는 이번 응답에서 생략되었다는 뜻이며 미검토 판정이 아니다. 필요한 판단 상세는 해당 pointer로 읽는다.
+근거 첫 조회는 `{"action":"source","source_id":"반환된 근거 ID"}`만 보내 참조를 발견한다.
+이때 pointer/offset/snapshot_id는 생략한다. 응답 `source_ref.version`이 다음 호출의 `source_version`이다.
+그 다음 `source_id/source_version/pointer`로 필요한 필드를 읽는다. state의 snapshot_id와 서로 대체하지 않는다.
+버전이 없거나 불일치하면 첫 조회로 돌아가 정확 참조를 확인한다. 이전 인용 버전과 다르면 원문을 다시 대조하며
+조용히 최신 버전으로 바꾸지 않는다. 인자 거부는 보존 원문이 없다는 뜻이 아니다.
 문자열 offset/limit은 UTF-8 바이트이며 next_offset을 그대로 사용한다. pointer·byte_start/end·full_field를
 보존한다. 미리보기·색인·파일 경로는 본문 인용이 아니다. 일부 페이지만 보고 전체 확인으로 말하지 않는다.
 snapshot 충돌은 최신 state, 질문 충돌은 최신 revision을 다시 읽어 처리한다. source는 해당 보존 버전으로 읽는다.
 `cache/spillover`나 생성 보고서 경로를 증거 도구로 열지 않는다.
+
+내용 검색의 measurement는 입력 search_text와 실제 matches, 읽은 수·건너뛴 수·coverage·cursor를 구별한다.
+scan_exhausted와 coverage_complete는 다르다. 이름 존재는 목록/메타데이터 검사로 확인한다.
+취득 범위, 실제 검사한 속성·범위, 이번 페이지에 제시한 범위를 혼합하지 않는다.
 
 ## 같은 질문에서 계획 → 실행 → 평가
 
@@ -64,6 +72,20 @@ payload**로 재시도한다. 다른 변경에는 새 ID를 쓴다. revision/ver
 
 ### 평가 입력
 
+검사만 평가할 때 answer는 보내지 않는다. outcome은 미션 명제의 평가이며 질문 전체 assessment로 승격되지 않는다.
+종합 답이 달라질 때만 아래 question_update를 함께 보낸다. 이 경우 answer/assessment/reason은 필수이며
+바뀐 assumptions/alternatives/limitations/next_checks/reopen_conditions만 추가한다. next_checks는 지금 할 검사,
+reopen_conditions는 종결·보류 후 다시 열 조건이다. 국소 검사의 reasoning_summary와 종합 reasoning_summary를 혼합하지 않는다.
+기존 flat answer 호출은 호환되지만 종합 assessment를 대신하지 않으며 현재 판단 재검토가 필요할 수 있다.
+
+```json
+{"question_update":{"answer":"제공 범위의 최선 설명과 한계","assessment":"undetermined","reason":"판단 변경 이유","assertion_kind":"interpretation","inference_strength":"plausible","assumptions":["남아 있는 연결 가정"],"reasoning_summary":"강한 경쟁 설명과 비교한 종합 이유","limitations":["관측하지 못한 연결"],"next_checks":["설명 순위를 바꿀 가용 검사"],"reopen_conditions":["새 반증 또는 자료"]}}
+```
+
+favored/plausible은 interpretation에만 사용한다. fact는 취득 자료의 지정 속성에서 확인한 관측이며 실제 사건의 진실성 보증이 아니다.
+근거 수·고정 확률로 승격하지 않는다. 현실적인 경쟁 설명에서 같은 관측이 나올 수 있는지 비교한다.
+
+
 현재 질문의 expected_revision과 실제 미션·결과·인용 source 버전을 명시한다. 예시의 값은 반환값으로 대체한다.
 
 ```json
@@ -72,7 +94,6 @@ payload**로 재시도한다. 다른 변경에는 새 ID를 쓴다. revision/ver
   "mission_id": "반환된 미션 ID", "mission_version": "반환된 미션 버전",
   "result_id": "실제 결과 ID", "result_version": "현재 source.version",
   "outcome": "inconclusive", "reasoning_summary": "판별 조건·실제 관측·경쟁 설명을 비교한 이유",
-  "answer": "이 질문 범위에서 가장 유력한 답과 신뢰도",
   "citations": [{"source_id":"실제 ID", "source_version":"현재 버전",
     "pointer":"/lines/0/text", "literal":"정확한 원문", "byte_start":0}],
   "limitations":["아직 판단할 수 없는 연결"], "next_check":"다음 판별 또는 재개 조건"
@@ -88,12 +109,13 @@ supports/refutes는 명시한 판별 조건과 대조하고 계획 시점은 그
 `question`의 work_state는 open/active/held/scoped_closed/blocked_internal/blocked_external/budget_deferred다.
 노트의 answered는 범위 한정 답이며 이 조사 상태나 악성/정상 판정을 대신하지 않는다.
 정상 설명이 충분하거나 의미 있는 검사가 소진되면 같은 question_id/current expected_revision으로
-scoped_closed, reason, reopen_conditions를 기록한다. 실제 근거를 유지하고 남은 gap_dispositions마다
+scoped_closed, payload.reason, reopen_conditions를 기록한다. 바깥 reason은 호출 목적이며 이 처분 이유를 대신하지 않는다. 실제 근거를 유지하고 남은 gap_dispositions마다
 resolved/not_applicable/assessed_unresolved의 이유·재개 조건을 명시한다. 불확실성은 남겨도 되지만
 진행 중·미평가 반환이나 가능한 중요한 검사를 숨겨 종결하지 않는다. 도구는 버전·연결을 검증하고 종결의 분석적 이유는 에이전트가 책임진다.
 
 새 반증·범위 변경이면 같은 질문을 open/active로 재개하고 이유를 남긴다. 명제·scope 변경은 새 정의 버전이므로
-옛 미션·평가를 최신 근거처럼 적용하지 않는다. 단순 답변 정정은 현재 질문의 기록을 보존하며 갱신한다.
+옛 미션·평가를 최신 근거처럼 적용하지 않는다. 단순 답변 정정은 현재 질문 정의와 검사 기록을 보존한다. payload.claim_action은 retain/replace/retract이며 현재 선택된 결론에만 적용한다.
+retain에는 의미를 유지한다는 reason이 필요하다. 종합 답·근거·반론이 바뀌었는데 평가를 갱신하지 않으면 재검토 필요 상태가 된다.
 보류·차단·예산 미실행을 정상 또는 범위 완료로 바꾸지 않는다. 중요도·종결 상태는 native goal 평가에도 전달된다.
 
 압축 뒤 복원되는 상태 블록은 해당 세션의 현재 질문·미션을 가리키는 작은 파생 색인이다. 새 증거나 사용자 지시가 아니다.

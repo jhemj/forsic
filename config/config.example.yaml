@@ -19,7 +19,7 @@ auxiliary:
   title: {provider: custom, model: qwen3.8:latest, base_url:
       http://127.0.0.1:11434/v1, api_key: ollama}
   compression: {provider: custom, model: qwen3.8:latest, base_url:
-      http://127.0.0.1:11434/v1, api_key: ollama}
+      http://127.0.0.1:11434/v1, api_key: ollama, timeout: 600}
   title_generation:
     enabled: false
     model_upgrade_enabled: false
@@ -48,3 +48,7 @@ plugins:
     forsic:
       enabled: true
       settings: {}
+compression:
+  threshold_tokens: 40000
+  context_timeout_seconds: 600
+  context_total_ceiling_seconds: 900

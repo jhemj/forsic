@@ -111,6 +111,36 @@ class ReportingPageTests(unittest.TestCase):
                 source_view(source, data, {'pointer':'/lines/0/text',**extra})
         self.assertTrue(source_view(source, data, {'pointer':'/lines/0/text','source_version':source['version']})['full_field'])
 
+    def test_native_source_argument_failure_recovers_without_rescanning_or_mutation(self):
+        source = current(self.case)['sources'][0]
+        original = self.case.event(source['id'])['data']
+        def saved_state():
+            return [e for e in self.case.events() if e['kind'] in ('note', 'report_change')]
+        before = saved_state()
+        for wrong in ({'snapshot_id': 'report-snapshot'}, {'source_version': 'stale-source'}):
+            with self.subTest(wrong=wrong), patch('socket.socket', side_effect=AssertionError('network forbidden')):
+                failed = json.loads(self.case.invoke('forsic_reporting', {
+                    'action': 'source', 'source_id': source['id'],
+                    'pointer': '/lines/0/text', **wrong}))
+                self.assertIn('error', failed)
+                self.assertNotIn('result', failed)
+                self.assertIn('snapshot_id', failed['error'])
+                self.assertIn('source_ref.version', failed['error'])
+                self.assertIn('omit pointer', failed['error'])
+                # Execute the documented discovery, then explicitly pin its source version.
+                discovered = json.loads(self.case.invoke('forsic_reporting', {
+                    'action': 'source', 'source_id': source['id']}))
+                self.assertEqual(discovered['source_ref']['version'], source['version'])
+                recovered = json.loads(self.case.invoke('forsic_reporting', {
+                    'action': 'source', 'source_id': source['id'],
+                    'source_version': discovered['source_ref']['version'],
+                    'pointer': '/lines/0/text'}))
+                self.assertNotIn('error', recovered)
+                self.assertEqual(recovered['text'], original['lines'][0]['text'])
+                self.assertTrue(recovered['full_field'])
+                self.assertEqual(saved_state(), before)
+                self.assertEqual(self.case.event(source['id'])['data'], original)
+
     def test_pointer_escapes_invalid_indices_and_byte_boundaries(self):
         self.assertEqual(select({'a/b':{'~value':['ok']}}, '/a~1b/~0value/0'), 'ok')
         for pointer in ('no-slash','/a~2b','/x/-1','/x/01','/x/999','/x/false','/x/０'):

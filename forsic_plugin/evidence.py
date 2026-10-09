@@ -352,4 +352,7 @@ class Case:
         if tool == 'forsic_intel':
             from .intelligence import model_view
             result = model_view(result)
-        return json.dumps({"evidence_id": eid, **result}, ensure_ascii=False)
+        from .report_driven.measurement import measurement_view
+        measurement=measurement_view(result)
+        # Presentation only: retained source bytes/version remain unchanged.
+        return json.dumps({**({'measurement':measurement} if measurement else {}), "evidence_id": eid, **result}, ensure_ascii=False)

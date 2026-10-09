@@ -156,6 +156,8 @@ def completion_state(resolved, state):
     if not questions:
         pending.append('No question is explicitly bound to this native goal; record its requested scope before declaring completion.')
     for question in questions:
+        if question.get('judgment_review_required') and question['work_state']=='scoped_closed':
+            pending.append(question['id']+': current judgment correction requires explicit assessment')
         if question['work_state'] == 'scoped_closed':
             if not question.get('closure_rationale') or not question.get('reopen_conditions'):
                 pending.append(question['id'] + ': scope closure lacks its reason or reopening conditions')
@@ -259,22 +261,19 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
             'reports': reports,
             'omitted': {'active_questions': 0, 'active_missions': 0, 'unassessed_results': 0, 'closed_index': 0,
                         'other_goal_or_unbound_questions': len(state['questions']) - len(questions)},
+            'preserved_history': {'excluded_records':state['meta'].get('excluded_history_records',0), 'meaning':'Excluded old definitions are preserved, not current evidence; note(get, include_history=true) locates revisions.'},
             'retrieval': 'forsic_note(get, note_id) and forsic_reporting(state/source); closure is scoped and reversible.'}
     entries = {'active_questions': [], 'active_missions': [], 'unassessed_results': [], 'closed_index': []}
+    from .report_driven.current_judgment import navigation_view
     for q in questions:
-        if q['work_state'] == 'scoped_closed':
-            entries['closed_index'].append({'id': q['id'], 'scope': _clip(q['scope'], 160),
-                'reason': _clip(q.get('closure_rationale'), 180), 'reopen': [_clip(x, 130) for x in q['reopen_conditions'][:2]],
-                'evidence_ids': q.get('evidence_ids', [])[:3],
-                'omitted_details': max(0, len(q['reopen_conditions'])-2) + max(0, len(q.get('evidence_ids', []))-3)})
+        item=navigation_view(state,q)
+        item.update(priority=q['priority'],work_state=q['work_state'])
+        if q['work_state']=='scoped_closed':
+            item['reason']=_clip(q.get('closure_rationale'),180)
+            entries['closed_index'].append(item)
         else:
-            entries['active_questions'].append({'id': q['id'], 'revision': q['revision'], 'priority': q['priority'], 'work_state': q['work_state'],
-                'question': _clip(q['question'], 190), 'answer_is_model_assessment': _clip(q['answer'], 220),
-                'alternatives': [_clip(x, 140) for x in q.get('alternatives', [])[:2]],
-                'next_checks': [_clip(x, 140) for x in q.get('next_checks', [])[:2]],
-                'deferred_reason': _clip(q.get('deferred_reason'), 160), 'evidence_ids': q.get('evidence_ids', [])[:3],
-                'omitted_details': sum(max(0, len(q.get(k, []))-n) for k,n in
-                                       [('alternatives',2), ('next_checks',2), ('evidence_ids',3)])})
+            item['deferred_reason']=_clip(q.get('deferred_reason'),160)
+            entries['active_questions'].append(item)
     priorities = {q['id']: rank[q['priority']] for q in questions}
     for m in sorted(missions, key=lambda item: (priorities[item['question_ref']['id']], item['id'])):
         if m['state'] in ('draft', 'candidate', 'ready', 'queued', 'running', 'blocked'):

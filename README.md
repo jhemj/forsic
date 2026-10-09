@@ -138,6 +138,6 @@ Hermes Agent는 Nous Research의 프로젝트이며 이 소스의 기준 커밋�
 
 각 의존 구성요소와 모델의 라이선스는 별도로 적용됩니다. [제3자 고지](THIRD_PARTY_NOTICES.txt)를 함께 확인하세요. Forsic의 MIT 라이선스가 다른 구성요소의 조건이나 조사 자료에 대한 권리를 대신하지는 않습니다.
 
-## 하네스 검토 요청
+## 하네스 방향 검토
 
-현재 구현과 미검증 제안(확정·유력·가능성), 반복된 해석 오류 및 Pro 검토 질문은 [HARNESS_REVIEW.txt](HARNESS_REVIEW.txt)에 정리했습니다. 운영 사건과 비밀 설정은 포함하지 않습니다.
+현재 구현의 한계, E2E 관찰과 다음 평가에 관한 Pro 질문은 [HARNESS_REVIEW.txt](HARNESS_REVIEW.txt)에 정리했습니다. 운영 사건·원문·비밀 설정은 포함하지 않습니다.

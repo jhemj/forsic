@@ -16,6 +16,7 @@ class BaseRecord(Strict):
     version: str = Field(min_length=1)
 
 class Meta(Strict):
+    excluded_history_records: int = 0
     schema_version: Literal['forsic-report-state-1'] = 'forsic-report-state-1'
     data_mode: Literal['synthetic','live']
     case_id: str
@@ -62,6 +63,9 @@ class Observation(BaseRecord):
     interpretation_limit: str
 
 class Claim(BaseRecord):
+    inference_strength: Literal['favored','plausible','unrated'] = 'unrated'
+    assumptions: list[str] = Field(default_factory=list)
+    reasoning_summary: str = ''
     title: str
     statement: str
     assertion_kind: Literal['fact','interpretation']
@@ -74,6 +78,7 @@ class Claim(BaseRecord):
     semantic_review: Literal['not_reviewed','sampled','reviewed_for_scope']
 
 class Question(BaseRecord):
+    judgment_review_required: bool = False
     goal_id: str = ""
     session_id: str = ""
     next_checks: list[str] = Field(default_factory=list)
@@ -126,6 +131,8 @@ class Test(BaseRecord):
     design_timing: Literal['before_result','after_result']
 
 class Assessment(BaseRecord):
+    limitations: list[str] = Field(default_factory=list)
+    next_check: str = ''
     test_ref: Ref
     result_ref: Ref
     observation_refs: list[Ref]

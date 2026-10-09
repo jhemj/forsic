@@ -33,7 +33,7 @@ ROOT_FILES = ('AGENTS.md', '.hermes.md', 'run.py', 'telegram_mirror.py', 'telegr
               'test_connections.py', 'test_note_revision_recovery.py', 'test_harness_guidance.py', 'test_harness_context.py', 'test_note_model_view.py',
               'test_report_review_projection.py', 'test_reporting_pages.py', 'test_dashboard.cjs',
               'test_investigation_state.py', 'test_investigation_context.py', 'test_mission_native_tools.py',
-              'test_native_goal_evaluation.py',
+              'test_native_goal_evaluation.py', 'test_current_judgment.py',
               'test_indicators.py', 'test_search_resume.py', 'test_log_timeline.py', 'test_indicator_integration.py')
 PUBLIC_FILES = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'SECURITY.md',
                 'NOTICE', 'NOTICE.txt', '.gitignore', '.dockerignore')
