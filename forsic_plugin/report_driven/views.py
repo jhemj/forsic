@@ -37,7 +37,10 @@ def compile_views(s,review=None):
                  'blocked_internal':'도구·내부 제약','blocked_external':'외부 자료 대기','budget_deferred':'예산으로 보류'}
     def disposition(q):
         return work_labels.get(q['work_state'],q['work_state'])+'\n'+str(q.get('closure_rationale') or q.get('deferred_reason') or '')
-    answers=table(['질문','현재 답과 범위','조사 상태와 남은 확인'],[[q['id']+' '+q['question'],judgments[q['id']]['answer']+'\n'+q['scope'],disposition(q)+'\n'+(', '.join(q['remaining_gap_ids']) or '남은 검사 기록 없음')+'\n재개: '+joined(q.get('reopen_conditions',[]))] for q in s['questions']],[25,45,30])
+    def current_answer(q):
+        j=judgments[q['id']]
+        return ('[재검토 필요]\n' if j['review_required'] else '')+j['answer']
+    answers=table(['질문','현재 답과 범위','조사 상태와 남은 확인'],[[q['id']+' '+q['question'],current_answer(q)+'\n'+q['scope'],disposition(q)+'\n'+(', '.join(q['remaining_gap_ids']) or '남은 검사 기록 없음')+'\n재개: '+joined(q.get('reopen_conditions',[]))] for q in s['questions']],[25,45,30])
     gaps=table(['공백','판단에 미치는 한계','다음 확인 / 재개'],[[g['id']+'\n'+g['kind'],g['original_obligation']+'\n'+g['reason'],g['feasible_next_action']+'\n'+joined(g['reopen_conditions'])] for g in s['gaps'] if g['disposition']!='resolved'],[20,45,35])
     alternatives=table(['설명','평가 / 반론','다음 판별'],[[h['id']+' '+h['explanation'],h['status']+'\n'+refs(h['counterevidence_refs'])+'\n'+joined(h['assumptions']),h['prediction']+'\n'+h['compatibility']] for h in s['hypotheses'] if h['id'] in {r['id'] for q in s['questions'] for r in q['hypothesis_refs']}],[32,34,34])
     timeline=table(['시각과 종류','내용','한계'],[[joined(t['normalized_values'] or t['raw_values'])+'\n'+t['time_kind']+' '+str(t['file_time_type'] or ''),t['explanation'],t['limitation']] for t in s['timeline']],[28,36,36])
@@ -47,7 +50,7 @@ def compile_views(s,review=None):
     missions=table(['미션 / 원래 의무','다음에 구별할 내용','조건 / 상태'],[[m['id']+'\n'+m['original_obligation_id'],m['target_proposition']+'\n'+m['why_it_matters'],m['inconclusive_rule']+'\n'+m['state']+' / '+m['budget']['authority']] for m in s['missions']],[25,40,35])
     status=table(['상태','현재 기록'],[[k,str(v)] for k,v in s['status'].items() if k!='explicit_limitations'],[35,65])
     limit=paragraph(joined(s['status']['explicit_limitations']))
-    executive_answers=table(['경영진이 알아야 할 질문','현재까지의 답','확인 범위'],[[q['question'],q['answer'],q['scope']] for q in executive_questions],[28,48,24])
+    executive_answers=table(['경영진이 알아야 할 질문','현재까지의 답','확인 범위'],[[q['question'],current_answer(q),q['scope']] for q in executive_questions],[28,48,24])
     executive_findings=table(['발견','판단 근거','중요한 제한'],[[c['id'],c['statement']+'\n'+('아직 평가하지 않은 해석 후보' if c['status']=='candidate' else '원문에 결속한 해석'),joined(c['limitations'])+'\n가정: '+joined(c.get('assumptions',[]))+'\n판단 종류: '+c['assertion_kind']+' / '+c.get('inference_strength','unrated')] for c in selected_claims if c['status'] not in ('retracted','superseded') and (not explicit_selection or c['id'] in chosen_claims)],[20,44,36])
     executive_gaps=table(['아직 모르는 것','확인하지 못한 이유','다음 확인'],[[g['original_obligation'],g['reason'],joined(g['reopen_conditions'])] for g in s['gaps'] if g['disposition']!='resolved'],[28,38,34])
     executive_missions=table(['다음 확인','왜 필요한가','어떤 결과면 구별되는가'],[[m['target_proposition'],m['why_it_matters'],joined([x for x in (m['support_rule'],m['refute_rule'],m['inconclusive_rule']) if x])] for m in s['missions'] if m['state']!='completed'],[28,30,42])

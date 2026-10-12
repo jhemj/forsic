@@ -8,18 +8,18 @@ model:
 _config_version: 49
 fallback_model: {}
 providers:
-  custom: {request_timeout_seconds: 900, stale_timeout_seconds: 900}
+  custom: {request_timeout_seconds: 1800, stale_timeout_seconds: 1800}
 tools:
   tool_search: {enabled: off}
 reasoning: {enabled: false}
 auxiliary:
-  report_review: {timeout: 900}
+  report_review: {timeout: 1800}
   goal_judge: {provider: custom, model: qwen3.8:latest, base_url:
-      http://127.0.0.1:11434/v1, api_key: ollama, timeout: 120, max_tokens: 1024}
+      http://127.0.0.1:11434/v1, api_key: ollama, timeout: 600, max_tokens: 1024}
   title: {provider: custom, model: qwen3.8:latest, base_url:
       http://127.0.0.1:11434/v1, api_key: ollama}
   compression: {provider: custom, model: qwen3.8:latest, base_url:
-      http://127.0.0.1:11434/v1, api_key: ollama, timeout: 600}
+      http://127.0.0.1:11434/v1, api_key: ollama, timeout: 1200}
   title_generation:
     enabled: false
     model_upgrade_enabled: false
@@ -34,7 +34,7 @@ agent:
   api_max_retries: 1
   auto_recovery_cycles: 0
   run_budget_seconds: 43200
-  local_stream_stale_timeout: 900
+  local_stream_stale_timeout: 1800
 memory: {memory_enabled: false, user_profile_enabled: false, nudge_interval: 0}
 curator: {enabled: false}
 background_review: {enabled: false}
@@ -50,5 +50,5 @@ plugins:
       settings: {}
 compression:
   threshold_tokens: 40000
-  context_timeout_seconds: 600
-  context_total_ceiling_seconds: 900
+  context_timeout_seconds: 1200
+  context_total_ceiling_seconds: 1800

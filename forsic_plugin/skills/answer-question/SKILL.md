@@ -16,7 +16,7 @@ description: 현재 조사 현황·질문에 근거 범위 안에서 답하고, 
 
 ## 답변 저장·정정
 
-미션을 진행하는 조사 질문은 forsic-report-driven의 forsic_reporting(question/assess) 경로로 답·범위·조사 상태를
+미션을 진행하는 조사 질문은 forsic-report-driven의 forsic_question/forsic_assess 경로로 답·범위·조사 상태를
 같이 관리한다. 기존 노트와 같은 저장 경로이며 별도 질문 사본을 만들지 않는다. 아래 forsic_note는 같은 노트의
 일반 조회·답변 정정 계약이다. answered만으로 scoped_closed를 대신하거나 닫힌 질문의 미션을 실행하지 않는다.
 

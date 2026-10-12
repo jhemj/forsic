@@ -5,6 +5,10 @@ from copy import deepcopy
 def current_judgment(state, question):
     selected={r['id'] for r in question['claim_refs']}
     claims=[c for c in state['claims'] if c['id'] in selected and c['status'] not in ('retracted','superseded')]
+    # An unadopted note answer still has limits. Losing claim_refs must not
+    # erase them from the goal/compaction view or imply an approved judgment.
+    if not selected:
+        claims=[c for c in state['claims'] if c['id']=='F-'+question['id'][2:] and c['status']=='candidate']
     tests={t['id'] for t in state['tests'] if t['question_ref']['id']==question['id']}
     # Local test reasoning is explicitly separate from the aggregate judgment.
     local=[{'id':a['id'],'test_id':a['test_ref']['id'],'outcome':a['outcome'],
@@ -16,7 +20,11 @@ def current_judgment(state, question):
             'review_required':question.get('judgment_review_required',False),
             'claim_refs':deepcopy(question['claim_refs']),
             'judgments':[{k:deepcopy(c.get(k,[] if k in ('assumptions','limitations','source_refs','counterevidence_refs') else 'unrated' if k=='inference_strength' else ''))
-                          for k in ('id','assertion_kind','inference_strength','assumptions','reasoning_summary','limitations','source_refs','counterevidence_refs')} for c in claims],
+                          for k in ('id','status','assertion_kind','inference_strength','assumptions','reasoning_summary','limitations','source_refs','counterevidence_refs')} for c in claims],
+            'remaining_gaps':[{'id':g['id'],'disposition':g['disposition'],'reason':g['reason'],
+                               'feasible_next_action':g['feasible_next_action']}
+                              for g in state['gaps'] if g['question_ref']['id']==question['id']
+                              and g['disposition'] not in ('resolved','not_applicable')],
             'alternatives':deepcopy(question.get('alternatives',[])),
             'next_checks':deepcopy(question.get('next_checks',[])),
             'reopen_conditions':deepcopy(question.get('reopen_conditions',[])),
@@ -26,7 +34,7 @@ def current_judgment(state, question):
 
 def current_claims(state):
     selected={r['id'] for q in state['questions'] for r in q['claim_refs']}
-    candidates={'F-'+q['id'][2:] for q in state['questions'] if not q['claim_refs']}
+    candidates={'F-'+q['id'][2:] for q in state['questions'] if not q['claim_refs'] and not q.get('judgment_review_required',False)}
     return [c for c in state['claims'] if c['id'] in selected|candidates and c['status'] not in ('retracted','superseded')]
 
 
@@ -45,7 +53,7 @@ def navigation_view(state, question):
         return [text(v,180) for v in values[:limit]]
     claims=full['judgments'][:1]
     omitted+=max(0,len(full['judgments'])-1)
-    judgment=[{'id':c['id'],'assertion_kind':c['assertion_kind'],'inference_strength':c['inference_strength'],
+    judgment=[{'id':c['id'],'status':c['status'],'assertion_kind':c['assertion_kind'],'inference_strength':c['inference_strength'],
                'assumptions':items(c['assumptions']),'limitations':items(c['limitations']),
                'reasoning_summary':text(c['reasoning_summary'])} for c in claims]
     local=full['local_assessments'][-1:]
@@ -58,5 +66,8 @@ def navigation_view(state, question):
             'judgments':judgment,'alternatives':items(full['alternatives']),
             'next_checks':items(full['next_checks']), 'reopen':items(full['reopen_conditions']),
             'latest_local_assessment_not_aggregate':local,'detail_pointer':full['detail_pointer']}
+    result['remaining_gap_count']=len(full['remaining_gaps'])
+    result['remaining_gap_examples']=[{**g,'reason':text(g['reason'],200)} for g in full['remaining_gaps'][:2]]
+    omitted+=max(0,len(full['remaining_gaps'])-2)
     result['omitted_details']=omitted
     return result

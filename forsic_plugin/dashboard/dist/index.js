@@ -172,6 +172,20 @@
     const index=order.findIndex(c=>c.session_ids.includes(session));
     return index<0 ? '분석' : `${['첫','두','세','네','다섯','여섯','일곱','여덟','아홉','열'][index] || index+1} 번째 분석`;
   }
+  function tokenCount(value) {
+    if(!Number.isFinite(value) || value<0)return '—';
+    if(value>=999950)return (value/1000000).toFixed(2).replace(/\.?0+$/,'')+'M';
+    if(value>=1000)return (value/1000).toFixed(1).replace(/\.0$/,'')+'K';
+    return String(Math.round(value));
+  }
+  function SessionUsage({usage,detail=false}) {
+    if(!usage)return h('small',{className:'forsic-session-usage'},'사용량 기록 없음');
+    const label='세션 누적 '+tokenCount(usage.total_tokens)+' 토큰';
+    const description=`입력 ${tokenCount(usage.prompt_tokens)} · 출력 ${tokenCount(usage.output_tokens)} · 입력 중 캐시 ${tokenCount(usage.cache_read_tokens)} · 새 입력 ${tokenCount(usage.input_tokens+usage.cache_write_tokens)} · 요약 등 보조 호출 ${tokenCount(usage.auxiliary_tokens)} 포함. 기록된 호출의 누적 합계이며 현재 문맥 크기나 처리 중인 요청의 사용량이 아닙니다.`;
+    return h(detail?'details':'small',{className:'forsic-session-usage',title:description},
+      detail?h('summary',null,label):label,
+      detail&&h('p',null,description));
+  }
   function CaseConversations({item,currentSession}) {
     const [busy,setBusy]=R.useState(false), [error,setError]=R.useState('');
     const [requestId]=R.useState(()=>crypto.randomUUID());
@@ -188,7 +202,7 @@
       h('div',{className:'forsic-conversations'},...(item.conversations || []).map(c=>
         h('a',{key:c.id,className:'forsic-nav-item',href:conversationURL(item.case_id,c.resume_session_id),
           'aria-current':(c.session_ids || []).includes(currentSession)?'page':undefined},
-          h('span',null,analysisTitle(item,c.resume_session_id)),h('small',null,new Date(c.last_activity_at*1000).toLocaleDateString('ko-KR',{month:'short',day:'numeric'}))))),
+          h('span',{className:'forsic-conversation-label'},h('span',null,analysisTitle(item,c.resume_session_id)),h(SessionUsage,{usage:c.usage})),h('small',null,new Date(c.last_activity_at*1000).toLocaleDateString('ko-KR',{month:'short',day:'numeric'}))))),
       !item.conversations?.length && h('p',{className:'forsic-empty'},'아직 이 사건의 대화가 없어요.'),
       error&&h('p',{role:'status'},error));
   }
@@ -209,6 +223,7 @@
       caseId && scope ? h('div',{className:'forsic-current-case'},
         h('header',{className:'forsic-case-heading'},h('small',null,'현재 사건'),h('h2',null,(data?.case?.question && data.case.question!=='질문 선택 대기' ? data.case.question : item?.question) || data?.case?.label || item?.label),h('code',null,caseId)),
         item && h(CaseConversations,{key:caseId,item,currentSession}),
+        currentSession && item && h(SessionUsage,{detail:true,usage:item.conversations.find(c=>c.session_ids.includes(currentSession))?.usage}),
         h('nav',{className:'forsic-case-views','aria-label':'이 사건의 결과'},
           h('a',{className:'forsic-nav-item',href:workspaceURL('current',caseId),'aria-current':route.panel==='board'?'page':undefined},'조사 보드'),
           h('a',{className:'forsic-nav-item',href:workspaceURL('current',caseId,'reports'),'aria-current':route.panel==='reports'?'page':undefined},'보고서')))
@@ -520,6 +535,111 @@
         !view.sources.length && h('p',{className:'forsic-empty'},'노트에 인용한 근거가 여기에 모입니다.'),
         h('div',{className:'forsic-source-grid'},...view.sources.map(s=>h(EvidenceCard,{key:s.id,source:s,caseId:data?.case?.case_id || '',onSource})))));
   }
+  const relationLabels={open:'열림',active:'조사 중',held:'보류',scoped_closed:'범위 종결',blocked_internal:'내부 차단',blocked_external:'외부 자료 필요',budget_deferred:'예산 보류',supported:'지지됨',refuted:'반박됨',conflicting:'상충',undetermined:'판단 유보',candidate:'검사 전',ready:'준비',queued:'대기',running:'진행 기록 있음',returned:'반환됨',failed:'실패',blocked:'차단',assessed:'평가됨',unassessed:'미평가',stale:'재평가 필요',completed:'미션 완료',draft:'계획',partial:'부분 수행',superseded:'대체된 판단',retracted:'철회된 판단',supports:'지지',refutes:'반박',inconclusive:'판별 불충분',found:'관측 발견',no_match_in_scope:'해당 범위 일치 없음',unavailable:'검사 불가'};
+  function questionRelations(value, id) {
+    const s=value.state, q=s.questions.find(q=>q.id===id);
+    if(!q)return null;
+    const tests=s.tests.filter(t=>t.question_ref.id===id), ids=new Set(tests.map(t=>t.id));
+    const assessments=s.assessments.filter(a=>ids.has(a.test_ref.id));
+    const receipts=new Set(assessments.map(a=>a.adoption_receipt).filter(Boolean));
+    const observations=new Map();
+    for(const a of assessments)for(const ref of a.observation_refs){
+      const key=ref.id+'@'+ref.version;
+      if(!observations.has(key))observations.set(key,{key,ref,assessmentIds:[]});
+      observations.get(key).assessmentIds.push(a.id);
+    }
+    return {q, judgment:value.judgments[id], tests, assessments, observations:[...observations.values()],
+      missions:s.missions.filter(m=>m.question_ref.id===id),
+      history:s.claims.filter(c=>['superseded','retracted'].includes(c.status)&&c.adoption_receipt&&receipts.has(c.adoption_receipt)),
+      gaps:s.gaps.filter(g=>g.question_ref.id===id&& !['resolved','not_applicable'].includes(g.disposition))};
+  }
+  function RelationDetail({value,questionId,onSource}) {
+    const r=questionRelations(value,questionId);
+    if(!r)return h('p',{className:'forsic-empty'},'질문을 선택하면 연결된 조사 기록이 나타납니다.');
+    const {q,judgment:j}=r, s=value.state;
+    const list=(title,items)=>items?.length?h('div',null,h('h4',null,title),h('ul',null,...items.map((x,i)=>h('li',{key:i},x)))):null;
+    const sourceButton=(ref,observation,key)=>{
+      const source=s.sources.find(x=>x.id===ref?.id);
+      return h('button',{key,disabled:!source,onClick:()=>onSource(ref,observation),title:ref?.id},
+        observation?'인용 구간 보기':source?.label||'출처 연결 없음',source&&source.version!==ref.version?' · 이전 버전':'');
+    };
+    const referenceView=(ref,key)=>{
+      if(ref.kind==='source')return sourceButton(ref,null,key);
+      const record=(ref.kind==='observation'?s.observations:s.claims).find(x=>x.id===ref.id&&x.version===ref.version);
+      return h('div',{key},record?.source_ref?sourceButton(record.source_ref,record,key+'-source'):h('p',null,record?.statement||'참조를 현재 버전에서 확인할 수 없습니다.'));
+    };
+    return h('div',{className:'forsic-relation-detail'},
+      h('article',{className:'forsic-relation-answer'},
+        h('div',{className:'forsic-relation-meta'},h('span',null,'질문 · ',relationLabels[q.work_state]||q.work_state),h('span',null,'명제 평가 · ',relationLabels[j.assessment]||j.assessment),h('small',null,'판단 v'+j.revision)),
+        h('h3',null,q.question),h('p',{className:'forsic-relation-scope'},'범위 · ',j.scope),
+        j.review_required&&h('p',{role:'status',className:'forsic-open-checks'},'재검토 필요 · 현재 답과 채택 근거를 다시 확인해야 합니다.'),
+        h('p',{className:'forsic-answer'},j.answer),
+        h('p',{className:'forsic-relation-caption'},j.judgments.map(c=>c.assertion_kind==='fact'?'관측 주장':{favored:'유력한 해석',plausible:'가능한 해석',unrated:'해석 · 유력도 미평가'}[c.inference_strength]||'해석').join(' · ')),
+        h('details',null,h('summary',null,'판단 근거·가정·반론'),...j.judgments.map(c=>h('section',{key:c.id,className:'forsic-relation-judgment'},
+          h('h4',null,c.assertion_kind==='fact'?'자료에서 확인한 관측':{favored:'유력한 해석',plausible:'가능한 해석',unrated:'해석 · 유력도 미평가'}[c.inference_strength]||'해석'),
+          c.reasoning_summary&&h('p',null,c.reasoning_summary),list('가정',c.assumptions),list('한계',c.limitations),
+          h('div',{className:'forsic-source-links'},...c.source_refs.map((ref,i)=>referenceView(ref,c.id+'-s-'+i))),
+          c.counterevidence_refs.length>0&&h('div',null,h('h4',null,'반증 참조'),...c.counterevidence_refs.map((ref,i)=>referenceView(ref,c.id+'-counter-'+i))))),
+        list('경쟁 설명',j.alternatives)),list('다음 확인',j.next_checks),
+        q.closure_rationale&&h('p',null,'범위 종결 이유 · ',q.closure_rationale),list('다시 열 조건',j.reopen_conditions)),
+      h('p',{className:'forsic-relation-caption'},'아래 기록은 이 질문에 연결됩니다. 검사 결과의 지지·반박은 모델의 평가이며, 실행 완료와 질문 종결은 별개입니다.'),
+      h('div',{className:'forsic-relation-lanes'},
+        h('section',{'aria-label':'질문에 연결된 미션'},h('h3',null,'01 · 판별 미션'),
+          !r.missions.length&&h('p',{className:'forsic-empty'},'현재 질문 정의에 적용되는 미션이 없습니다.'),
+          ...r.missions.map(m=>h('article',{key:m.id,className:'forsic-relation-node'},h('small',null,relationLabels[m.state]||m.state),h('h4',null,m.target_proposition),h('p',null,m.why_it_matters),h('code',null,m.id)))),
+        h('section',{'aria-label':'실제 검사와 평가'},h('h3',null,'02 · 검사와 평가'),
+          !r.tests.length&&h('p',{className:'forsic-empty'},'아직 연결된 검사 기록이 없습니다.'),
+          ...r.tests.map(t=>h('article',{key:t.id,className:'forsic-relation-node'},
+            h('small',null,'실행 · ',relationLabels[t.execution_state]||t.execution_state,' / ',relationLabels[t.assessment_state]||t.assessment_state),
+            h('h4',null,t.target_proposition),h('p',null,t.target_scope),
+            t.execution_state==='running'&&h('p',null,'시작/진행 영수증 기준이며 현재 프로세스 생존을 보증하지 않습니다.'),
+            t.result_ref&&sourceButton(t.result_ref,null,t.id+'-result'),
+            ...r.assessments.filter(a=>a.test_ref.id===t.id).map(a=>h('div',{key:a.id,className:'forsic-relation-assessment'},h('strong',null,'검사 평가 · ',relationLabels[a.outcome]||a.outcome),h('p',null,a.reasoning_summary),list('검사의 한계',a.limitations),a.next_check&&h('p',null,'다음 검사 · ',a.next_check))),h('code',null,t.id)))),
+        h('section',{'aria-label':'평가에 인용한 관측'},h('h3',null,'03 · 원문 관측'),
+          !r.observations.length&&h('p',{className:'forsic-empty'},'정확한 구간에 연결된 관측이 아직 없습니다.'),
+          ...r.observations.map(({key,ref,assessmentIds})=>{
+            const o=s.observations.find(o=>o.id===ref.id&&o.version===ref.version);
+            return h('article',{key,className:'forsic-relation-node'},
+              h('small',{title:assessmentIds.join(' / ')},'검사 평가 '+assessmentIds.length+'건에서 참조 · 같은 관측'),o?h('div',null,h('blockquote',null,o.literal),h('p',null,o.interpretation_limit),h('code',null,o.field_pointer+' · '+o.byte_start+'–'+o.byte_end+' bytes'),sourceButton(o.source_ref,o,ref.id)):h('p',null,'관측 참조를 현재 버전에서 확인할 수 없습니다.'));
+          }))),
+      r.gaps.length>0&&h('section',null,h('h3',null,'남은 쟁점'),...r.gaps.map(g=>h('article',{key:g.id,className:'forsic-relation-node'},h('h4',null,g.original_obligation),h('p',null,g.reason)))),
+      h('details',{className:'forsic-relation-history'},h('summary',null,'이전 판단 · '+r.history.length+'건'),
+        h('p',null,'현재 질문 정의에 연결된 보존 이력입니다. 아래 판단은 현재 결론이 아닙니다.'),
+        ...r.history.map(c=>h('article',{key:c.id},h('strong',null,relationLabels[c.status]),h('p',null,c.statement),h('code',null,c.id))),
+        !r.history.length&&h('p',null,'현재 투영에 표시할 대체·철회 기록이 없습니다. 전체 사건 이력이 없다는 뜻은 아닙니다.')));
+  }
+  function InvestigationRelations({caseId}) {
+    const [value,setValue]=R.useState(null),[error,setError]=R.useState(''),[selected,setSelected]=R.useState('');
+    const sourcePanel=R.useRef(null);
+    const [refresh,setRefresh]=R.useState(0),[sourceRequest,setSourceRequest]=R.useState(null),[source,setSource]=R.useState(null),[sourceError,setSourceError]=R.useState('');
+    R.useEffect(()=>{let alive=true;setError('');setValue(null);setSourceRequest(null);
+      if(!caseId){setValue(null);return;}
+      nativeFetch(scopedURL(base+'/report-driven',caseId)).then(v=>{if(alive){setValue(v);setSelected(old=>v.state.questions.some(q=>q.id===old)?old:v.state.questions[0]?.id||'');}}).catch(()=>{if(alive)setError('조사 관계를 불러오지 못했습니다. 새로고침해 주세요.');});
+      return()=>{alive=false;};
+    },[caseId,refresh]);
+    R.useEffect(()=>{let alive=true;setSource(null);setSourceError('');if(!sourceRequest)return;
+      const params=new URLSearchParams(sourceRequest);
+      nativeFetch(scopedURL(base+'/source-page?'+params,caseId)).then(v=>{if(alive)setSource(v);}).catch(()=>{if(alive)setSourceError('원문을 열지 못했습니다. 출처·버전이 바뀌었을 수 있으니 조사 관계를 새로고침해 주세요.');});
+      return()=>{alive=false;};
+    },[caseId,sourceRequest]);
+    R.useEffect(()=>{if(sourceRequest)sourcePanel.current?.focus();},[sourceRequest]);
+    const onSource=(ref,o)=>setSourceRequest({source_id:ref.id,source_version:ref.version,pointer:o?.field_pointer||'',offset:o?.byte_start||0,limit:o?Math.min(4096,o.byte_end-o.byte_start):2048});
+    return h('section',{className:'forsic-board forsic-relations','aria-label':'조사 관계'},
+      h('header',{className:'forsic-board-heading'},h('div',null,h('h2',null,'조사 관계'),h('p',null,'질문에서 판단으로, 검사에서 근거로 연결을 따라가세요.')),h('button',{onClick:()=>setRefresh(x=>x+1)},'새로고침')),
+      error&&h('p',{role:'alert'},error),!value&&!error&&h('p',{role:'status'},caseId?'조사 관계를 불러오는 중…':'먼저 사건을 선택하세요.'),
+      value&&h('div',null,
+        value.state.meta.excluded_history_records>0&&h('p',{className:'forsic-relation-caption'},'이전 질문 정의의 기록 ',value.state.meta.excluded_history_records,'건은 보존되어 있으며 현재 관계에서 제외됩니다.'),
+        h('label',{className:'forsic-relation-select'},'조사 질문',h('select',{value:selected,onChange:e=>{setSelected(e.target.value);setSourceRequest(null);}},...value.state.questions.map(q=>h('option',{key:q.id,value:q.id},q.question)))),
+        !value.state.questions.length&&h('p',{className:'forsic-empty'},'질문이 저장되면 판단·검사·근거의 관계가 여기에 나타납니다.'),
+        h(RelationDetail,{key:selected,value,questionId:selected,onSource})),
+      sourceRequest&&h('section',{className:'forsic-relation-source',ref:sourcePanel,tabIndex:-1,'aria-label':'선택한 원문 구간','aria-live':'polite'},
+        h('div',{className:'forsic-section-heading'},h('h3',null,'보존 원문'),h('button',{onClick:()=>setSourceRequest(null)},'원문 닫기')),
+        h('code',null,sourceRequest.source_id+' · '+sourceRequest.pointer),sourceError&&h('p',{role:'alert'},sourceError),!source&&!sourceError&&h('p',null,'원문을 불러오는 중…'),
+        source&&h('div',null,h('p',null,'출처 버전 ',source.source_ref.version,' · 보존된 도구 반환의 일부입니다.'),h('pre',null,source.text??JSON.stringify(source.value??source.items,null,2)),
+          source.items&&h('div',{className:'forsic-source-links'},...source.items.map(item=>h('button',{key:item.pointer,onClick:()=>setSourceRequest({...sourceRequest,pointer:item.pointer,offset:0,limit:2048})},item.key??item.pointer))),
+          source.next_offset!=null&&h('button',{onClick:()=>setSourceRequest({...sourceRequest,offset:source.next_offset,limit:2048})},'다음 구간'))));
+  }
+
   const indicatorLabels={observed:'관측됨',suspicious:'의심',benign:'정상 설명',undetermined:'판단 보류',withdrawn:'철회됨'};
   function IndicatorBoard({caseId,onSource}) {
     const [page,setPage]=R.useState(null), [error,setError]=R.useState('');
@@ -557,7 +677,7 @@
   function Records({data,error}) {
     const conversation=useConversation(data?.case?.case_id || '');
     const [selected, setSelected] = R.useState(null), [report, setReport] = R.useState(null);
-    const [boardTab,setBoardTab]=R.useState('findings');
+    const [boardTab,setBoardTab]=R.useState('relations');
     const fetchJSON = (url, options) => nativeFetch(scopedURL(url, data?.case.case_id || ''), options);
     R.useEffect(() => {setSelected(null); setReport(null);}, [data?.case.case_id]);
     const reportBody = report && (report.markdown || '').split(/(\[E:[a-zA-Z0-9]+\])/g).map((part, i) => {
@@ -570,8 +690,8 @@
       h('header',{className:'forsic-workspace-heading'},h('div',null,h('small',null,reportsOnly?'보고서':'조사 보드'),h('h1', {id:'case-records'}, data?.case.label || '사건 기록')),
         conversation && h('a',{href:conversation},'대화로 돌아가기 →')),
       h('p', null, data?.case.question),
-      !reportsOnly && h('nav',{'aria-label':'조사 보드 보기',className:'forsic-board-tabs'},...['findings','indicators'].map(tab=>h('button',{key:tab,'aria-pressed':boardTab===tab,onClick:()=>setBoardTab(tab)},tab==='findings'?'조사 결과·시간축':'IOC·관측 지표'))),
-      !reportsOnly && (boardTab==='indicators'?h(IndicatorBoard,{key:data?.case?.case_id||'none',caseId:data?.case?.case_id||'',onSource:async id=>setSelected(await fetchJSON(base+'/evidence/'+id))}):h(InvestigationBoard,{data,onSource:async id=>setSelected(await fetchJSON(base+'/evidence/'+id))})),
+      !reportsOnly && h('nav',{'aria-label':'조사 보드 보기',className:'forsic-board-tabs'},...['relations','findings','indicators'].map(tab=>h('button',{key:tab,'aria-pressed':boardTab===tab,onClick:()=>setBoardTab(tab)},tab==='relations'?'조사 관계':tab==='findings'?'조사 결과·시간축':'IOC·관측 지표'))),
+      !reportsOnly && (boardTab==='relations'?h(InvestigationRelations,{key:data?.case?.case_id||'none',caseId:data?.case?.case_id||''}):boardTab==='indicators'?h(IndicatorBoard,{key:data?.case?.case_id||'none',caseId:data?.case?.case_id||'',onSource:async id=>setSelected(await fetchJSON(base+'/evidence/'+id))}):h(InvestigationBoard,{data,onSource:async id=>setSelected(await fetchJSON(base+'/evidence/'+id))})),
       data && h(ReportDriven, {key:'report-driven-' + data.case.case_id, caseId:data.case.case_id, autoLoad:reportsOnly, onSource:async id => setSelected(await fetchJSON(base + '/evidence/' + id))}),
       error && h('p', {role: 'status'}, error), !reportsOnly && h('h2', null, '조사 과정'),
       !reportsOnly && h('p', null, '최근 작업을 펼치면 확인 결과와 원문을 볼 수 있어요. 전체 대화는 이전 대화에서 확인하세요.'),
@@ -613,5 +733,5 @@
   document.documentElement?.classList.add('forsic-shell');
   document.title = 'Forsic · 포식이와 조사하기';
   // Offline contract/visual tests reuse the real component without a model or case writes.
-  if (typeof module !== 'undefined') module.exports = {activityState, Lens, Identity, moods, CaseCard, scopedURL, caseTarget, CaseDirectory, CaseLibrary, Records, History, Sidebar, workspaceRoute, workspaceURL, ConnectionSettings, CaseConversations, NewCase, conversationURL, analysisTitle, settingsBody, investigationView, InvestigationBoard, EvidenceCard, IndicatorBoard, indicatorLabels};
+  if (typeof module !== 'undefined') module.exports = {tokenCount, SessionUsage, questionRelations, RelationDetail, InvestigationRelations, activityState, Lens, Identity, moods, CaseCard, scopedURL, caseTarget, CaseDirectory, CaseLibrary, Records, History, Sidebar, workspaceRoute, workspaceURL, ConnectionSettings, CaseConversations, NewCase, conversationURL, analysisTitle, settingsBody, investigationView, InvestigationBoard, EvidenceCard, IndicatorBoard, indicatorLabels};
 })();

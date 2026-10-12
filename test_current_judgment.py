@@ -120,7 +120,8 @@ class CurrentJudgmentTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError,'not compatible'):invoke(c,args)
                     self.assertFalse(current(c)['assessments'])
     def test_input_echo_is_not_body_and_real_image_body_is_supported(self):
-        for pointer in ('/search_text','/arguments/text','/context/text','/path'):
+        self.assertEqual(field_role({'tool':'forsic_search'},'/search_text'),'input')
+        for pointer in ('/arguments/text','/context/text','/path'):
             self.assertEqual(field_role({'tool':'forsic_search'},pointer),'metadata')
         self.assertEqual(field_role({'tool':'forsic_image_files'},'/lines/0/text'),'body')
     def test_search_presentation_preserves_retained_version_and_skips(self):

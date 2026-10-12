@@ -1,6 +1,6 @@
 from pathlib import Path
 from uuid import UUID
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse, FileResponse, Response
 from pydantic import BaseModel, Field, SecretStr
 from hermes_cli.config import load_config
@@ -135,22 +135,22 @@ def investigation_conversation_create(case_id: str, body: ConversationInput):
     return create_ui_conversation(body, case_id=case_id)
 
 
-def selected_case(case_id='', session_id=''):
+def selected_case(case_id='', session_id='', *, read_only=False):
     if not case_id and not session_id:
-        return current_case()
+        return current_case(read_only=read_only)
     item = directory().get(case_id=case_id, session_id=session_id)
     if item is None:
         raise HTTPException(404, '이 대화에 연결된 사건이 없습니다.')
-    return Case(item['manifest'])
+    return Case(item['manifest'], read_only=read_only)
 
 
-def current_case():
+def current_case(*, read_only=False):
     import json
     settings = load_config()["plugins"]["entries"]["forsic"]["settings"]
     from forsic_plugin.intake import Intake
     pointer = Intake(settings.get('intake_root')).root / 'current.json'
     manifest = json.loads(pointer.read_text())['manifest'] if pointer.exists() else settings['case_file']
-    return Case(manifest)
+    return Case(manifest, read_only=read_only)
 
 
 @router.get("/status")
@@ -238,9 +238,11 @@ def report_driven(case_id: str = ''):
     from forsic_plugin.report_driven.host import current
     from forsic_plugin.report_driven.gap_audit import audit
     from forsic_plugin.report_driven.views import bundles
-    case = selected_case(case_id)
+    from forsic_plugin.report_driven.current_judgment import current_judgment
+    case = selected_case(case_id, read_only=True)
     state = current(case)
-    return {'state': state, 'audit': audit(state), 'bundles': bundles(case)}
+    return {'state': state, 'audit': audit(state), 'bundles': bundles(case),
+            'judgments': {q['id']: current_judgment(state, q) for q in state['questions']}}
 
 
 @router.get('/report-bundles/{bundle_id}/{name}')
@@ -251,3 +253,18 @@ def report_artifact(bundle_id: str, name: str, case_id: str = ''):
     except (ValueError, OSError, KeyError) as exc:
         raise HTTPException(404, '보고서 묶음 또는 파일을 확인하지 못했습니다.') from exc
     return FileResponse(path, filename=path.name, headers={'X-Content-Type-Options':'nosniff', 'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; sandbox"})
+
+
+@router.get('/source-page')
+def source_page(case_id: str, source_id: str, source_version: str,
+                pointer: str = '', offset: int = Query(0, ge=0), limit: int = Query(2048, ge=1, le=4096)):
+    """Exact case-bound retained source read; no tool invocation or ledger writes."""
+    from forsic_plugin.report_driven.host import invoke
+    if not case_id.strip():
+        raise HTTPException(400, '사건을 명시해서 원문을 조회하세요.')
+    try:
+        return invoke(selected_case(case_id, read_only=True), {
+            'action': 'source', 'source_id': source_id, 'source_version': source_version,
+            'pointer': pointer, 'offset': offset, 'limit': limit})
+    except (ValueError, KeyError, StopIteration) as exc:
+        raise HTTPException(409, '출처 또는 버전이 일치하지 않습니다. 조사 관계를 새로고침하고 근거를 다시 선택하세요.') from exc

@@ -86,6 +86,9 @@ def save_note_locked(case, db, args, *, question_update=None):
     changed = old and any(old.get(k) != value.get(k) for k in
                           ('answer', 'evidence_ids', 'alternatives'))
     claim_action = args.get('_claim_action')
+    if claim_action == 'retract' and 'answer' not in args:
+        # The previous answer remains in the prior note event, not as today's answer.
+        value['answer'] = '이전 답변이 철회되었습니다. 현재 판단은 재검토가 필요합니다.'
     if claim_action == 'retain' and not args.get('correction_reason'):
         raise ValueError('Retaining a judgment across an edit requires a reason explaining unchanged meaning')
     if old and (changed or claim_action in ('replace', 'retract')) and claim_action != 'retain':
@@ -123,6 +126,7 @@ def question_receipt(note):
 
 
 def compact_input_schemas():
+    from .contracts import Assessment
     string = {'type': 'string'}
     strings = {'type': 'array', 'items': string}
     common = {'operation_id': string, 'expected_revision': {'type': 'integer', 'minimum': 1}, 'question_id': string}
@@ -144,6 +148,8 @@ def compact_input_schemas():
               'limitations': strings, 'citations': {'type': 'array', 'items': {'type': 'object', 'properties': {
                   'source_id': string, 'source_version': string, 'pointer': string, 'literal': string, 'byte_start': {'type': 'integer', 'minimum': 0}},
                   'required': ['source_id', 'source_version', 'pointer', 'literal', 'byte_start'], 'additionalProperties': False}}}
+    assess['outcome'] = {**Assessment.model_json_schema()['properties']['outcome'],
+        'description': 'Relationship of this local test result to its mission proposition. Use supports/refutes for support/refutation; question_update.assessment has separate values.'}
     assess['question_update'] = {'type':'object','properties': {
         **{k:string for k in ('answer','reason','reasoning_summary')},
         'assessment':question['assessment'], 'assertion_kind':{'type':'string','enum':['fact','interpretation']},
@@ -158,23 +164,22 @@ def compact_input_schemas():
 
 
 
-def validate_input(action, payload, *, compact=True):
-    schema = deepcopy(compact_input_schemas()[action])
-    if not compact:
-        for key in ('operation_id','expected_revision'):
-            schema['properties'].pop(key,None)
-        schema['required'] = ['mission_id','mission_version','result_id','result_version','outcome']
+def input_problems(payload, schema, path='payload'):
     problems=[]
     def check(value, spec, path):
         kind=spec.get('type')
         valid={'object':isinstance(value,dict),'array':isinstance(value,list),
-               'string':isinstance(value,str),'integer':type(value) is int}.get(kind,True)
+               'string':isinstance(value,str),'integer':type(value) is int,
+               'number':type(value) in (int,float),'boolean':type(value) is bool}.get(kind,True)
         if not valid:
             problems.append({'path':path,'expected_type':kind});return
         if 'enum' in spec and value not in spec['enum']:
             problems.append({'path':path,'allowed_values':spec['enum']})
-        if kind=='integer' and value<spec.get('minimum',value):
-            problems.append({'path':path,'minimum':spec['minimum']})
+        if kind in ('integer','number'):
+            for bound in ('minimum','maximum','exclusiveMinimum'):
+                if bound in spec and ((bound=='minimum' and value<spec[bound]) or
+                    (bound=='maximum' and value>spec[bound]) or (bound=='exclusiveMinimum' and value<=spec[bound])):
+                    problems.append({'path':path,bound:spec[bound]})
         if kind=='object':
             unknown=sorted(set(value)-set(spec.get('properties',{}))) if spec.get('additionalProperties') is False else []
             missing=sorted(set(spec.get('required',[]))-set(value))
@@ -183,9 +188,36 @@ def validate_input(action, payload, *, compact=True):
                 if k in spec.get('properties',{}):check(v,spec['properties'][k],path+'.'+k)
         if kind=='array':
             for i,v in enumerate(value):check(v,spec['items'],path+f'[{i}]')
-    check(payload,schema,'payload')
+    check(payload,schema,path)
+    return problems
+
+
+def validate_native_plan(payload, schemas):
+    """Check syntax against the registered evidence tool before saving a plan."""
+    if not isinstance(payload,dict) or payload.get('result_ids') or payload.get('reuse_result_refs'):
+        return
+    name=payload.get('tool_name') or payload.get('proposed_tool_name')
+    if not name: return  # The existing mission contract explains missing identity.
+    if name not in schemas:
+        raise ValueError('Unsupported planned evidence tool: '+str(name))
+    problems=input_problems(payload.get('tool_arguments'),schemas[name],'tool_arguments')
     if problems:
-        prefix=('Unsupported assess fields' if any(x.get('unknown_fields') for x in problems) else 'Missing assess fields') if action=='assess' else 'Invalid '+action+' fields'
+        raise ValueError('Invalid planned '+name+' arguments: '+json.dumps(problems,ensure_ascii=False)+
+            '. No mission was saved. Copy the required fields from that native tool; changing only operation_id does not repair the input.')
+
+
+def validate_input(action, payload, *, compact=True):
+    schema = deepcopy(compact_input_schemas()[action])
+    if not compact:
+        for key in ('operation_id','expected_revision'):
+            schema['properties'].pop(key,None)
+        schema['required'] = ['mission_id','mission_version','result_id','result_version','outcome']
+    problems=input_problems(payload,schema)
+    if problems:
+        prefix = 'Invalid '+action+' fields'
+        if action=='assess':
+            if any(x.get('unknown_fields') for x in problems): prefix = 'Unsupported assess fields'
+            elif any(x.get('missing_fields') for x in problems): prefix = 'Missing assess fields'
         raise ValueError(prefix+': '+json.dumps(problems,ensure_ascii=False)+
             '. action='+action+'; allowed_fields='+','.join(schema['properties'])+
             '. No assessment was saved; no question or mission was changed. Read current state for question revision, mission/result/source versions. '
@@ -193,7 +225,7 @@ def validate_input(action, payload, *, compact=True):
             ('Example: '+json.dumps({'operation_id':'new-request-id','expected_revision':'<current integer>',
               'mission_id':'<mission.id>','mission_version':'<mission.version>','result_id':'<source.id>',
               'result_version':'<source.version>','outcome':'inconclusive','reasoning_summary':'Meaning of this test only',
-              'limitations':['Remaining limit'],'next_check':'Next useful check or no useful check with reason','citations':[]}) if action=='assess' else 'Read the registered action input schema.'))
+              'limitations':['Remaining limit'],'next_check':'Next useful check or no useful check with reason','citations':[]}) if action=='assess' else 'Example: '+json.dumps({'action':'question','payload':{'operation_id':'new-request-id','question':'One bounded question','scope':'The available acquisition scope','answer':'Undetermined; next discriminating check pending'}}) if action=='question' else 'Read the registered action input schema.'))
 
 
 def mission_version(mission):
@@ -250,7 +282,11 @@ def validate_execution_context(case, mission_id, expected_revision, tool_name, a
     if m['state']=='running' and not poll:
         raise ValueError('Mission already has a running native call; inspect its result before another execution')
     if tool_name != m['proposed_tool_name'] or (actual != planned and not poll):
-        raise ValueError('Native tool and exact arguments differ from this mission plan')
+        differences={'missing_fields':sorted(set(planned)-set(actual)),
+            'unexpected_fields':sorted(set(actual)-set(planned)),
+            'different_fields':sorted(k for k in actual.keys() & planned.keys() if actual[k]!=planned[k])}
+        raise ValueError('Native tool and exact arguments differ from this mission plan: '+json.dumps(differences)+
+            '. Use the planning receipt next_call unchanged for the same check. A changed scope needs a new mission; no execution occurred.')
     return {'mission_id': m['id'], 'mission_version': m['version'], 'question_id': q['id'],
             'question_definition_version': q['definition_version'], 'tool_name': tool_name,
             'arguments_hash': hash_value(actual)}
@@ -371,6 +407,8 @@ def update_question(case, state, payload, host_args):
                             'resolution_refs':basis if d['disposition']=='resolved' else []})
     if destination=='scoped_closed':
         if not old:raise ValueError('Create and investigate a question before closing its scope')
+        if update.get('priority',old['priority'])=='unassessed':
+            raise ValueError('Assess this question priority before scope closure: decision_critical, material or contextual. Closure cannot substitute for importance assessment.')
         pending=[m for m in state['missions'] if m['question_ref']['id']==old['id'] and m['state'] in ('running','queued','unassessed')]
         unassessed=[t for t in state['tests'] if t['question_ref']['id']==old['id'] and t.get('result_ref') and t['assessment_state']=='unassessed']
         if pending or unassessed:raise ValueError('Running or unassessed native work remains for this question')
@@ -405,7 +443,14 @@ def expand_mission(state, payload, *, goal_id='', session_id=''):
     if q['work_state'] not in ('open','active'):raise ValueError('Reopen a question before planning another mission')
     gaps=[g for g in state['gaps'] if g['question_ref']['id']==q['id'] and g['disposition'] not in ('resolved','not_applicable')]
     g=find(state,'gaps',payload['gap_id']) if payload.get('gap_id') else (gaps[0] if len(gaps)==1 else None)
-    if not g or g['question_ref']['id']!=q['id']:raise ValueError('Select gap_id from this question when it has several gaps')
+    if not g or g['id'] not in {gap['id'] for gap in gaps}:
+        candidates=[{'gap_id':gap['id'],'reason_preview':gap['reason'][:240]} for gap in gaps[:6]]
+        raise ValueError('Select gap_id from this question when it has several gaps. No mission was saved. '
+            'Use forsic_mission with gap_id at the top level, not forsic_reporting(action=mission). '
+            'Changing only operation_id or rationale does not fix the missing reference. '
+            'Current expected_revision='+str(q['revision'])+'; gap_candidates='+json.dumps(candidates,ensure_ascii=False)+
+            '; omitted_gap_count='+str(max(0,len(gaps)-len(candidates)))+
+            '. Read more with forsic_reporting(action=state, pointer=/gaps, snapshot_id='+state['meta']['snapshot_id']+').')
     def source_refs(key):return [ref('source',find(state,'sources',sid)) for sid in payload.get(key,[])]
     results=source_refs('result_ids');inputs=source_refs('input_ids');counter=source_refs('counterevidence_ids')
     if not payload.get('why_it_matters') or not payload.get('inconclusive_rule') or not payload.get('limits') or not payload.get('reopen_conditions'):

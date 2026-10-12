@@ -142,7 +142,7 @@ def state_view(state, audit, args):
                     'requirements_pointer': '/requirements'})
     from .current_judgment import navigation_view
     questions = [dict(current_judgment=navigation_view(state,q), id=q['id'], version=q['version'], revision=q['revision'], definition_version=q['definition_version'], question_preview=q['question'][:120],
-                      answer_preview=q['answer'][:160], assessment=q['assessment'], work_state=q['work_state'],
+                      assessment=q['assessment'], work_state=q['work_state'],
                       pointer='/questions/' + str(i)) for i, q in enumerate(state['questions'][:2])]
     result = {'snapshot_id': snapshot, 'state': {'meta': state['meta'],
               'status': {k: v for k, v in state['status'].items() if not isinstance(v, list)},
@@ -163,7 +163,7 @@ def state_view(state, audit, args):
 
 def source_view(source, data, args):
     continuation = 'pointer' in args or args.get('offset', 0) != 0
-    if continuation and args.get('source_version') != source['version']:
+    if (continuation or 'source_version' in args or args.get('locator_cursor') is not None) and args.get('source_version') != source['version']:
         raise ValueError(
             'Source page rejected: source_version is missing or does not match the retained result; '
             'snapshot_id belongs to report state and cannot replace source_version. '
@@ -173,6 +173,11 @@ def source_view(source, data, args):
             'Read source_ref.version, then explicitly retry the needed pointer/offset/limit with '
             'source_version set to that returned version. If an earlier citation used a different '
             'version, recheck its original field before adopting it; do not silently replace citation versions.')
+    if 'query' in args:
+        from .source_locator import locate
+        return locate(source, data, args)
+    if args.get('locator_cursor') is not None:
+        raise ValueError('locator_cursor requires its original literal query')
     envelope = {'source_ref': {'id': source['id'], 'version': source['version']},
                 'meaning': '보존된 도구 반환 재제시; 새 수집·독립 근거가 아님'}
     from .measurement import measurement_view

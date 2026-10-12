@@ -7,6 +7,9 @@ import stat
 import sys
 import hashlib
 import base64
+import gzip
+import tarfile
+import time
 
 if __package__:
     from .literal_search import file_identity, search_entries
@@ -87,6 +90,89 @@ def select_volume(volumes, offset=None):
     return volume
 
 
+class ArchiveLimit(ValueError):
+    pass
+
+
+class ArchiveBudget:
+    """Count decompressed TAR bytes, including skipped payloads and headers."""
+    def __init__(self, stream, limit, deadline):
+        self.stream, self.limit, self.deadline, self.used = stream, limit, deadline, 0
+
+    def read(self, size):
+        if time.monotonic() > self.deadline or size > self.limit-self.used:
+            raise ArchiveLimit('Archive scan budget reached; narrow scope or increase archive_scan_bytes within the advertised limit')
+        data = self.stream.read(size)
+        self.used += len(data)
+        return data
+
+
+def inspect_archive(node, args):
+    """Inspect TAR/TAR.GZ members in memory. Never extract or follow links."""
+    before = file_identity(node.lstat())
+    if not stat.S_ISREG(before['st_mode']):
+        raise ValueError('Archive inspection requires an allocated regular file, not a symlink')
+    action = args['action']
+    index = args.get('member_index')
+    if action == 'archive_read' and (type(index) is not int or index < 0):
+        raise ValueError('archive_read needs member_index returned by archive_list; names may be duplicated')
+    offset = max(0, int(args.get('offset', 0)))
+    limit = min(1024**3, max(10240, int(args.get('archive_scan_bytes', 256*1024**2))))
+    result = {'archive_path': str(node.path), 'measurement': 'TAR member headers or selected regular member bytes',
+              'scope_note': 'Archived records only; no extraction, execution, symlink following, deleted-file recovery or proof of activity on the host.',
+              'entries': [], 'coverage_complete': False, 'scan_exhausted': False}
+    with node.open() as raw:
+        magic = raw.read(2); raw.seek(0)
+        with ExitStack() as stack:
+            source = stack.enter_context(gzip.GzipFile(fileobj=raw)) if magic == b'\x1f\x8b' else raw
+            budget = ArchiveBudget(source, limit, time.monotonic()+60)
+            try:
+                with tarfile.open(fileobj=budget, mode='r|') as archive:
+                    for number, member in enumerate(archive):
+                        # TarFile caches headers; the ordinal and returned page suffice.
+                        archive.members.clear()
+                        kind = 'file' if member.isfile() else 'directory' if member.isdir() else 'link' if member.issym() or member.islnk() else 'special'
+                        header = {'member_index': number, 'name': member.name, 'kind': kind,
+                                  'bytes': member.size, 'mtime_epoch': member.mtime}
+                        if action == 'archive_list':
+                            if number < offset: continue
+                            if len(result['entries']) == 100:
+                                result['next_offset'] = number
+                                break
+                            result['entries'].append(header)
+                        elif number == index:
+                            if not member.isfile() or member.issparse():
+                                raise ValueError('Only regular, non-sparse archive members can be read; links and devices are not followed')
+                            if offset > member.size:
+                                raise ValueError('Member byte offset exceeds its declared size')
+                            with archive.extractfile(member) as stream:
+                                # Streaming skip is also charged to the expanded-byte budget.
+                                remaining = min(offset, member.size)
+                                while remaining:
+                                    block = stream.read(min(65536, remaining))
+                                    if not block: raise ValueError('Archive member ended before its declared size')
+                                    remaining -= len(block)
+                                data = stream.read(min(12000, max(1, int(args.get('length', 4096)))))
+                            end = offset+len(data)
+                            result.update(member=header, byte_start=offset, byte_end=end,
+                                          text=data.decode('utf-8', errors='replace'), encoding='UTF-8 replacement; exact bytes in base64',
+                                          base64=base64.b64encode(data).decode(), sha256_slice=hashlib.sha256(data).hexdigest(),
+                                          next_offset=end if end < member.size else None,
+                                          complete_member=offset==0 and end==member.size)
+                            break
+                    else:
+                        result.update(next_offset=None, coverage_complete=offset==0, scan_exhausted=True)
+                        if action == 'archive_read':
+                            raise ValueError('member_index was not present in this TAR; select a returned index')
+            except ArchiveLimit as exc:
+                result.update(stop_reason='scan_budget', limitation=str(exc), next_offset=None)
+            result['decompressed_bytes_scanned'] = budget.used
+            result['archive_scan_bytes'] = limit
+    if before != file_identity(node.lstat()):
+        raise ValueError('Archive changed during inspection; discard this result')
+    return result
+
+
 def inspect(image, args):
     from dissect.target import Target
     from dissect.target.containers.ewf import EwfContainer
@@ -120,6 +206,12 @@ def inspect(image, args):
                     'volume_selection': 'only_discovered_volume' if args.get('volume_offset') is None else 'explicit'}
         fs = open_filesystem(volume)
         node = fs.get(args.get('file_path', '/'))
+        if args['action'] in ('archive_list', 'archive_read'):
+            source = [(str(p), file_identity(p.stat())) for p in parts]
+            result = inspect_archive(node, args)
+            if source != [(str(p), file_identity(p.stat())) for p in parts]:
+                raise ValueError('Image segments changed during archive inspection')
+            return {**selected, **result}
         if args['action'] == 'search':
             source = {'segments': [(str(p), file_identity(p.stat())) for p in parts],
                       'volume_offset': volume.offset}
@@ -175,7 +267,7 @@ def inspect(image, args):
                     rows.append({'line': number, 'text': raw.decode('utf-8', errors='replace').rstrip('\r\n')})
                     size += len(raw)
             return {**selected, 'lines': rows, 'next_line': start + len(rows), 'complete_file': False}
-        raise ValueError('Supported actions are volumes, list, read, read_bytes, search, stat and hash')
+        raise ValueError('Supported actions are volumes, list, read, read_bytes, search, stat, hash, archive_list and archive_read')
 
 
 if __name__ == '__main__':

@@ -23,6 +23,22 @@ class RequestConflict(ValueError):
     """An idempotency key was reused for a different explicit UI action."""
 
 
+def conversation_usage(session_ids, usage_rows):
+    """Physical-call deltas; never add inherited cumulative session counters."""
+    if usage_rows is None:
+        return None
+    rows=[r for r in usage_rows if r['session_id'] in session_ids]
+    if not rows:
+        return None  # Missing accounting is not a measured zero.
+    fields=('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','api_call_count')
+    result={k:sum(r[k] or 0 for r in rows) for k in fields}
+    result['prompt_tokens']=result['input_tokens']+result['cache_read_tokens']+result['cache_write_tokens']
+    result['total_tokens']=result['prompt_tokens']+result['output_tokens']
+    result['auxiliary_tokens']=sum(sum(r[k] or 0 for k in fields[:4]) for r in rows if r['task'])
+    result['basis']='recorded_native_api_usage'
+    return result
+
+
 class Investigations:
     def __init__(self, home, intake):
         self.home, self.intake = Path(home), Path(intake)
@@ -76,6 +92,9 @@ class Investigations:
                        'ended_at,last_activity_at,archived,' + extra + ' FROM sessions ORDER BY started_at,id')]
             goals = {r['key'][5:]: json.loads(r['value']) for r in db.execute(
                 "SELECT key,value FROM state_meta WHERE key LIKE 'goal:%'")}
+            has_usage=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_model_usage'").fetchone()
+            usage_rows=[dict(r) for r in db.execute('SELECT session_id,task,input_tokens,output_tokens,'
+                'cache_read_tokens,cache_write_tokens,api_call_count FROM session_model_usage')] if has_usage else None
         groups, rows = {}, {}
         for session in sessions:
             binding = self.intake / (hashlib.sha256(session['id'].encode()).hexdigest() + '.json')
@@ -103,6 +122,8 @@ class Investigations:
             rows[case_id].append(session)
         for case_id, item in groups.items():
             conversations = self._conversations(rows[case_id])
+            for conversation in conversations:
+                conversation['usage']=conversation_usage(conversation['session_ids'],usage_rows)
             item['conversations'] = conversations
             item['resume_session_id'] = conversations[0]['resume_session_id']
             item['last_activity_at'] = max(c['last_activity_at'] for c in conversations)

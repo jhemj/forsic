@@ -115,6 +115,21 @@ class InvestigationContextTests(unittest.TestCase):
         self.save_note(priority='unassessed')
         self.assertIn('importance has not', self.prepare()['reason'])
 
+    def test_closed_unassessed_priority_remains_incomplete_at_prepare_and_validate(self):
+        self.save_note(priority='unassessed',work_state='scoped_closed',closure_rationale='Report created',reopen_conditions=['New data'])
+        prepared=self.prepare()
+        self.assertEqual(prepared['status'],'incomplete')
+        self.assertIn('importance has not',prepared['reason'])
+        self.assertEqual(self.validate(prepared)['status'],'incomplete')
+
+    def test_unadopted_answer_keeps_limits_and_gaps_in_closed_projection(self):
+        self.note['critical_gaps']=['Archive body has not been read']
+        self.save_note(priority='material',work_state='scoped_closed',closure_rationale='Caller declared closed',reopen_conditions=['A reader becomes available'])
+        result=self.prepare(); body=json.loads(result['context'])
+        self.assertIn('Archive body has not been read',result['context'])
+        self.assertTrue(body['closed_index'][0]['remaining_gap_count'])
+        self.assertEqual(body['closed_index'][0]['judgments'][0]['status'],'candidate')
+
     def test_uncertain_scoped_closure_can_finish_and_is_indexed(self):
         self.save_note(priority='decision_critical', work_state='scoped_closed',
                        closure_rationale='The supplied records cannot distinguish the competing explanations',

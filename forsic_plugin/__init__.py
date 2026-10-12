@@ -43,13 +43,21 @@ def register(ctx):
         'read_bytes': ('Read an exact byte range for long records or binary inspection, without executing anything.', {'path': string, 'offset': integer, 'length': integer}, ['path']),
         'verify': ('Start one background ewfverify job, or get status for the same path. Reuses existing jobs/results; queued/running is not verified. Continue other useful investigation while it runs.', {'path': string, 'action': {'type':'string','enum':['start','status']}}, ['path']),
         'note': ('List/get/save case-local question answers with sources, alternatives, critical gaps and timeline. Update during investigation, not just at the end. Get returns current note plus history. Update same note_id with the CURRENT revision and correction_reason; the tool increments it, not you. On conflict get again and preserve concurrent changes.', {'action': {'type': 'string', 'enum': ['list', 'get', 'save']}, 'query': string, 'offset': integer, 'limit': integer, 'note_id': string, 'revision': {'type':'integer','description':'CURRENT stored revision from get, never the desired next revision. Current 2: send 2 to save revision 3.'}, 'question': string, 'answer': string, 'status': {'type':'string','enum':['answered','open','needs_input']}, 'evidence_ids': strings, 'alternatives': strings, 'gaps': strings, 'critical_gaps': strings, 'next_checks': strings, 'correction_reason': string, 'timeline': {'type': 'array', 'items': event_schema}}, ['action']),
-        "report": ("Legacy report compatibility only. For NEW investigations/reports use forsic_reporting(state/gaps/mission/assess/review/render). This legacy snapshot_id is not a reporting-state snapshot. action=list lists legacy artifacts; it does not read their text. Legacy review is advice, not approval; unchanged uncertain calls are not resent.", {'action': {'type': 'string', 'enum': ['create', 'list', 'review']}, 'offset': integer, 'snapshot': snapshot_schema, 'snapshot_id': string, 'audience': {'type': 'string', 'enum': ['both', 'executive', 'analyst']}, 'analysis_status': {'type': 'string', 'enum': ['partial', 'requested_scope_answered']}, "markdown": string, "evidence_ids": strings}, []),
+        "report": ("Legacy report compatibility only. For NEW investigations/reports use forsic_question/forsic_mission/forsic_assess for writes and forsic_reporting(state/gaps/review/render) for views. This legacy snapshot_id is not a reporting-state snapshot. action=list lists legacy artifacts; it does not read their text. Legacy review is advice, not approval; unchanged uncertain calls are not resent.", {'action': {'type': 'string', 'enum': ['create', 'list', 'review']}, 'offset': integer, 'snapshot': snapshot_schema, 'snapshot_id': string, 'audience': {'type': 'string', 'enum': ['both', 'executive', 'analyst']}, 'analysis_status': {'type': 'string', 'enum': ['partial', 'requested_scope_answered']}, "markdown": string, "evidence_ids": strings}, []),
     }
     from .indicators import schema_properties
     specs['indicators'] = ('Case-local indicator registry. Load organize-indicators. Keep exact source citations and raw values; observed is not malicious. list/get/export make no network requests. upsert merges provenance by canonical value. CSV/JSON export is local only, not a blocklist or automatic delivery.', schema_properties(), ['action'])
     specs['search'][1]['cursor'] = {'type':'object','description':'Opaque next_cursor from the same search. Continue unchanged; not a new search or absence proof.'}
     specs['image_files'][1]['cursor'] = {'type':'object','description':'Opaque next_cursor from the same literal search, including its exact file/byte position.'}
     specs['image_files'][1]['action']['enum'].append('hash')
+    image_description, image_properties, image_required = specs['image_files']
+    image_properties['action']['enum'].extend(['archive_list', 'archive_read'])
+    image_properties['path'] = {'type':'string','description':'Evidence E01 segment path from forsic_list, e.g. disk.e01. This is NOT a path inside the image.'}
+    image_properties['file_path'] = {'type':'string','description':'Allocated path INSIDE the image, e.g. /var/log/auth.log or /tmp/collection.tar.gz. Keep path set to the E01.'}
+    image_properties['member_index'] = {'type':'integer','minimum':0,'description':'archive_read only: exact ordinal from archive_list. Duplicate member names are not interchangeable.'}
+    image_properties['archive_scan_bytes'] = {'type':'integer','minimum':10240,'maximum':1073741824,'description':'TAR/TAR.GZ expanded scan budget, default 268435456. A budget stop is incomplete, not an empty archive.'}
+    specs['image_files'] = (image_description + ' archive_list pages TAR/TAR.GZ member headers (offset=member index); archive_read reads one returned member_index (offset=member byte offset, length up to 12000). No extraction, execution or links. Other archive formats are unsupported.', image_properties, image_required)
+
     for key in ('search','image_files'):
         desc, props, req = specs[key]
         props.update(max_files={'type':'integer','minimum':1,'maximum':500},max_bytes={'type':'integer','minimum':1,'maximum':33554432},max_matches={'type':'integer','minimum':1,'maximum':60},max_seconds={'type':'number','exclusiveMinimum':0,'maximum':25})
@@ -61,10 +69,43 @@ def register(ctx):
     req_schema = Requirement.model_json_schema(); req_schema.pop('$defs', None)
     report_defs.update(Gap=gap_schema, Requirement=req_schema)
     compact = compact_input_schemas()
-    specs['reporting'] = ('Case-local investigation state within the existing Hermes loop. Load forsic-report-driven. state/gaps/source are passive. question creates or revises scoped answers, priority and closure/reopening with current revision. mission plans one discriminating check or retained-result evaluation; native evidence tools execute with its mission_id and mission_version. assess binds the actual result and exact source versions, updates the answer, and completes the check separately from question closure. Use a stable operation_id for a write retry; never reuse it with changed content. render saves an immutable report bundle; it does not complete the investigation. Optional review is advisory, never required to save a partial report.', {'action':{'type':'string','enum':['state','gaps','source','question','requirement','gap','mission','assess','review','render','publish']},'snapshot_id':string,'source_id':string,'review_id':string,'question_ids':{'type':'array','items':string,'description':'Optional current question IDs for advisory review. Unselected questions remain unreviewed.'},'redact':strings,'payload':{'type':'object','description':'A JSON object, never a JSON-encoded string. Use the fields for the selected action.','oneOf':[compact['question'],compact['mission'],compact['assess'],{'$ref':'#/$defs/Gap'},{'$ref':'#/$defs/Requirement'}]}},['action'])
+    mutation_actions = {'forsic_' + action: action for action in compact}
+    descriptions = {
+        'question': 'Create or update ONE scoped investigation question. All fields are top-level; no action or payload wrapper. New: question, scope, provisional answer. Update: question_id and the current integer expected_revision. reason is the correction/closure reason. Set priority explicitly before scoped_closed. Closing requires explaining why remaining checks cannot materially change the answer; listing a limitation alone is not that explanation. Stable operation_id identifies an identical retry; changed input needs a new ID. Do not add mission or assessment fields.',
+        'mission': 'Plan ONE discriminating check or evaluation of retained result_ids for a current question. All fields are top-level. Use the returned mission ID/version with native evidence tools; this tool does not execute a check. Keep limits and reopening conditions. Do not rewrite the aggregate answer here.',
+        'assess': 'Evaluate ONE mission result with exact result/source versions and citations. All fields are top-level. outcome concerns the local test only. Only explicit question_update changes the aggregate judgment; omit it for test-only evaluation. Completing a test does not close its question.',
+    }
+    # Keep each native tool's required fields and allowed arguments together.
+    # A flat optional-field union admits plans that every native tool rejects.
+    from copy import deepcopy
+    from .notes import EVIDENCE_TOOLS
+    evidence_schemas = {'forsic_'+suffix: {'type':'object',
+        'properties':{'reason':{'type':'string'},**deepcopy(properties)},
+        'required':list(required),'additionalProperties':False}
+        for suffix,(_,properties,required) in specs.items() if 'forsic_'+suffix in EVIDENCE_TOOLS}
+    compact['mission']['properties']['tool_name'] = {**compact['mission']['properties']['tool_name'],
+        'enum': list(evidence_schemas)}
+    compact['mission']['properties']['tool_arguments'] = {'type':'object',
+        'anyOf': [{'title':name,**deepcopy(schema)} for name,schema in evidence_schemas.items()],
+        'description':'Exact native arguments. Use the branch named by tool_name, including its required fields. Omit mission_id and mission_version before planning. The selected tool is also validated before a mission is saved.'}
+    compact['mission']['properties']['gap_id'] = {**compact['mission']['properties']['gap_id'],
+        'description': 'Select one current unresolved gap belonging to this question. Copy its ID from state/gaps; never invent one.'}
+    compact['mission']['required'] = [*compact['mission']['required'], 'gap_id']
+    for action, shape in compact.items():
+        specs[action] = (descriptions[action], shape['properties'], shape['required'])
+    # Retain legacy applicability actions without mixing their fields into question tools.
+    legacy_properties = {}
+    for shape in (gap_schema, req_schema):
+        for key, field in shape['properties'].items():
+            if key == 'disposition' and key in legacy_properties:
+                field = {**field, 'enum': sorted(set(field['enum']) | set(legacy_properties[key]['enum']))}
+            legacy_properties[key] = field
+    specs['reporting'] = ('Read current state/gaps and exact retained sources; render/finalize reports. For investigation writes use forsic_question, forsic_mission or forsic_assess, each with its own flat input contract. requirement/gap are legacy report-applicability actions only. Rendering does not complete the investigation. Optional review is advisory.', {'action':{'type':'string','enum':['state','gaps','source','requirement','gap','review','render','publish']},'snapshot_id':string,'source_id':string,'review_id':string,'question_ids':{'type':'array','items':string},'redact':strings,'payload':{'type':'object','properties':legacy_properties,'additionalProperties':False,'description':'Only legacy requirement/gap applicability fields. Question/mission/assessment writes use their dedicated tools.'}},['action'])
     description, properties, required = specs['reporting']
     properties['action']['enum'].append('finalize')
     properties['bundle_id'] = {'type':'string','description':'Exact rendered bundle_id for action=finalize. Select the completed delivery copy only, never intermediate drafts. Also pass its current snapshot_id. This queues only its four HTML/Word files for the approved case topic; not investigation closure or publication approval.'}
+    properties['query'] = {'type':'string','minLength':1,'description':'For source only: literal search within one explicit retained source_id, up to 256 UTF-8 bytes. String fields only; not original evidence search. Matches distinguish body/input/metadata. Use returned next_call unchanged; no match in a partial scan is not absence.'}
+    properties['locator_cursor'] = {'type':'object','description':'For source query only: unchanged locator_cursor from next_call, bound to source/version/query. Include source_version. Never combine with pointer/offset.'}
     properties.update(pointer={'type':'string','description':'JSON pointer returned by state/gaps/source. Read a section, record, or scalar field; not a filesystem path. For state/gaps pages include current snapshot_id. For source pages include source_version.'},
                       offset={'type':'integer','minimum':0,'description':'Collection index or scalar UTF-8 byte offset; use returned next_offset.'},
                       limit={'type':'integer','minimum':1,'description':'Maximum collection items (up to 25) or scalar UTF-8 bytes (up to 4096). Response may return fewer to stay within its budget.'},
@@ -85,7 +126,7 @@ def register(ctx):
     for suffix, (description, properties, required) in specs.items():
         name = "forsic_" + suffix
         schema = {"name": name, "description": description, "parameters": {
-            "type": "object", "properties": {**properties, "reason": {"type": "string", "description": "A short public explanation of what you are checking and why."}},
+            "type": "object", "properties": properties if name in mutation_actions else {"reason": {"type": "string", "description": "A short public explanation of what you are checking and why."}, **properties},
             "required": required, "additionalProperties": False}}
         if suffix == 'reporting': schema['parameters']['$defs'] = report_defs
 
@@ -93,10 +134,43 @@ def register(ctx):
             try:
                 sid = session_id or task_id
                 request_context = native_goal_binding(sid, **projection_options)
-                raw = session_case(sid).invoke(tool, args, sid, request_context=request_context)
+                action = mutation_actions.get(tool)
+                call_tool = 'forsic_reporting' if action else tool
+                call_args = {'action': action, 'payload': args} if action else args
+                case = session_case(sid)
+                raw = case.invoke(call_tool, call_args, sid, request_context=request_context, tool_schemas=evidence_schemas)
+                write_action = action or (args.get('action') if tool == 'forsic_reporting' and args.get('action') in compact else None)
+                if write_action:
+                    result = json.loads(raw)
+                    if result.get('error'):
+                        canonical_tool = 'forsic_' + write_action
+                        result['input_hint'] = 'Use ' + canonical_tool + ' with its fields at the top level, without action/payload. Internal payload paths refer to these same fields. Correct the named invalid/missing field before retrying; changing only operation_id or rationale is not a repair.'
+                        result['input_contract'] = {'tool': canonical_tool, 'field_location': 'top_level',
+                            'allowed_fields': list(compact[write_action]['properties'])}
+                        if write_action == 'mission':
+                            from .report_driven.investigation_state import input_problems
+                            payload = call_args.get('payload', {})
+                            native_name = payload.get('tool_name') if isinstance(payload, dict) else None
+                            native_schema = evidence_schemas.get(native_name) if isinstance(native_name, str) else None
+                            if native_schema and not (payload.get('result_ids') or payload.get('reuse_result_refs')):
+                                problems = input_problems(payload.get('tool_arguments'), native_schema, 'tool_arguments')
+                                if problems:
+                                    submitted = payload.get('tool_arguments')
+                                    fields = set(native_schema['required']) | set(submitted if isinstance(submitted, dict) else {})
+                                    result['planned_tool_contract'] = {
+                                        'tool': payload['tool_name'], 'field_location': 'tool_arguments',
+                                        'required_fields': native_schema['required'], 'problems': problems,
+                                        'field_schemas': {k: native_schema['properties'][k] for k in sorted(fields) if k in native_schema['properties']},
+                                        'submitted_arguments': submitted,
+                                        'repair': 'Correct only the named fields inside tool_arguments, keeping valid arguments. Select missing values from the current evidence inventory; do not guess. These are nested native-tool fields, not top-level mission fields. No mission or execution was saved.'}
+                    from .model_results import mutation_view
+                    return json.dumps(mutation_view(result, case), ensure_ascii=False)
                 if tool == 'forsic_note':
                     from .notes import model_view
                     return json.dumps(model_view(json.loads(raw), args), ensure_ascii=False)
+                if tool in EVIDENCE_TOOLS:
+                    from .model_results import evidence_view
+                    return json.dumps(evidence_view(json.loads(raw), case), ensure_ascii=False)
                 return raw
             except ValueError:
                 return json.dumps({'error': '아직 증거가 접수되지 않았어요. 분석할 파일·폴더의 전체 경로를 알려주세요.'}, ensure_ascii=False)

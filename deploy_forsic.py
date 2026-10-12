@@ -33,8 +33,8 @@ ROOT_FILES = ('AGENTS.md', '.hermes.md', 'run.py', 'telegram_mirror.py', 'telegr
               'test_connections.py', 'test_note_revision_recovery.py', 'test_harness_guidance.py', 'test_harness_context.py', 'test_note_model_view.py',
               'test_report_review_projection.py', 'test_reporting_pages.py', 'test_dashboard.cjs',
               'test_investigation_state.py', 'test_investigation_context.py', 'test_mission_native_tools.py',
-              'test_native_goal_evaluation.py', 'test_current_judgment.py',
-              'test_indicators.py', 'test_search_resume.py', 'test_log_timeline.py', 'test_indicator_integration.py')
+              'test_native_goal_evaluation.py', 'test_native_tool_reload.py', 'test_current_judgment.py', 'test_direction_review.py', 'test_source_locator.py', 'test_relationship_api.py', 'test_execution_crash_windows.py',
+              'test_archive_reader.py', 'test_efficiency_contracts.py', 'test_indicators.py', 'test_search_resume.py', 'test_log_timeline.py', 'test_indicator_integration.py')
 PUBLIC_FILES = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'SECURITY.md',
                 'NOTICE', 'NOTICE.txt', '.gitignore', '.dockerignore')
 REQUIRED_PUBLIC = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', '.gitignore', '.dockerignore')
@@ -47,6 +47,7 @@ UPSTREAM_ADDITIONS = (
     'tests/hermes_cli/test_terminal_theme.py', 'web/src/i18n/context.test.ts',
     'web/src/forsic-shell.css', 'web/src/App.test.tsx', 'web/src/lib/analysis-title.ts',
     'tests/agent/test_plugin_compaction_projection.py',
+    'tests/agent/test_long_inflight_compaction.py',
 )
 
 
@@ -73,15 +74,18 @@ def initial_config(base_url, model):
         '_config_version': 49,
         'model': {'provider': 'custom', 'default': model, 'base_url': local['base_url'],
                   'context_length': 65536, 'ollama_num_ctx': 65536},
+        'compression': {'threshold_tokens': 40000, 'context_timeout_seconds': 1200,
+                        'context_total_ceiling_seconds': 1800},
         'fallback_model': {},
-        'providers': {'custom': {'request_timeout_seconds': 900, 'stale_timeout_seconds': 900}},
+        'providers': {'custom': {'request_timeout_seconds': 1800, 'stale_timeout_seconds': 1800}},
         'tools': {'tool_search': {'enabled': 'off'}}, 'reasoning': {'enabled': False},
-        'auxiliary': {'report_review': {'timeout': 900},
-                      'goal_judge': {**local, 'timeout': 120, 'max_tokens': 1024},
-                      'title': dict(local), 'compression': dict(local)},
+        'auxiliary': {'report_review': {'timeout': 1800},
+                      'goal_judge': {**local, 'timeout': 600, 'max_tokens': 1024},
+                      'title': dict(local), 'compression': {**local, 'timeout': 1200},
+                      'title_generation': {'enabled': False, 'model_upgrade_enabled': False}},
         'platform_toolsets': {name: ['forsic'] for name in ('cli', 'api', 'web', 'desktop', 'telegram')},
         'agent': {'max_turns': 20, 'api_max_retries': 1, 'auto_recovery_cycles': 0,
-                  'run_budget_seconds': 3600, 'local_stream_stale_timeout': 900},
+                  'run_budget_seconds': 43200, 'local_stream_stale_timeout': 1800},
         'memory': {'memory_enabled': False, 'user_profile_enabled': False, 'nudge_interval': 0},
         'curator': {'enabled': False}, 'background_review': {'enabled': False},
         'security': {'allow_lazy_installs': False}, 'updates': {'check': False},

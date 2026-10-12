@@ -318,7 +318,10 @@ def checked(state):
 
 
 def find(state, field, key):
-    return next(r for r in state[field] if r['id']==key)
+    row = next((r for r in state[field] if r['id']==key), None)
+    if row is None:
+        raise ValueError(f'Unknown {field} ID: {key}. Read forsic_reporting(state) /{field} for current IDs before retrying; no mutation was saved.')
+    return row
 
 
 def validate_refs(state, values):
@@ -441,7 +444,10 @@ def invoke(case,args):
         raise ValueError('payload must be a JSON object, not a serialized string, list or null. Send payload: {operation_id: ..., ...}; for question use answer and evidence_ids, and the current integer expected_revision when updating. No question or mission state was changed.')
     operation=payload.get('operation_id') or args.get('operation_id')
     compact=args['action']=='question' or (args['action']=='mission' and 'question_id' in payload) or (args['action']=='assess' and 'expected_revision' in payload)
-    if compact and not operation:raise ValueError('Compact mutations require operation_id for safe retries')
+    if compact and not operation:
+        from .investigation_state import validate_input
+        validate_input(args['action'], payload)
+        raise ValueError('payload.operation_id must be nonempty for safe retries; no mutation was saved')
     if operation:
         with case.connect() as db:
             replay=mutation_replay(db,operation,args)
@@ -458,7 +464,10 @@ def invoke(case,args):
 
 
 def _invoke(case,args):
-    action=args['action'];s=current(case)
+    action=args['action']
+    if action != 'source' and ('query' in args or 'locator_cursor' in args):
+        raise ValueError('query and locator_cursor are only for retained source lookup')
+    s=current(case)
     args=deepcopy(args)
     from .investigation_state import update_question, expand_mission, expand_assessment
     p=args.get('payload') or {}
@@ -555,13 +564,16 @@ def assess(case,s,p):
     if 'question_update' in p and 'answer' in p:
         raise ValueError('Use question_update or legacy flat answer, not both')
     data=case.event(result['id'])['data'];observations=[]
-    for c in p.get('citations',[]):
+    for citation_index,c in enumerate(p.get('citations',[])):
         src=find(s,'sources',c['source_id'])
         if src['version']!=c['source_version']:raise ValueError('Stale citation')
         allowed_sources={r['id'] for r in m['reuse_result_refs']+m['input_refs']+m['preserved_counterevidence_refs']+[ref('source',find(s,'sources',rid)) for rid in m['result_ids']] if r['kind']=='source'}
         if src['id'] not in allowed_sources:raise ValueError('Citation was not part of the mission input')
         raw=pointer(case.event(src['id'])['data'],c['pointer']);literal=c['literal'];start=int(c['byte_start']);end=start+len(literal.encode())
-        if start<0 or not literal or raw.encode()[start:end]!=literal.encode():raise ValueError('Literal is not the exact retained UTF-8 field span')
+        if start<0 or not literal or raw.encode()[start:end]!=literal.encode():
+            raise ValueError('Literal is not the exact retained UTF-8 field span: citations['+str(citation_index)+
+                '].literal/byte_start. Use forsic_reporting(source, source_id='+src['id']+
+                ', query=<short exact fragment>) and copy the returned match.citation; offsets belong to that retained field, not the file. No assessment was saved.')
         # Quoting the value of /path or /scope is metadata, not body access.
         from .measurement import field_role
         body=field_role(case.event(src['id'])['data'],c['pointer'])=='body'
@@ -569,7 +581,7 @@ def assess(case,s,p):
         if not body:presented='metadata'
         compatible={'metadata':{'metadata','exact_excerpt','full_field'},'exact_excerpt':{'exact_excerpt','full_field'},'full_field':{'full_field'}}
         if presented not in compatible[m['required_view']]:
-            raise ValueError('Mission requires '+m['required_view']+' body access; presented '+presented+' is not compatible. Use a retained body field or plan a metadata inspection.')
+            raise ValueError('Mission requires '+m['required_view']+' body access; presented '+presented+' is not compatible at citations['+str(citation_index)+']. Use a retained body field or plan a metadata inspection. If the original check returned no obtainable body, outcome=unavailable with citations=[] can record that limitation using the original mission/result refs; it does not establish absence or close the question.')
         ob=dict(id='O-'+digest(c)[:20],version=src['version'],source_ref=ref('source',src),statement='원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=literal,canonical_sha256=hashlib.sha256(literal.encode()).hexdigest(),presented_view=presented,coordinate_basis='retained tool-result scalar UTF-8 bytes; not original image offset',byte_start=start,byte_end=end,interpretation_limit='이 필드·제시 구간의 기록만 확인; 성공·승인·귀속·전체 부재는 별도 판별')
         prior=next((x for x in s['observations'] if x['id']==ob['id']),None)
         if prior and definition(prior)==definition(ob):ob=deepcopy(prior)
@@ -600,6 +612,14 @@ def assess(case,s,p):
     if synthesis is not None:
         if not synthesis.get('answer','').strip() or not synthesis.get('reason','').strip():
             raise ValueError('question_update needs a nonempty answer and reason')
+        selected = [c for c in s['claims'] if c['id'] in {x['id'] for x in q['claim_refs']} and c['status']=='adopted']
+        inherited = ('assertion_kind','inference_strength','assumptions','reasoning_summary','limitations')
+        if not legacy and len(selected)>1 and any(k not in synthesis for k in inherited):
+            raise ValueError('Multiple aggregate claims selected; explicitly supply aggregate judgment fields')
+        if not legacy and len(selected)==1:
+            for key in inherited:
+                if key not in synthesis and key in selected[0]:
+                    synthesis[key]=deepcopy(selected[0][key])
         if synthesis.get('assertion_kind')=='fact' and synthesis.get('inference_strength','unrated')!='unrated':
             raise ValueError('inference_strength describes interpretations, not observed facts')
         claim=dict(id='F-'+m['id']+'-'+ident,version=ident,title=q['target_proposition'],statement=synthesis['answer'],
@@ -608,7 +628,7 @@ def assess(case,s,p):
                    reasoning_summary=synthesis.get('reasoning_summary',''),
                    source_refs=[ref('observation',o) for o in observations] or [ref('source',result)],
                    counterevidence_refs=m['preserved_counterevidence_refs'],
-                   limitations=synthesis.get('limitations',p['limitations'])+m['does_not_resolve'],
+                   limitations=synthesis.get('limitations',[]),
                    adoption_receipt=receipt,semantic_review='not_reviewed')
         claims=[claim]
         answer=dict(answer=synthesis['answer'],assessment=synthesis.get('assessment','undetermined'),

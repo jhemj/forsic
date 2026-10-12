@@ -19,6 +19,16 @@ class InvestigationStateTests(unittest.TestCase):
     def q(self):return find(current(self.case),'questions',self.qid)
     def question(self,op,**fields):
         return invoke(self.case,{'action':'question','payload':dict(operation_id=op,question_id=self.qid,expected_revision=self.q()['revision'],**fields)})
+    def test_unassessed_priority_cannot_be_hidden_by_closure(self):
+        before=self.q()
+        with self.assertRaisesRegex(ValueError,'priority before scope closure'):
+            self.question('invalid-close',work_state='scoped_closed',reason='Report created',reopen_conditions=['New data'])
+        self.assertEqual(self.q(),before)
+    def test_unknown_gap_has_actionable_error_without_partial_save(self):
+        before=self.q()
+        with self.assertRaisesRegex(ValueError,'Unknown gaps ID: G-missing'):
+            self.question('bad-gap',gap_dispositions=[dict(gap_id='G-missing',disposition='assessed_unresolved',reason='No data',reopen_conditions=['New data'])])
+        self.assertEqual(self.q(),before)
     def mission(self,op='plan',**overrides):
         s=current(self.case);q=self.q()
         p=dict(operation_id=op,question_id=q['id'],expected_revision=q['revision'],
@@ -128,7 +138,7 @@ class InvestigationStateTests(unittest.TestCase):
         self.question('reopen',work_state='open',reason='Budget renewed')
         s=current(self.case)
         dispositions=[{'gap_id':g['id'],'disposition':'assessed_unresolved','reason':'No discriminator remains in the retained scope','reopen_conditions':['New scoped record']} for g in s['gaps'] if g['question_ref']['id']==self.qid]
-        self.question('close',work_state='scoped_closed',reason='Retained scope exhausted; answer remains uncertain',reopen_conditions=['New scoped record'],gap_dispositions=dispositions)
+        self.question('close',priority='material',work_state='scoped_closed',reason='Retained scope exhausted; answer remains uncertain',reopen_conditions=['New scoped record'],gap_dispositions=dispositions)
         self.assertEqual(self.q()['work_state'],'scoped_closed');self.assertEqual(self.q()['assessment'],'undetermined')
         saved=note(self.case,{'action':'get','note_id':self.original['note_id']})['note']
         note(self.case,{**saved,'action':'save','answer':'A wording correction'})
@@ -275,7 +285,7 @@ class InvestigationStateTests(unittest.TestCase):
         m=self.mission();rid=self.linked_result(m,{'error':'Synthetic unsupported read','error_type':'ValueError'})
         dispositions=[{'gap_id':g['id'],'disposition':'assessed_unresolved','reason':'No further supported check','reopen_conditions':['A supported reader']} for g in current(self.case)['gaps'] if g['question_ref']['id']==self.qid]
         with self.assertRaisesRegex(ValueError,'unassessed native work'):
-            self.question('early-close',work_state='scoped_closed',reason='No further supported check',reopen_conditions=['A supported reader'],gap_dispositions=dispositions)
+            self.question('early-close',priority='material',work_state='scoped_closed',reason='No further supported check',reopen_conditions=['A supported reader'],gap_dispositions=dispositions)
         self.assess(m['mission']['id'],rid,outcome='unavailable',citations=[],answer='This reader could not inspect the requested scope',limitations=['The requested scope remains unknown'])
         self.assertEqual(find(current(self.case),'missions',m['mission']['id'])['state'],'completed')
         # No forced retry: one explicit unavailable assessment is sufficient to

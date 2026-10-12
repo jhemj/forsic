@@ -83,6 +83,36 @@ class InvestigationTests(unittest.TestCase):
             with self.assertRaises(HTTPException): api.status(case_id='../missing')
             with self.assertRaises(HTTPException): api.evidence('not-in-case',case_id='case-two')
 
+    def test_usage_sums_physical_calls_across_compression_only(self):
+        self.case('one','root');self.case('one','child',parent='root')
+        self.case('one','branch',parent='root');self.case('two','other',parent='root')
+        with closing(sqlite3.connect(self.root/'state.db')) as db,db:
+            db.executescript('ALTER TABLE sessions ADD COLUMN end_reason TEXT;'
+                'ALTER TABLE sessions ADD COLUMN model_config TEXT;'
+                'ALTER TABLE sessions ADD COLUMN source TEXT;'
+                'CREATE TABLE session_model_usage(session_id TEXT,task TEXT,input_tokens INTEGER,output_tokens INTEGER,'
+                'cache_read_tokens INTEGER,cache_write_tokens INTEGER,api_call_count INTEGER);')
+            db.execute("UPDATE sessions SET end_reason='compression',ended_at=? WHERE id='root'",(time.time(),))
+            db.execute("UPDATE sessions SET model_config=? WHERE id='branch'",(json.dumps({'_branched_from':'root'}),))
+            db.executemany('INSERT INTO session_model_usage VALUES (?,?,?,?,?,?,?)',[
+                ('root','',100,20,900,0,2),('child','',30,40,300,10,1),
+                ('child','compression',500,50,0,0,1),('branch','',7,3,0,0,1),('other','',8000,2,0,0,1)])
+        before=(self.root/'state.db').read_bytes()
+        one=self.catalog.get(case_id='one')
+        usage=next(c for c in one['conversations'] if c['id']=='root')['usage']
+        self.assertEqual(usage['total_tokens'],1950)
+        self.assertEqual(usage['prompt_tokens'],1840)
+        self.assertEqual(usage['output_tokens'],110)
+        self.assertEqual(usage['cache_read_tokens'],1200)
+        self.assertEqual(usage['auxiliary_tokens'],550)
+        self.assertEqual(usage['api_call_count'],4)
+        self.assertEqual(next(c for c in one['conversations'] if c['id']=='branch')['usage']['total_tokens'],10)
+        self.assertEqual((self.root/'state.db').read_bytes(),before)
+
+    def test_missing_usage_is_unknown_not_zero(self):
+        self.case('one','first')
+        self.assertIsNone(self.catalog.get(case_id='one')['conversations'][0]['usage'])
+
     def test_case_conversations_scope_and_compression_boundaries(self):
         now = time.time()
         first = self.case('case-one', 'first', created=now - 40)

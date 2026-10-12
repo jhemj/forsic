@@ -77,3 +77,18 @@ license to model weights, external APIs, evidence, or third-party case material.
 Maintained goal-judge prompt clarification: distinguish partial external dependencies
 from global blockage when useful authorized work remains. Forsic supplies bounded
 agent-declared work-state counts before projection clipping, not a new gate or executor.
+
+Maintained explicit tool-reload correction: the existing native reload RPC refreshes
+same-name schema changes as well as added/removed tools and re-pins the resulting
+tool array. A process restart alone retains a same-code session pin. No separate
+refresh loop or model request is added; reload keeps the native cache consent path.
+
+Maintained native compaction correction: a text-only active request that fits the
+protected-tail token budget may use the existing split-turn and verbatim replay
+path even when it exceeds the historical-task preview character cap. Atomic tool
+groups, indivisible/media requests, and explicit multi-user anchors remain protected.
+
+Maintained native summary prompt refinement: one existing checkpoint budget covers
+the structured sections and retrieval log. Repeated attempts are grouped while
+current judgments, corrections, counterevidence and unfinished checks remain explicit.
+No output hard cap, separate model, compression engine or persistence change is added.

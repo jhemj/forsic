@@ -176,7 +176,7 @@ for (const [path,search,hash,section,panel] of [
 assert.equal(new URLSearchParams(workspaceURL('history','CASE-한 글','library').split('?')[1]).get('case'),'CASE-한 글');
 function types(node,result=[]) {if(node && typeof node==='object'){result.push(node.type);for(const child of node.children || [])types(child,result);}return result;}
 const records=Records({data,error:''});
-assert(types(records).includes(InvestigationBoard));
+assert(types(records).includes(motionModule.exports.InvestigationRelations));
 assert(!types(records).includes(CaseLibrary));
 assert(!types(records).includes(CaseDirectory));
 const history=History({data,route:{panel:'cases'},error:''});
@@ -204,3 +204,39 @@ assert.equal(workspaceRoute({pathname:'/forsic',search:'?view=new'}).panel,'inta
 assert.equal(workspaceRoute({pathname:'/forsic',search:'?view=current&case=one&panel=reports'}).panel,'reports');
 assert.equal(motionModule.exports.caseTarget({pathname:'/chat',search:'?case=one&resume=tip'}).session,'tip');
 console.log('Case navigation: literal evidence scope, case-bound conversations and separate intake passed');
+
+const {questionRelations,RelationDetail}=motionModule.exports;
+const q={id:'q',question:'질문 <script>',work_state:'scoped_closed',closure_rationale:'추가 검사 가치 낮음'};
+const j={answer:'현재 정정된 판단',assessment:'undetermined',revision:3,scope:'한정 범위',review_required:true,judgments:[],alternatives:['경쟁 설명'],next_checks:[],reopen_conditions:['새 자료']};
+const relationData={judgments:{q:j},state:{questions:[q],sources:[],claims:[{id:'old',status:'retracted',adoption_receipt:'receipt',statement:'철회된 이전 답'},{id:'foreign',status:'superseded',adoption_receipt:'other',statement:'다른 질문'}],missions:[{id:'m',question_ref:{id:'q'},state:'completed'}],tests:[{id:'t',question_ref:{id:'q'},execution_state:'returned',assessment_state:'assessed'}],assessments:[{id:'a',test_ref:{id:'t'},adoption_receipt:'receipt',outcome:'inconclusive',observation_refs:[]}],observations:[],gaps:[]}};
+const untouched=JSON.stringify(relationData), relations=questionRelations(relationData,'q');
+assert.equal(relations.history.length,1);assert.equal(relations.history[0].id,'old');assert.equal(questionRelations(relationData,'missing'),null);
+const detail=RelationDetail({value:relationData,questionId:'q',onSource:()=>{}});uniqueSiblingKeys(detail);
+const serialized=JSON.stringify(detail);assert(serialized.includes('현재 정정된 판단'));assert(serialized.includes('철회된 이전 답'));assert(serialized.includes('범위 종결'));assert(serialized.includes('반환됨'));assert(serialized.includes('재검토 필요'));
+assert(!serialized.includes('dangerouslySetInnerHTML'));assert(!serialized.includes('다른 질문'));assert.equal(JSON.stringify(relationData),untouched);
+console.log('Question relationships: shared judgment, bounded ownership, retired history and separate execution/closure passed');
+const sourceRef={kind:'source',id:'src',version:'s1'}, observationRef={kind:'observation',id:'obs',version:'o1'};
+relationData.state.sources=[{id:'src',version:'s1',label:'보존 원문'}];
+relationData.state.observations=[{id:'obs',version:'o1',source_ref:sourceRef,field_pointer:'/text',byte_start:0,byte_end:4,literal:'test'}];
+relationData.state.assessments[0].observation_refs=[observationRef];
+relationData.state.assessments.push({...relationData.state.assessments[0],id:'a2'});
+j.judgments=[{id:'current',assertion_kind:'interpretation',source_refs:[observationRef],counterevidence_refs:[]}];
+const deduped=questionRelations(relationData,'q');
+assert.equal(deduped.observations.length,1);assert.equal(deduped.observations[0].assessmentIds.length,2);
+const sourceClicks=[];
+const linked=RelationDetail({value:relationData,questionId:'q',onSource:(ref,obs)=>sourceClicks.push([ref,obs])});
+function followCitations(node){if(!node||typeof node!=='object')return;if(node.type==='button'&&node.props.title==='src'){assert.equal(node.props.disabled,false);node.props.onClick();}for(const child of node.children||[])followCitations(child);}
+followCitations(linked);
+assert.equal(sourceClicks.length,2);assert(sourceClicks.every(([ref,obs])=>ref.id==='src'&&ref.version==='s1'&&obs.id==='obs'));
+console.log('Relationship citations: observation refs resolve exact source spans; repeated observations are merged passed');
+// Cumulative usage is distinct from the active context window and counts cache only once.
+const {tokenCount,SessionUsage}=motionModule.exports;
+for(const [value,label] of [[0,'0'],[999,'999'],[1000,'1K'],[1250,'1.3K'],[999949,'999.9K'],[999950,'1M'],[7970123,'7.97M'],[10000000,'10M'],[null,'—']])assert.equal(tokenCount(value),label);
+const usage={total_tokens:1950000,prompt_tokens:1840000,output_tokens:110000,input_tokens:630000,cache_write_tokens:10000,cache_read_tokens:1200000,auxiliary_tokens:550000};
+const usageTree=SessionUsage({usage,detail:true});
+assert(JSON.stringify(usageTree).includes('1.95M'));
+assert(JSON.stringify(usageTree).includes('입력 중 캐시 1.2M'));
+assert(JSON.stringify(usageTree).includes('새 입력 640K'));
+assert(JSON.stringify(usageTree).includes('현재 문맥 크기'));
+assert(JSON.stringify(SessionUsage({usage:null})).includes('기록 없음'));
+console.log('Session token usage: K/M boundaries, cache subset and unknown accounting passed');

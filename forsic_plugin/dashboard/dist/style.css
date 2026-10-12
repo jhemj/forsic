@@ -1,4 +1,7 @@
 /* Evidence context, case views, and conversations share one navigation hierarchy. */
+.forsic-conversation-label{display:flex;flex-direction:column;gap:3px;min-width:0}
+.forsic-session-usage{font-variant-numeric:tabular-nums;color:var(--forsic-muted);font-size:11px;line-height:1.5}
+.forsic-session-usage summary{cursor:pointer}.forsic-session-usage p{margin:8px 0;overflow-wrap:anywhere}
 .forsic-sidebar{box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;gap:20px;min-height:100%;width:100%;padding:16px;color:var(--forsic-text);font-size:13px;line-height:1.5}
 .forsic-sidebar :is(a,button){font-family:inherit}
 .forsic-global-nav{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-bottom:4px}
@@ -306,3 +309,35 @@
 @media(max-width:640px){.forsic-directory .forsic-investigation-link{grid-template-columns:1fr;gap:10px;padding:16px 4px;}.forsic-investigation-status{display:flex;gap:12px;align-items:center;}.forsic-investigation-status small{margin:0;}}
 
 @media(max-width:1023px){.forsic-identity-character{width:80px;height:80px;flex-basis:80px;}.forsic-identity .forsic-companion{transform:scale(.46);}.forsic-identity-copy strong{font-size:18px;}}
+
+/* Question relations are derived from the ledger; the shipped JS/CSS are authored directly. */
+.forsic-relations{--relation-line:var(--forsic-border)}
+.forsic-relation-select{display:flex;flex-direction:column;gap:8px;font-size:12px;color:var(--forsic-muted);margin:20px 0}
+.forsic-relation-select select{width:100%;padding:12px;color:var(--forsic-text);background:var(--forsic-surface);border:1px solid var(--relation-line);border-radius:0;font:inherit;font-size:14px}
+.forsic-relation-answer{border:1px solid var(--relation-line);padding:24px;background:var(--forsic-surface)}
+.forsic-relation-answer h3{font-size:20px;margin:14px 0;line-height:1.5}
+.forsic-relation-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--forsic-muted)}
+.forsic-relation-meta span{border:1px solid var(--relation-line);padding:4px 8px}
+.forsic-relation-meta small{margin-left:auto;align-self:center}
+.forsic-relation-scope,.forsic-relation-caption{font-size:12px;color:var(--forsic-muted);line-height:1.7}
+.forsic-relation-judgment{padding-top:14px;border-top:1px solid var(--relation-line);margin-top:16px}
+.forsic-relation-detail h4{font-size:13px;margin:12px 0 6px;line-height:1.6}
+.forsic-relation-detail p,.forsic-relation-detail li{font-size:13px;line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap}
+.forsic-relation-detail .forsic-answer{font-size:15px}
+.forsic-relation-caption{margin:0;padding:20px 0 20px 20px;border-left:1px solid var(--relation-line)}
+.forsic-relation-lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;border-top:1px solid var(--relation-line)}
+.forsic-relation-lanes>section{min-width:0;padding-top:16px;position:relative}
+.forsic-relation-lanes>section:before{content:'';position:absolute;top:0;left:20px;height:12px;border-left:1px solid var(--relation-line)}
+.forsic-relation-lanes h3{font-size:13px;font-weight:500;margin:8px 0 16px;color:var(--forsic-muted)}
+.forsic-relation-node{border:1px solid var(--relation-line);padding:16px;margin-bottom:12px;min-width:0;background:var(--forsic-canvas)}
+.forsic-relation-node small,.forsic-relation-node code{font-size:11px;color:var(--forsic-muted);overflow-wrap:anywhere}
+.forsic-relation-node blockquote{margin:0;padding:12px 0;font:13px/1.8 var(--theme-font-mono,monospace);white-space:pre-wrap;overflow-wrap:anywhere}
+.forsic-relation-assessment{border-top:1px solid var(--relation-line);padding-top:12px;margin-top:12px}
+.forsic-relation-assessment strong{font-size:12px}
+.forsic-relation-history{margin-top:24px;padding:16px;border:1px solid var(--relation-line);color:var(--forsic-muted)}
+.forsic-relation-history article{margin-top:16px;padding-top:12px;border-top:1px dashed var(--relation-line)}
+.forsic-relation-source{margin-top:24px;padding:20px;border:1px solid var(--relation-line);overflow-wrap:anywhere}
+.forsic-relation-source pre{max-height:420px;overflow:auto;white-space:pre-wrap;font-size:12px}
+.forsic-relations button{border-radius:0;max-width:100%;overflow-wrap:anywhere}
+.forsic-relations :is(button,select,summary):focus-visible{outline:2px solid var(--forsic-text);outline-offset:3px}
+@media(max-width:1000px){.forsic-relation-lanes{grid-template-columns:1fr}.forsic-relation-answer{padding:16px}}

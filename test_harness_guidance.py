@@ -34,7 +34,8 @@ class HarnessGuidanceTests(unittest.TestCase):
         if not config_path.exists():
             config_path = config_path.with_name('config.example.yaml')
         config = YAML(typ='safe').load(config_path.read_text())
-        self.assertEqual(config['auxiliary']['report_review']['timeout'], 900)
+        # Operator-approved slower models may need a longer wait.
+        self.assertGreaterEqual(config['auxiliary']['report_review']['timeout'], 900)
         self.assertEqual(config['model']['provider'], 'custom')
         self.assertFalse(config['fallback_model'])
 

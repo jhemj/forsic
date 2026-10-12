@@ -329,7 +329,10 @@ def _refresh_live_sessions(home=None, *, preserve_prefix: bool = False, note: st
                 enabled = _load_enabled_toolsets(getattr(agent, "platform", None))
                 disabled = _load_disabled_toolsets()
                 refresh(agent, enabled_override=enabled, disabled_override=disabled,
-                        quiet_mode=True, preserve_prefix=preserve_prefix)
+                        quiet_mode=True, preserve_prefix=preserve_prefix, content_aware=True)
+                # A fresh lazy agent may already have current definitions while its
+                # persisted session pin is old; refresh can be a no-op in memory.
+                _tools_mod("tools.mcp_tool_agent").persist_agent_tool_names(agent)
         except Exception as _exc:
             logger.warning("Failed to refresh cached agent tools (session %s): %s", sid, _exc)
         if note:

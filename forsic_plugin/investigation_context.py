@@ -156,6 +156,10 @@ def completion_state(resolved, state):
     if not questions:
         pending.append('No question is explicitly bound to this native goal; record its requested scope before declaring completion.')
     for question in questions:
+        # Closure does not supply a missing priority judgment. Check it before
+        # branching on work_state, including old records that bypassed the writer.
+        if question['priority'] == 'unassessed':
+            pending.append(question['id'] + ': importance has not yet been assessed')
         if question.get('judgment_review_required') and question['work_state']=='scoped_closed':
             pending.append(question['id']+': current judgment correction requires explicit assessment')
         if question['work_state'] == 'scoped_closed':
@@ -163,8 +167,6 @@ def completion_state(resolved, state):
                 pending.append(question['id'] + ': scope closure lacks its reason or reopening conditions')
         elif question['priority'] in ('decision_critical', 'material'):
             pending.append(question['id'] + ': important scope remains ' + question['work_state'])
-        elif question['priority'] == 'unassessed':
-            pending.append(question['id'] + ': importance has not yet been assessed')
     pending_results = set()
     for mission in missions:
         if mission['state'] in ('running', 'queued', 'unassessed'):
@@ -256,7 +258,7 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
             'completion': {'pending_count': len(pending), 'examples': [_clip(x, 170) for x in pending[:2]],
                            'truth_approval': False},
             'work_inventory': work_inventory(questions, missions, tests),
-            'work_decision': 'Incomplete is not globally blocked. Compare remaining local checks, result assessment and scope/priority decisions against external dependencies. Decide the next useful authorized step; do not infer feasibility from counts or force endless investigation.',
+            'work_decision': 'Closed questions and zero pending items describe declared work, not coverage. Before DONE, compare requested_scope and known source inventory with content actually examined, including important areas never registered as questions. A benign collection process does not establish benign collected system state. Choose a useful local content check or explain its low value/constraint; do not require every file or infer global blockage from counts.',
             'active_questions': [], 'active_missions': [], 'unassessed_results': [], 'closed_index': [],
             'reports': reports,
             'omitted': {'active_questions': 0, 'active_missions': 0, 'unassessed_results': 0, 'closed_index': 0,

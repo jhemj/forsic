@@ -103,6 +103,182 @@ class MissionNativeToolsTests(unittest.TestCase):
             'scope':'Synthetic request log only','answer':'Undetermined'}})
         self.assertTrue(any(q['question']=='A bounded question' for q in current(self.case)['questions']))
 
+    def test_empty_question_payload_recovers_through_registered_handler(self):
+        from forsic_plugin import register
+        ctx=Mock();ctx.get_config.side_effect=lambda key: str(self.root/'intake') if key=='intake_root' else None
+        with patch('forsic_plugin.intake.Intake.case',return_value=self.case), \
+             patch('forsic_plugin.investigation_context.native_goal_binding',return_value={'goal_id':'trusted'}):
+            register(ctx)
+            handler=next(c.kwargs['handler'] for c in ctx.register_tool.call_args_list if c.kwargs['name']=='forsic_reporting')
+            before=current(self.case)['questions']
+            for payload in ({}, {'operation_id':''}):
+                out=json.loads(handler({'action':'question','payload':payload},session_id='synthetic-session'))
+                self.assertIn('operation_id',out['error'])
+                self.assertEqual(current(self.case)['questions'],before)
+            out=json.loads(handler({'action':'question','payload':{}},session_id='synthetic-session'))
+            example=json.loads(out['error'].split('Example: ',1)[1])
+            saved=json.loads(handler(example,session_id='synthetic-session'))
+            self.assertNotIn('error',saved,saved)
+            again=json.loads(handler(example,session_id='synthetic-session'))
+            self.assertEqual(saved['question'],again['question'])
+            self.assertEqual(len(current(self.case)['questions']),len(before)+1)
+
+    def test_action_fields_survive_native_schema_without_cross_action_properties(self):
+        from forsic_plugin import register
+        from tools.schema_sanitizer import sanitize_tool_schemas
+        from forsic_plugin.report_driven.investigation_state import compact_input_schemas
+        ctx=Mock();ctx.get_config.side_effect=lambda key: str(self.root/'intake') if key=='intake_root' else None
+        register(ctx)
+        schemas={c.kwargs['name']:c.kwargs['schema'] for c in ctx.register_tool.call_args_list}
+        for action,shape in compact_input_schemas().items():
+            schema=schemas['forsic_'+action]
+            wire=sanitize_tool_schemas([{'type':'function','function':schema}])[0]['function']['parameters']
+            self.assertEqual(set(wire['properties']),set(shape['properties']))
+            self.assertEqual(wire['required'],shape['required'] + (['gap_id'] if action=='mission' else []))
+            self.assertIn('operation_id',wire['required'])
+            self.assertNotIn('payload',wire['properties'])
+            self.assertFalse(wire['additionalProperties'])
+        self.assertNotIn('mission_id',schemas['forsic_question']['parameters']['properties'])
+        self.assertNotIn('question',schemas['forsic_assess']['parameters']['properties'])
+        for action in compact_input_schemas():
+            self.assertNotIn(action,schemas['forsic_reporting']['parameters']['properties']['action']['enum'])
+
+    def test_field_guidance_is_isolated_and_outcome_enum_survives_native_schema(self):
+        from forsic_plugin import register
+        from tools.schema_sanitizer import sanitize_tool_schemas
+        from forsic_plugin.report_driven.contracts import Assessment
+        ctx=Mock();ctx.get_config.side_effect=lambda key: str(self.root/'intake') if key=='intake_root' else None
+        register(ctx)
+        schemas={c.kwargs['name']:c.kwargs['schema'] for c in ctx.register_tool.call_args_list}
+        wires={name:sanitize_tool_schemas([{'type':'function','function':schema}])[0]['function']['parameters']
+               for name,schema in schemas.items()}
+        hint=wires['forsic_mission']['properties']['gap_id']['description']
+        for name in ('forsic_question','forsic_assess'):
+            self.assertNotIn(hint,json.dumps(wires[name]))
+        self.assertNotIn(hint,json.dumps(wires['forsic_mission']['properties']['why_it_matters']))
+        outcome=wires['forsic_assess']['properties']['outcome']
+        self.assertEqual(outcome['enum'],Assessment.model_json_schema()['properties']['outcome']['enum'])
+        self.assertIn('supports',outcome['enum']);self.assertNotIn('supported',outcome['enum'])
+
+    def test_invalid_outcome_returns_actual_allowed_values_without_saving(self):
+        m=self.plan()
+        result=self.call('forsic_read',{'path':'request.log','mission_id':m['id'],'mission_version':m['version']})
+        before=current(self.case);src=find(before,'sources',result['evidence_id'])
+        p={'operation_id':'invalid-outcome','expected_revision':find(before,'questions',self.qid)['revision'],
+           'mission_id':m['id'],'mission_version':find(before,'missions',m['id'])['version'],
+           'result_id':src['id'],'result_version':src['version'],'outcome':'supported',
+           'reasoning_summary':'A local recorded request','limitations':['Not execution'],
+           'next_check':'Execution receipt','citations':[]}
+        from forsic_plugin import register
+        ctx=Mock();ctx.get_config.side_effect=lambda key: str(self.root/'intake') if key=='intake_root' else None
+        with patch('forsic_plugin.intake.Intake.case',return_value=self.case), \
+             patch('forsic_plugin.investigation_context.native_goal_binding',return_value={'goal_id':'synthetic-goal','conversation_id':'synthetic-session'}):
+            register(ctx)
+            handler=next(c.kwargs['handler'] for c in ctx.register_tool.call_args_list if c.kwargs['name']=='forsic_assess')
+            out=json.loads(handler(p,session_id='synthetic-session'))
+        self.assertIn('Invalid assess fields',out['error'])
+        self.assertIn('payload.outcome',out['error']);self.assertIn('allowed_values',out['error'])
+        self.assertIn('supports',out['error']);self.assertIn('No assessment was saved',out['error'])
+        self.assertEqual(current(self.case)['assessments'],before['assessments'])
+        self.assertEqual(current(self.case)['questions'],before['questions'])
+
+    def test_dedicated_handlers_use_existing_atomic_writer_and_native_execution(self):
+        from forsic_plugin import register
+        ctx=Mock();ctx.get_config.side_effect=lambda key: str(self.root/'intake') if key=='intake_root' else None
+        binding={'goal_id':'synthetic-goal','conversation_id':'synthetic-session'}
+        with patch('forsic_plugin.intake.Intake.case',return_value=self.case), \
+             patch('forsic_plugin.investigation_context.native_goal_binding',return_value=binding):
+            register(ctx)
+            handlers={c.kwargs['name']:c.kwargs['handler'] for c in ctx.register_tool.call_args_list}
+            def invoke(name,args):return json.loads(handlers[name](args,session_id='synthetic-session'))
+            p={'operation_id':'new-q','question':'Is execution established?', 'scope':'Synthetic logs',
+               'answer':'Undetermined','gaps':['Execution not yet tested']}
+            first=invoke('forsic_question',p);self.assertNotIn('error',first,first)
+            self.assertEqual(first['question'],invoke('forsic_question',p)['question'])
+            self.assertIn('error',invoke('forsic_question',{**p,'answer':'Changed retry'}))
+            q=find(current(self.case),'questions',first['question']['question_id'])
+            self.assertEqual(q['goal_id'],'synthetic-goal')
+            self.assertIn('error',invoke('forsic_question',{'operation_id':'wrong','question_id':q['id'],'expected_revision':0,'answer':'Stale'}))
+            # A real failed shape: local-test fields cannot be saved as a question.
+            self.assertIn('error',invoke('forsic_question',{**p,'operation_id':'mixed','support_rule':'Observed request','limits':[]}))
+            self.assertIn('error',invoke('forsic_question',{'answer':'Unknown','critical_gaps':[],'gap_ids':[]}))
+            planned=invoke('forsic_mission',{'operation_id':'plan','question_id':q['id'],'expected_revision':q['revision'],
+                'why_it_matters':'Distinguish request from execution','tool_name':'forsic_read','tool_arguments':{'path':'request.log'},
+                'inconclusive_rule':'No execution receipt','limits':['No attribution'],'reopen_conditions':['New log']})
+            self.assertNotIn('error',planned,planned);m=planned['mission']
+            result=invoke('forsic_read',{'path':'request.log','mission_id':m['id'],'mission_version':m['version']})
+            self.assertNotIn('error',result,result);state=current(self.case);src=find(state,'sources',result['evidence_id'])
+            assessed=invoke('forsic_assess',{'operation_id':'assessment','expected_revision':find(state,'questions',q['id'])['revision'],
+                'mission_id':m['id'],'mission_version':find(state,'missions',m['id'])['version'],
+                'result_id':src['id'],'result_version':src['version'],'outcome':'inconclusive',
+                'reasoning_summary':'A recorded request is not an execution receipt','limitations':['Execution unverified'],
+                'next_check':'Independent execution record','citations':[{'source_id':src['id'],'source_version':src['version'],
+                'pointer':'/lines/0/text','literal':result['lines'][0]['text'],'byte_start':0}]})
+            self.assertNotIn('error',assessed,assessed)
+            state=current(self.case);self.assertEqual(find(state,'missions',m['id'])['state'],'completed')
+            self.assertEqual(find(state,'questions',q['id'])['answer'],'Undetermined')
+            checked(state)
+
+    def test_legacy_missing_gap_recovers_using_current_dedicated_tool(self):
+        from forsic_plugin import register
+        ctx=Mock();ctx.get_config.side_effect=lambda key: str(self.root/'intake') if key=='intake_root' else None
+        with patch('forsic_plugin.intake.Intake.case',return_value=self.case), \
+             patch('forsic_plugin.investigation_context.native_goal_binding',return_value={'goal_id':'synthetic-goal'}):
+            register(ctx)
+            handlers={c.kwargs['name']:c.kwargs['handler'] for c in ctx.register_tool.call_args_list}
+            before=current(self.case);q=find(before,'questions',self.qid)
+            gaps=[g for g in before['gaps'] if g['question_ref']['id']==q['id']]
+            self.assertGreater(len(gaps),1)
+            p={'operation_id':'missing-gap','question_id':q['id'],'expected_revision':q['revision'],
+               'why_it_matters':'Check request contents','tool_name':'forsic_read','tool_arguments':{'path':'request.log'},
+               'inconclusive_rule':'A request does not prove execution','limits':['No actor attribution'],
+               'reopen_conditions':['Independent execution receipt']}
+            error=json.loads(handlers['forsic_reporting']({'action':'mission','payload':p},session_id='synthetic-session'))
+            self.assertEqual(error['input_contract']['tool'],'forsic_mission')
+            self.assertIn('gap_id',error['input_contract']['allowed_fields'])
+            for g in gaps:self.assertIn(g['id'],error['error'])
+            self.assertIn(before['meta']['snapshot_id'],error['error'])
+            self.assertEqual(current(self.case)['questions'],before['questions'])
+            self.assertFalse(current(self.case)['missions'])
+            saved=json.loads(handlers[error['input_contract']['tool']]({**p,'operation_id':'corrected-gap','gap_id':gaps[0]['id']},session_id='synthetic-session'))
+            self.assertNotIn('error',saved,saved);m=saved['mission']
+            result=json.loads(handlers['forsic_read']({'path':'request.log','mission_id':m['id'],'mission_version':m['version']},session_id='synthetic-session'))
+            self.assertNotIn('error',result,result)
+            self.assertEqual(result['lines'][0]['text'],'job=maintenance requested target=/opt/task')
+            wrong=json.loads(handlers['forsic_read']({'path':'process.log','mission_id':m['id'],'mission_version':m['version']},session_id='synthetic-session'))
+            self.assertTrue(wrong['execution_rejected'])
+
+    def test_mission_gap_recovery_does_not_select_another_question_gap(self):
+        self.call('forsic_note',{'action':'save','question':'Other scope','answer':'Unknown','gaps':['Other gap']})
+        state=current(self.case);q=find(state,'questions',self.qid)
+        other=next(g for g in state['gaps'] if g['question_ref']['id']!=q['id'])
+        out=json.loads(self.case.invoke('forsic_reporting',{'action':'mission','payload':{
+            'operation_id':'foreign-gap','question_id':q['id'],'expected_revision':q['revision'],'gap_id':other['id'],
+            'why_it_matters':'Check request','tool_name':'forsic_read','tool_arguments':{'path':'request.log'},
+            'inconclusive_rule':'No execution receipt','limits':['Attribution'],'reopen_conditions':['Independent log']}},'synthetic-session'))
+        self.assertIn('gap_candidates',out['error'])
+        self.assertNotIn(other['id'],out['error'])
+        self.assertFalse(current(self.case)['missions'])
+
+    def test_planned_arguments_retain_native_fields_after_sanitization(self):
+        from forsic_plugin import register
+        from tools.schema_sanitizer import sanitize_tool_schemas
+        ctx=Mock();ctx.get_config.side_effect=lambda key: str(self.root/'intake') if key=='intake_root' else None
+        register(ctx)
+        schemas={c.kwargs['name']:c.kwargs['schema'] for c in ctx.register_tool.call_args_list}
+        wire=sanitize_tool_schemas([{'type':'function','function':schemas['forsic_mission']}])[0]['function']['parameters']
+        args=wire['properties']['tool_arguments']
+        branches={branch['title']:branch for branch in args['anyOf']}
+        props=branches['forsic_image_files']['properties']
+        for key in ('path','action','file_path','member_index','archive_scan_bytes','start_line','text','cursor'):
+            self.assertIn(key,props)
+        self.assertIn('archive_list',props['action']['enum'])
+        self.assertIn('archive_read',props['action']['enum'])
+        self.assertNotIn('mission_id',props)
+        self.assertNotIn('mission_version',props)
+        self.assertEqual(branches['forsic_image_files']['required'],['path','action'])
+        self.assertEqual(branches['forsic_list']['required'],[])
+
     def test_rejected_reference_never_executes_evidence_tool(self):
         m = self.plan()
         with patch.object(self.case,'read',side_effect=AssertionError('should not execute')):
@@ -147,7 +323,12 @@ class MissionNativeToolsTests(unittest.TestCase):
         self.assertIn('goal_evaluation_context',hooks)
         reporting=tools['forsic_reporting']['schema']['parameters']
         self.assertNotIn('Mission',reporting.get('$defs',{}))
-        self.assertIn('question',reporting['properties']['action']['enum'])
+        self.assertIn('forsic_question',tools)
+        image=tools['forsic_image_files']['schema']['parameters']['properties']
+        self.assertIn('archive_list',image['action']['enum'])
+        self.assertIn('archive_read',image['action']['enum'])
+        self.assertIn('member_index',image)
+        self.assertEqual(image['archive_scan_bytes']['maximum'],1073741824)
         self.assertEqual(reporting['properties']['payload']['type'], 'object')
         self.assertIn('mission_version',tools['forsic_read']['schema']['parameters']['properties'])
         with patch('forsic_plugin.intake.Intake.case',return_value=self.case), \

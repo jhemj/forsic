@@ -19,6 +19,9 @@ provides_tools:
   - forsic_image_files
   - forsic_report
   - forsic_reporting
+  - forsic_question
+  - forsic_mission
+  - forsic_assess
   - forsic_read_bytes
   - forsic_verify
   - forsic_note

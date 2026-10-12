@@ -92,6 +92,7 @@ class Case:
                 'evidence_root': str(self.root), 'selected_files': self.config.get('selected_files', []),
                 'output_root': str(self.output),
                 'capabilities': {'allocated_image_files': True, 'image_text_search': True,
+                                 'image_archive_inspection': ['tar', 'tar.gz'],
                                  'ewf_verify': True, 'carving': False, 'deleted_recovery': False,
                                  'reports': ['executive', 'analyst']}}
 
@@ -275,7 +276,7 @@ class Case:
         (self.output / name).write_text(body + appendix, encoding="utf-8")
         return {"report": name, "evidence_ids": citations, "meaning": "Saved model-authored report; citations resolve to recorded results, not independent analyst approval."}
 
-    def invoke(self, tool, args, session="", *, request_context=None):
+    def invoke(self, tool, args, session="", *, request_context=None, tool_schemas=None):
         if self.read_only:
             raise ValueError('Read-only case projections cannot invoke tools')
         request_context = request_context or {}
@@ -291,6 +292,9 @@ class Case:
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             try:
+                if not admission_error and tool_schemas is not None and tool=='forsic_reporting' and args.get('action')=='mission':
+                    from .report_driven.investigation_state import validate_native_plan
+                    validate_native_plan(args.get('payload'),tool_schemas)
                 if not admission_error and (args.get('mission_id') or args.get('mission_version')):
                     from .report_driven.investigation_state import validate_execution_context
                     mission_context = validate_execution_context(
