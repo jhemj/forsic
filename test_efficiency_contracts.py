@@ -27,6 +27,19 @@ class EfficiencyContracts(unittest.TestCase):
     def call(self,tool,args):
         return json.loads(self.handlers[tool](args,session_id='synthetic-session'))
 
+    def test_api_boundary_receipt_keeps_metadata_without_request_contents(self):
+        ctx=Mock();ctx.get_config.return_value=None
+        register(ctx)
+        callback=next(c.args[1] for c in ctx.register_hook.call_args_list if c.args[0]=='pre_api_request')
+        with patch.object(self.case, 'record') as record:
+            callback(session_id='synthetic-session', platform='tui', api_request_id='fixture',
+                     request={'body':{'messages':[{'content':'PRIVATE'}]},
+                              'boundary':{'stage':'pre_sdk_merged_body','tool_count':9}})
+        payload=record.call_args.args[1]
+        self.assertEqual(payload['request_boundary']['tool_count'],9)
+        self.assertEqual(payload['platform'],'tui')
+        self.assertNotIn('PRIVATE',json.dumps(payload))
+
     def plan(self,**changes):
         q=find(current(self.case),'questions',self.qid)
         return dict(operation_id='plan',question_id=self.qid,expected_revision=q['revision'],gap_id=q['remaining_gap_ids'][0],
@@ -59,18 +72,24 @@ class EfficiencyContracts(unittest.TestCase):
         saved=self.call('forsic_mission',self.plan());call=saved['next_call']
         result=self.call(call['tool'],call['arguments'])
         located=self.call('forsic_reporting',{'action':'source','source_id':result['evidence_id'],'query':'requested'})
-        citation=located['matches'][0]['citation'];self.assertEqual(located['matches'][0]['role'],'body')
+        citation=self.case.event(located['evidence_id'])['data']['matches'][0]['citation']
+        self.assertNotIn('citation',located['matches'][0]);self.assertEqual(located['matches'][0]['role'],'body')
         q=find(current(self.case),'questions',self.qid)
-        payload=dict(operation_id='assessment',expected_revision=q['revision'],mission_id=saved['mission']['id'],
-            mission_version=saved['mission']['version'],result_id=result['evidence_id'],result_version=citation['source_version'],
+        basis=self.call('forsic_assessment_basis',{'mission_id':saved['mission']['id'],
+            'result_id':result['evidence_id'],'citation_refs':[located['matches'][0]['citation_ref']]})
+        self.assertNotIn('error',basis,basis)
+        payload=dict(operation_id='assessment',basis_receipt_id=basis['evidence_id'],
             outcome='inconclusive',reasoning_summary='A request is recorded, not an execution receipt',
-            limitations=['No execution observed'],next_check='Find independent execution evidence',citations=[citation])
+            limitations=['No execution observed'],next_check='Find independent execution evidence')
         assessed=self.call('forsic_assess',payload)
         self.assertNotIn('error',assessed,assessed)
         self.assertNotIn('reasoning_summary',assessed['assessment'])
         detail=assessed['details_call'];page=self.call(detail['tool'],detail['arguments'])
         self.assertNotIn('error',page,page)
         self.assertIn(payload['reasoning_summary'],json.dumps(page))
+        observation=find(current(self.case),'observations',find(current(self.case),'assessments',assessed['assessment']['id'])['observation_refs'][0]['id'])
+        self.assertEqual(observation['literal'],citation['literal'])
+        self.assertEqual(observation['byte_start'],citation['byte_start'])
         self.assertEqual(find(current(self.case),'questions',self.qid)['answer'],q['answer'])
         self.assertEqual(self.call('forsic_assess',payload)['receipt'],assessed['receipt'])
 
@@ -82,7 +101,7 @@ class EfficiencyContracts(unittest.TestCase):
         self.assertIn('error',out)
         contract=out['planned_tool_contract']
         self.assertEqual(contract['field_location'],'tool_arguments')
-        self.assertEqual(contract['required_fields'],['path','action'])
+        self.assertEqual(contract['required_fields'],['path','action','file_path'])
         self.assertEqual(contract['submitted_arguments'],args)
         self.assertNotIn('path',contract['submitted_arguments'])
         native=self.schemas['forsic_image_files']['parameters']['properties']
@@ -93,8 +112,12 @@ class EfficiencyContracts(unittest.TestCase):
         fixed={**contract['submitted_arguments'],'path':'synthetic.e01'}
         saved=self.call('forsic_mission',{**p,'tool_arguments':fixed})
         self.assertNotIn('error',saved,saved)
+        self.assertEqual(saved['next_call']['tool'],'forsic_image_read_mission')
         self.assertEqual(saved['next_call']['arguments']['path'],'synthetic.e01')
-        self.assertEqual(saved['next_call']['arguments']['file_path'],args['file_path'])
+        self.assertEqual(saved['next_call']['arguments'],{'path':'synthetic.e01',
+            'mission_id':saved['mission']['id'],'mission_version':saved['mission']['version']})
+        stored=find(current(self.case),'missions',saved['mission']['id'])
+        self.assertEqual(stored['tool_arguments'],fixed)
 
     def test_planning_schema_preserves_native_path_meaning_and_optional_inputs(self):
         from tools.schema_sanitizer import sanitize_tool_schemas
@@ -130,7 +153,10 @@ class EfficiencyContracts(unittest.TestCase):
             self.assertEqual(set(branch['properties']),set(native['properties'])-{'mission_id','mission_version'})
             self.assertFalse(branch['additionalProperties'])
             for key,field in branch['properties'].items():
-                if key!='reason':self.assertEqual(field,native['properties'][key])
+                if name=='forsic_image_files' and key=='action':
+                    self.assertEqual(native['properties'][key],{**field,
+                        'enum':[action for action in field['enum'] if action not in ('read','read_bytes')]})
+                elif key!='reason':self.assertEqual(field,native['properties'][key])
         args={'action':'read','file_path':'/var/log/synthetic.log','member_index':0}
         self.assertTrue(all(input_problems(args,branch) for branch in branches.values()))
         fixed={**args,'path':'synthetic.e01'}
@@ -163,17 +189,18 @@ class EfficiencyContracts(unittest.TestCase):
             self.assertEqual(page['source_ref'],out['source_ref'])
             self.assertTrue(page['full_field'])
         with patch.object(self.case,'image_files',return_value={'base64':'AA=='}):
-            self.assertEqual(self.call('forsic_image_files',{'path':'synthetic.e01','action':'read_bytes'})['base64'],'AA==')
+            self.assertEqual(self.call('forsic_image_files',{'path':'synthetic.e01','action':'read_bytes','file_path':'body'})['base64'],'AA==')
 
     def test_failure_can_be_assessed_without_fabricated_body(self):
         saved=self.call('forsic_mission',{**self.plan(),'tool_arguments':{'path':'missing.log'}})
         call=saved['next_call'];result=self.call(call['tool'],call['arguments'])
         self.assertIn('error',result)
         s=current(self.case);source=find(s,'sources',result['evidence_id'])
-        out=self.call('forsic_assess',dict(operation_id='unavailable',expected_revision=find(s,'questions',self.qid)['revision'],
-            mission_id=saved['mission']['id'],mission_version=saved['mission']['version'],
-            result_id=source['id'],result_version=source['version'],outcome='unavailable',
-            reasoning_summary='The requested check failed',limitations=['No body inspected'],next_check='Inspect available alternate evidence',citations=[]))
+        basis=self.call('forsic_assessment_basis',{'mission_id':saved['mission']['id'],
+            'result_id':source['id'],'citation_refs':[]})
+        self.assertNotIn('error',basis,basis)
+        out=self.call('forsic_assess',dict(operation_id='unavailable',basis_receipt_id=basis['evidence_id'],outcome='unavailable',
+            reasoning_summary='The requested check failed',limitations=['No body inspected'],next_check='Inspect available alternate evidence'))
         self.assertNotIn('error',out,out)
         s=current(self.case)
         self.assertEqual(find(s,'missions',saved['mission']['id'])['state'],'completed')

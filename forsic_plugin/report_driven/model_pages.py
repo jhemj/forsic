@@ -135,7 +135,15 @@ def state_view(state, audit, args):
         raise ValueError('State changed or snapshot_id missing; read state again before paging')
     if continuation:
         path = args.get('pointer', '/gaps' if args['action'] == 'gaps' else '')
-        return page(select(state, path), path, args, {'snapshot_id': snapshot, 'view_kind': 'report_state'})
+        selected=select(state,path)
+        envelope={'snapshot_id': snapshot, 'view_kind': 'report_state'}
+        # Existing saved missions also get today's exact native entry call on lookup.
+        if re.fullmatch(r'/missions/(0|[1-9][0-9]*)',path) and isinstance(selected,dict):
+            from .investigation_state import image_read_reference_call
+            question=next((q for q in state['questions'] if q['id']==selected['question_ref']['id']),None)
+            call=image_read_reference_call(selected) if question and question['work_state'] in ('open','active') else None
+            if call and size(call)<MAX_BYTES-2000:envelope['next_call']=call
+        return page(selected, path, args, envelope)
     if args['action'] == 'gaps':
         return page(state['gaps'], '/gaps', args, {'snapshot_id': snapshot, 'view_kind': 'report_state',
                     'audit': audit_view(audit), 'requirement_count': len(state['requirements']),

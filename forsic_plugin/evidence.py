@@ -215,6 +215,8 @@ class Case:
                 "stderr": proc.stderr.decode(errors="replace")[:2000], "is_integrity_verification": False}
 
     def image_files(self, args):
+        from .image_reader import validate_image_action
+        validate_image_action(args)
         path = self.path(args['path'])
         reader = Path(__file__).with_name('image_reader.py')
         search = Path(__file__).with_name('literal_search.py')
@@ -280,35 +282,74 @@ class Case:
         if self.read_only:
             raise ValueError('Read-only case projections cannot invoke tools')
         request_context = request_context or {}
+        submitted_tool = tool
+        reference_entry = tool=='forsic_image_read_mission'
+        direct_read_entry = tool=='forsic_image_read'
+        if reference_entry or direct_read_entry:
+            tool='forsic_image_files'
         conversation_id = request_context.get('conversation_id') or request_context.get('session_id') or session
         # Model-only linkage fields never become evidence-parser arguments.
         call_args = {k: v for k, v in args.items() if k not in ('mission_id', 'mission_version') and not k.startswith('_')}
-        mission_context, admission_error = None, None
+        mission_context, admission_error, admission_details = None, None, {}
+        reference = reference_entry or (tool=='forsic_image_files' and args.get('action')=='from_mission')
+        argument_resolution = None
+        supplied_mission = 'mission_id' in args or 'mission_version' in args
         writes_question = (tool == 'forsic_note' and args.get('action') == 'save') or (
-            tool == 'forsic_reporting' and args.get('action') in ('question', 'mission', 'assess', 'gap', 'requirement'))
-        if request_context.get('status') == 'unavailable' and (writes_question or args.get('mission_id') or args.get('mission_version')):
+            tool == 'forsic_reporting' and args.get('action') in ('question', 'mission', 'mission_from_results', 'assess', 'assess_basis', 'assessment_basis', 'gap', 'requirement'))
+        if request_context.get('status') == 'unavailable' and (writes_question or supplied_mission or reference):
             admission_error = 'Native session/goal binding is unavailable; retry this state change only after that binding can be read. No unrelated goal was selected.'
         started = uuid.uuid4().hex
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             try:
-                if not admission_error and tool_schemas is not None and tool=='forsic_reporting' and args.get('action')=='mission':
+                if not admission_error and (reference_entry or direct_read_entry):
+                    from .report_driven.investigation_state import image_read_reference_schema, input_problems
+                    from .image_reader import InvalidArguments, image_read_entry_schema
+                    entry_schema=image_read_reference_schema() if reference_entry else image_read_entry_schema()
+                    problems=input_problems(args,entry_schema,'arguments')
+                    if problems:
+                        raise InvalidArguments(problems,entry_schema)
+                if not admission_error and tool=='forsic_reporting' and args.get('action')=='mission':
                     from .report_driven.investigation_state import validate_native_plan
                     validate_native_plan(args.get('payload'),tool_schemas)
-                if not admission_error and (args.get('mission_id') or args.get('mission_version')):
+                if not admission_error and (supplied_mission or reference):
+                    from .image_reader import InvalidArguments
+                    pair=('mission_id','mission_version')
+                    problems=[{'path':'arguments.'+key,'expected_type':'nonempty_string',
+                               **({'missing_fields':[key]} if key not in args else {})}
+                              for key in pair if not isinstance(args.get(key),str) or not args[key]]
+                    if problems:
+                        raise InvalidArguments(problems,{'required':list(pair),
+                            'properties':{key:{'type':'string','minLength':1} for key in pair}})
+                if not admission_error and reference:
+                    from .report_driven.investigation_state import resolve_image_read_reference, hash_value, normalized_tool_arguments
+                    call_args=resolve_image_read_reference(self,args,tool_schemas)
+                    argument_resolution={'kind':'saved_mission','mission_id':args['mission_id'],
+                        'mission_version':args['mission_version'],'arguments_hash':hash_value(normalized_tool_arguments(call_args))}
+                if not admission_error and tool=='forsic_image_files':
+                    from .image_reader import validate_image_action
+                    validate_image_action(call_args)
+                if not admission_error and (supplied_mission or reference):
                     from .report_driven.investigation_state import validate_execution_context
                     mission_context = validate_execution_context(
                         self, args.get('mission_id'), args.get('mission_version'), tool, call_args,
                         goal_id=request_context.get('goal_id', ''), session_id=conversation_id)
             except (ValueError, KeyError, TypeError, StopIteration) as exc:
                 admission_error = str(exc)
+                admission_details = getattr(exc,'details',{})
             start_data = {"tool": tool, "reason": args.get("reason", ""),
-                          "path": args.get("file_path") or args.get("path", ""),
-                          "text": args.get("text", ""), 'arguments': call_args}
+                          "path": call_args.get("file_path") or call_args.get("path", ""),
+                          "text": call_args.get("text", ""), 'arguments': call_args}
+            if reference or direct_read_entry:
+                start_data['submitted_tool']=submitted_tool
+                start_data['submitted_arguments']=args
+            if argument_resolution:
+                start_data['argument_resolution']=argument_resolution
             if mission_context:
                 start_data['mission_context'] = mission_context
             if admission_error:
                 start_data['execution_rejected'] = True
+                start_data['backend_started'] = False
             db.execute('INSERT INTO events VALUES (?,?,?,?,?)',
                        (started, time.time(), 'tool_start', session, json.dumps(start_data, ensure_ascii=False)))
         handlers = {"forsic_case": self.info, "forsic_list": self.list_files, "forsic_read": self.read,
@@ -348,10 +389,15 @@ class Case:
                 result.update(outcome='not_found', path=args.get('path', ''),
                               meaning='Requested path was not found in the selected evidence; deletion history is not established.')
         result = {"tool": tool, "started_id": started, **result}
+        if argument_resolution:
+            result['argument_resolution']=argument_resolution
         if mission_context:
             result['mission_context'] = mission_context
         if admission_error:
             result['execution_rejected'] = True
+            result.update(backend_started=False,**admission_details)
+            if admission_details:
+                result['next_step']='Correct the named argument fields before retrying. No evidence backend started; this is not a missing-file observation. For a planned check, copy its exact saved next_call; for discovery use the current evidence inventory. Do not infer a path or mission.'
         eid = self.record("tool_result", result, session)
         if tool == 'forsic_intel':
             from .intelligence import model_view

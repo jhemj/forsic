@@ -137,7 +137,19 @@ class ApiRequestHooksMixin:
             for key, value in (api_kwargs or {}).items()
             if key not in {"timeout", "http_client"}
         }
-        return self._sanitize_hook_payload({"method": "POST", "body": body})
+        payload = self._sanitize_hook_payload({"method": "POST", "body": body})
+        from agent.tool_argument_diagnostics import request_boundary
+        with suppress(Exception):
+            if isinstance(payload, dict):
+                payload["boundary"] = request_boundary(api_kwargs)
+                guard = getattr(getattr(self, "_tool_guardrails", None), "config", None)
+                if guard is not None:
+                    payload["boundary"]["guardrails"] = {
+                        key: getattr(guard, key) for key in (
+                            "hard_stop_enabled", "exact_failure_block_after",
+                            "same_tool_failure_halt_after", "no_progress_block_after")}
+                payload["boundary"]["platform"] = getattr(self, "platform", None)
+        return payload
 
     def _api_response_payload_for_hook(
         self, response: Any, assistant_message: Any, *, finish_reason: Optional[str]
@@ -145,7 +157,7 @@ class ApiRequestHooksMixin:
         # Raw provider SDK tool_call objects are handed to the sanitizer on purpose; `_hook_jsonable` must
         # keep normalising them (model_dump / __dict__ / dataclass) or subscribers get str() blobs.
         tool_calls = getattr(assistant_message, "tool_calls", None) or []
-        return self._sanitize_hook_payload(
+        payload = self._sanitize_hook_payload(
             {
                 "model": getattr(response, "model", None),
                 # Downstream that served the call (relays re-roll it per request; #90216).
@@ -159,6 +171,11 @@ class ApiRequestHooksMixin:
                 "usage": self._usage_summary_for_api_request_hook(response),
             }
         )
+        from agent.tool_argument_diagnostics import response_boundary
+        with suppress(Exception):
+            if isinstance(payload, dict):
+                payload["boundary"] = response_boundary(tool_calls)
+        return payload
 
     def _invoke_api_request_error_hook(
         self, *, task_id: str, turn_id: str, api_request_id: str, api_call_count: int,

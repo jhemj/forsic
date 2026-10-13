@@ -59,6 +59,10 @@ def _is_successful_goal_turn(result: Any, status: str, raw: Any) -> bool:
         return True
     if result.get("failed") or result.get("interrupted"):
         return False
+    # A controlled tool halt is not a successful investigation turn. Sending it to
+    # the goal judge can restart the same failed calls with fresh per-turn counters.
+    if (result.get("guardrail") or {}).get("action") in {"block", "halt"}:
+        return False
     return result.get("completed") is not False or is_max_iteration_handoff(result)
 
 

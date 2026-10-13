@@ -340,7 +340,12 @@ def write(case, state, change, *, note_update=None, response=None):
             replay=mutation_replay(db,mutation['operation_id'],mutation['request'])
             if replay is not None:return replay['receipt']
         now=current(case)
-        compact=bool(mutation and ('expected_revision' in mutation['request'].get('payload',{}) or mutation['request'].get('action')=='question'))
+        compact=bool(mutation and ('expected_revision' in mutation['request'].get('payload',{}) or mutation['request'].get('action') in ('question','assess_basis')))
+        if mutation and mutation['request'].get('action')=='assess_basis':
+            from .assessment_basis import validate_commit
+            request=mutation['request']
+            validate_commit(case,now,request['payload']['basis_receipt_id'],
+                goal_id=request.get('_goal_id',''),session_id=request.get('_session_id',''))
         if compact:
             owner_ids={r['id'] for _,r in find_refs(change) if r['kind']=='question'}
             for owner in owner_ids:
@@ -443,8 +448,10 @@ def invoke(case,args):
     if not isinstance(payload, dict):
         raise ValueError('payload must be a JSON object, not a serialized string, list or null. Send payload: {operation_id: ..., ...}; for question use answer and evidence_ids, and the current integer expected_revision when updating. No question or mission state was changed.')
     operation=payload.get('operation_id') or args.get('operation_id')
-    compact=args['action']=='question' or (args['action']=='mission' and 'question_id' in payload) or (args['action']=='assess' and 'expected_revision' in payload)
+    compact=args['action'] in ('question','assess_basis','mission_from_results') or (args['action']=='mission' and 'question_id' in payload) or (args['action']=='assess' and 'expected_revision' in payload)
     if compact and not operation:
+        if args['action']=='assess_basis':
+            raise ValueError('payload.operation_id must be nonempty for safe retries; no mutation was saved')
         from .investigation_state import validate_input
         validate_input(args['action'], payload)
         raise ValueError('payload.operation_id must be nonempty for safe retries; no mutation was saved')
@@ -472,6 +479,17 @@ def _invoke(case,args):
     from .investigation_state import update_question, expand_mission, expand_assessment
     p=args.get('payload') or {}
     if action=='question':return update_question(case,s,p,(_MUTATION.get() or {}).get('request',args))
+    if action=='mission_from_results':
+        from .investigation_state import validate_retained_mission
+        validate_retained_mission(p)
+        action='mission';args['action']=action
+    if action=='assessment_basis':
+        from .assessment_basis import prepare
+        return prepare(case,s,p,goal_id=args.get('_goal_id',''),session_id=args.get('_session_id',''))
+    if action=='assess_basis':
+        from .assessment_basis import expand
+        p=expand(case,s,p,goal_id=args.get('_goal_id',''),session_id=args.get('_session_id',''))
+        return assess(case,s,expand_assessment(s,p,goal_id=args.get('_goal_id',''),session_id=args.get('_session_id','')))
     if action=='mission' and 'question_id' in p:
         args['payload']=expand_mission(s,p,goal_id=args.get('_goal_id',''),session_id=args.get('_session_id',''));args['snapshot_id']=s['meta']['snapshot_id']
     if action=='assess' and 'expected_revision' in p:
@@ -544,6 +562,12 @@ def _invoke(case,args):
     raise ValueError('Supported: state, gaps, source, requirement, gap, mission, assess, review, render, publish')
 
 
+def check_citation_view(required_view,presented,citation_index):
+    compatible={'metadata':{'metadata','exact_excerpt','full_field'},'exact_excerpt':{'exact_excerpt','full_field'},'full_field':{'full_field'}}
+    if presented not in compatible[required_view]:
+        raise ValueError('Mission requires '+required_view+' body access; presented '+presented+' is not compatible at citations['+str(citation_index)+']. Use a retained body field or plan a metadata inspection. If the original check returned no obtainable body, outcome=unavailable with citations=[] can record that limitation using the original mission/result refs; it does not establish absence or close the question.')
+
+
 def assess(case,s,p):
     from .investigation_state import validate_input
     validate_input('assess',p,compact=False)
@@ -579,9 +603,7 @@ def assess(case,s,p):
         body=field_role(case.event(src['id'])['data'],c['pointer'])=='body'
         presented='full_field' if start==0 and end==len(raw.encode()) else 'exact_excerpt'
         if not body:presented='metadata'
-        compatible={'metadata':{'metadata','exact_excerpt','full_field'},'exact_excerpt':{'exact_excerpt','full_field'},'full_field':{'full_field'}}
-        if presented not in compatible[m['required_view']]:
-            raise ValueError('Mission requires '+m['required_view']+' body access; presented '+presented+' is not compatible at citations['+str(citation_index)+']. Use a retained body field or plan a metadata inspection. If the original check returned no obtainable body, outcome=unavailable with citations=[] can record that limitation using the original mission/result refs; it does not establish absence or close the question.')
+        check_citation_view(m['required_view'],presented,citation_index)
         ob=dict(id='O-'+digest(c)[:20],version=src['version'],source_ref=ref('source',src),statement='원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=literal,canonical_sha256=hashlib.sha256(literal.encode()).hexdigest(),presented_view=presented,coordinate_basis='retained tool-result scalar UTF-8 bytes; not original image offset',byte_start=start,byte_end=end,interpretation_limit='이 필드·제시 구간의 기록만 확인; 성공·승인·귀속·전체 부재는 별도 판별')
         prior=next((x for x in s['observations'] if x['id']==ob['id']),None)
         if prior and definition(prior)==definition(ob):ob=deepcopy(prior)

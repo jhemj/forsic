@@ -127,10 +127,12 @@ class MissionNativeToolsTests(unittest.TestCase):
         from forsic_plugin import register
         from tools.schema_sanitizer import sanitize_tool_schemas
         from forsic_plugin.report_driven.investigation_state import compact_input_schemas
+        from forsic_plugin.report_driven.assessment_basis import schemas as basis_schemas
         ctx=Mock();ctx.get_config.side_effect=lambda key: str(self.root/'intake') if key=='intake_root' else None
         register(ctx)
         schemas={c.kwargs['name']:c.kwargs['schema'] for c in ctx.register_tool.call_args_list}
         for action,shape in compact_input_schemas().items():
+            if action=='assess':shape=basis_schemas()['assess_basis']
             schema=schemas['forsic_'+action]
             wire=sanitize_tool_schemas([{'type':'function','function':schema}])[0]['function']['parameters']
             self.assertEqual(set(wire['properties']),set(shape['properties']))
@@ -140,6 +142,10 @@ class MissionNativeToolsTests(unittest.TestCase):
             self.assertFalse(wire['additionalProperties'])
         self.assertNotIn('mission_id',schemas['forsic_question']['parameters']['properties'])
         self.assertNotIn('question',schemas['forsic_assess']['parameters']['properties'])
+        for field in ('mission_id','mission_version','result_id','result_version','citations','expected_revision'):
+            self.assertNotIn(field,schemas['forsic_assess']['parameters']['properties'])
+        prepared=schemas['forsic_assessment_basis']['parameters']
+        self.assertEqual(prepared,basis_schemas()['assessment_basis'])
         for action in compact_input_schemas():
             self.assertNotIn(action,schemas['forsic_reporting']['parameters']['properties']['action']['enum'])
 
@@ -164,11 +170,11 @@ class MissionNativeToolsTests(unittest.TestCase):
         m=self.plan()
         result=self.call('forsic_read',{'path':'request.log','mission_id':m['id'],'mission_version':m['version']})
         before=current(self.case);src=find(before,'sources',result['evidence_id'])
-        p={'operation_id':'invalid-outcome','expected_revision':find(before,'questions',self.qid)['revision'],
-           'mission_id':m['id'],'mission_version':find(before,'missions',m['id'])['version'],
-           'result_id':src['id'],'result_version':src['version'],'outcome':'supported',
+        basis=self.call('forsic_reporting',{'action':'assessment_basis','payload':{
+            'mission_id':m['id'],'result_id':src['id'],'citation_refs':[]}})
+        p={'operation_id':'invalid-outcome','basis_receipt_id':basis['evidence_id'],'outcome':'supported',
            'reasoning_summary':'A local recorded request','limitations':['Not execution'],
-           'next_check':'Execution receipt','citations':[]}
+           'next_check':'Execution receipt'}
         from forsic_plugin import register
         ctx=Mock();ctx.get_config.side_effect=lambda key: str(self.root/'intake') if key=='intake_root' else None
         with patch('forsic_plugin.intake.Intake.case',return_value=self.case), \
@@ -176,7 +182,7 @@ class MissionNativeToolsTests(unittest.TestCase):
             register(ctx)
             handler=next(c.kwargs['handler'] for c in ctx.register_tool.call_args_list if c.kwargs['name']=='forsic_assess')
             out=json.loads(handler(p,session_id='synthetic-session'))
-        self.assertIn('Invalid assess fields',out['error'])
+        self.assertIn('Invalid assess_basis input',out['error'])
         self.assertIn('payload.outcome',out['error']);self.assertIn('allowed_values',out['error'])
         self.assertIn('supports',out['error']);self.assertIn('No assessment was saved',out['error'])
         self.assertEqual(current(self.case)['assessments'],before['assessments'])
@@ -208,12 +214,17 @@ class MissionNativeToolsTests(unittest.TestCase):
             self.assertNotIn('error',planned,planned);m=planned['mission']
             result=invoke('forsic_read',{'path':'request.log','mission_id':m['id'],'mission_version':m['version']})
             self.assertNotIn('error',result,result);state=current(self.case);src=find(state,'sources',result['evidence_id'])
-            assessed=invoke('forsic_assess',{'operation_id':'assessment','expected_revision':find(state,'questions',q['id'])['revision'],
-                'mission_id':m['id'],'mission_version':find(state,'missions',m['id'])['version'],
-                'result_id':src['id'],'result_version':src['version'],'outcome':'inconclusive',
+            located=invoke('forsic_reporting',{'action':'source','source_id':src['id'],
+                'source_version':src['version'],'pointer':'/lines/0/text','offset':0,'limit':4096})
+            self.assertNotIn('error',located,located)
+            self.assertEqual(located['text'],result['lines'][0]['text'])
+            basis=invoke('forsic_assessment_basis',{'mission_id':m['id'],
+                'result_id':src['id'],'citation_refs':[located['citation_ref']]})
+            self.assertNotIn('error',basis,basis)
+            assessed=invoke('forsic_assess',{'operation_id':'assessment',
+                'basis_receipt_id':basis['evidence_id'],'outcome':'inconclusive',
                 'reasoning_summary':'A recorded request is not an execution receipt','limitations':['Execution unverified'],
-                'next_check':'Independent execution record','citations':[{'source_id':src['id'],'source_version':src['version'],
-                'pointer':'/lines/0/text','literal':result['lines'][0]['text'],'byte_start':0}]})
+                'next_check':'Independent execution record'})
             self.assertNotIn('error',assessed,assessed)
             state=current(self.case);self.assertEqual(find(state,'missions',m['id'])['state'],'completed')
             self.assertEqual(find(state,'questions',q['id'])['answer'],'Undetermined')

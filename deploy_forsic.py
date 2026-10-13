@@ -34,7 +34,7 @@ ROOT_FILES = ('AGENTS.md', '.hermes.md', 'run.py', 'telegram_mirror.py', 'telegr
               'test_report_review_projection.py', 'test_reporting_pages.py', 'test_dashboard.cjs',
               'test_investigation_state.py', 'test_investigation_context.py', 'test_mission_native_tools.py',
               'test_native_goal_evaluation.py', 'test_native_tool_reload.py', 'test_current_judgment.py', 'test_direction_review.py', 'test_source_locator.py', 'test_relationship_api.py', 'test_execution_crash_windows.py',
-              'test_archive_reader.py', 'test_efficiency_contracts.py', 'test_indicators.py', 'test_search_resume.py', 'test_log_timeline.py', 'test_indicator_integration.py')
+              'test_archive_reader.py', 'test_image_admission.py', 'test_image_read_entry.py', 'test_mission_reference.py', 'test_efficiency_contracts.py', 'test_assessment_basis.py', 'test_retained_mission_contract.py', 'test_indicators.py', 'test_search_resume.py', 'test_log_timeline.py', 'test_indicator_integration.py')
 PUBLIC_FILES = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'SECURITY.md',
                 'NOTICE', 'NOTICE.txt', '.gitignore', '.dockerignore')
 REQUIRED_PUBLIC = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', '.gitignore', '.dockerignore')
@@ -48,6 +48,8 @@ UPSTREAM_ADDITIONS = (
     'web/src/forsic-shell.css', 'web/src/App.test.tsx', 'web/src/lib/analysis-title.ts',
     'tests/agent/test_plugin_compaction_projection.py',
     'tests/agent/test_long_inflight_compaction.py',
+    'agent/tool_argument_diagnostics.py',
+    'tests/agent/test_tool_boundary_diagnostics.py',
 )
 
 

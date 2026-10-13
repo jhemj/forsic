@@ -17,6 +17,82 @@ else:  # The isolated Docker reader mounts only these two modules, not the plugi
     from literal_search import file_identity, search_entries
 
 
+IMAGE_ACTION_REQUIRED = {
+    'volumes': (), 'list': (), 'read': ('file_path',), 'read_bytes': ('file_path',),
+    'stat': ('file_path',), 'search': ('text',), 'hash': ('file_path',),
+    'archive_list': ('file_path',), 'archive_read': ('file_path', 'member_index'),
+}
+
+
+def image_action_contract(action=None):
+    """Small shared contract; optional range defaults and I/O checks stay in the reader."""
+    return {'type':'object', 'required':['path','action',*IMAGE_ACTION_REQUIRED.get(action, ())],
+        'properties':{
+            'path':{'type':'string','minLength':1,'description':'Evidence E01 segment path from forsic_list, e.g. disk.e01. This is NOT a path inside the image.'},
+            'action':{'type':'string','enum':list(IMAGE_ACTION_REQUIRED),'description':'Additional required fields: '+
+                '; '.join(name+'='+','.join(fields) for name,fields in IMAGE_ACTION_REQUIRED.items() if fields)+'. list/search default to the root directory; volumes needs no internal path.'},
+            'file_path':{'type':'string','minLength':1,'description':'Exact allocated path INSIDE the image. Required for '+
+                ', '.join(name for name,fields in IMAGE_ACTION_REQUIRED.items() if 'file_path' in fields)+'. Explicit stat("/") is valid. Keep path set to the E01.'},
+            'member_index':{'type':'integer','minimum':0,'description':'archive_read only: exact ordinal from archive_list. Duplicate member names are not interchangeable.'},
+            'text':{'type':'string','minLength':1,'maxLength':512,'description':'search only: nonempty single-line literal, at most 512 characters.'}}}
+
+
+def image_read_entry_schema():
+    """Direct image content reads expose their shared required fields at the root."""
+    from copy import deepcopy
+    common=image_action_contract()['properties']
+    return {'type':'object','required':['path','action','file_path'],
+        'properties':{
+            'path':deepcopy(common['path']),
+            'action':{'type':'string','enum':['read','read_bytes']},
+            'file_path':deepcopy(common['file_path']),
+            'volume_offset':{'type':'integer'}, 'start_line':{'type':'integer'},
+            'offset':{'type':'integer'}, 'length':{'type':'integer'},
+            'reason':{'type':'string'},
+            'mission_id':{'type':'string','description':'Optional exact planned mission ID. Omit both linkage fields for an unplanned read.'},
+            'mission_version':{'type':'string','description':'Required with mission_id: exact current saved version. Changed ranges require a matching plan.'}},
+        'additionalProperties':False}
+
+
+class InvalidArguments(ValueError):
+    """Admission failure, not an observation about evidence existence or contents."""
+    def __init__(self, problems, contract):
+        self.details={'error_code':'invalid_arguments','problems':problems,
+            'missing_fields':sorted({k for p in problems for k in p.get('missing_fields',[])}),
+            'schema_fingerprint':hashlib.sha256(json.dumps(contract,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
+        super().__init__('Invalid tool arguments: '+json.dumps(problems,ensure_ascii=False))
+
+
+def image_action_problems(args, location='arguments'):
+    if not isinstance(args,dict):return [{'path':location,'expected_type':'object'}]
+    action=args.get('action')
+    contract=image_action_contract(action if isinstance(action,str) else None)
+    problems=[]
+    missing=[k for k in contract['required'] if k not in args]
+    if missing:problems.append({'path':location,'missing_fields':missing})
+    for key in ('path','action','file_path'):
+        if key in args and (not isinstance(args[key],str) or not args[key]):
+            problems.append({'path':location+'.'+key,'expected_type':'nonempty_string'})
+    if isinstance(action,str) and action not in IMAGE_ACTION_REQUIRED:
+        problems.append({'path':location+'.action','allowed_values':list(IMAGE_ACTION_REQUIRED)})
+    if action=='archive_read' and 'member_index' in args:
+        index=args['member_index']
+        if type(index) is not int or index<0:
+            problems.append({'path':location+'.member_index','expected_type':'integer','minimum':0})
+    if action=='search' and 'text' in args:
+        text=args['text']
+        if not isinstance(text,str) or not text or len(text)>512 or '\n' in text or '\r' in text:
+            problems.append({'path':location+'.text','expected_type':'nonempty_single_line_literal','max_length':512})
+    return problems
+
+
+def validate_image_action(args, location='arguments'):
+    problems=image_action_problems(args,location)
+    if problems:
+        action=args.get('action') if isinstance(args,dict) else None
+        raise InvalidArguments(problems,image_action_contract(action if isinstance(action,str) else None))
+
+
 def search_node(node, args, source_identity=None):
     recursive = bool(args.get('recursive', False))
 
@@ -174,6 +250,7 @@ def inspect_archive(node, args):
 
 
 def inspect(image, args):
+    validate_image_action(args)
     from dissect.target import Target
     from dissect.target.containers.ewf import EwfContainer
     from dissect.target.filesystem import open as open_filesystem

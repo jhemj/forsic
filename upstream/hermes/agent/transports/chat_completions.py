@@ -663,6 +663,10 @@ class ChatCompletionsTransport(ProviderTransport):
         )
         if getattr(tc_function, "args_repaired", False) is True:
             call.args_repaired = True  # stream assembly fixed the JSON; read by tool-call quality metrics
+        before_repair = getattr(tc_function, "_arguments_before_repair_shape", None)
+        if isinstance(before_repair, dict):
+            # Ephemeral observation for the post-request hook, not provider replay data.
+            call._arguments_before_repair_shape = before_repair
         return call
 
     def validate_response(self, response: Any) -> bool:

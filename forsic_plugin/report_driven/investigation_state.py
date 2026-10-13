@@ -158,8 +158,15 @@ def compact_input_schemas():
         }, 'required':['answer','assessment','reason'], 'additionalProperties':False}
     def schema(properties, required):
         return {'type': 'object', 'properties': properties, 'required': required, 'additionalProperties': False}
+    retained = deepcopy({k: v for k, v in mission.items() if k not in ('tool_name', 'tool_arguments')})
+    retained['result_ids'] = {'type': 'array', 'minItems': 1, 'uniqueItems': True,
+        'items': {'type': 'string', 'minLength': 1},
+        'description': 'Explicit successful or failed retained result evidence_ids selected for this after-result assessment. No new evidence call is planned or executed.'}
+    for key in ('why_it_matters', 'inconclusive_rule', 'support_rule', 'refute_rule'):
+        retained[key] = {**retained[key], 'minLength': 1}
     return {'question': schema(question, ['operation_id']),
             'mission': schema(mission, ['operation_id', 'question_id', 'expected_revision', 'why_it_matters', 'inconclusive_rule', 'limits', 'reopen_conditions']),
+            'mission_from_results': schema(retained, ['operation_id', 'question_id', 'expected_revision', 'gap_id', 'result_ids', 'why_it_matters', 'inconclusive_rule', 'limits', 'reopen_conditions']),
             'assess': schema(assess, ['operation_id', 'expected_revision', 'mission_id', 'mission_version', 'result_id', 'result_version', 'outcome', 'reasoning_summary', 'limitations', 'next_check', 'citations'])}
 
 
@@ -192,15 +199,28 @@ def input_problems(payload, schema, path='payload'):
     return problems
 
 
+def native_plan_contract(name, arguments, schemas):
+    schema=deepcopy(schemas[name])
+    if name=='forsic_image_files':
+        from ..image_reader import image_action_contract
+        action=arguments.get('action') if isinstance(arguments,dict) else None
+        schema['required']=image_action_contract(action if isinstance(action,str) else None)['required']
+    return schema
+
+
 def validate_native_plan(payload, schemas):
     """Check syntax against the registered evidence tool before saving a plan."""
     if not isinstance(payload,dict) or payload.get('result_ids') or payload.get('reuse_result_refs'):
         return
     name=payload.get('tool_name') or payload.get('proposed_tool_name')
     if not name: return  # The existing mission contract explains missing identity.
-    if name not in schemas:
+    if schemas is not None and (not isinstance(name,str) or name not in schemas):
         raise ValueError('Unsupported planned evidence tool: '+str(name))
-    problems=input_problems(payload.get('tool_arguments'),schemas[name],'tool_arguments')
+    if name=='forsic_image_files':
+        from ..image_reader import validate_image_action
+        validate_image_action(payload.get('tool_arguments'),'tool_arguments')
+    if schemas is None:return  # Legacy callers have no registry; image admission still applies.
+    problems=input_problems(payload.get('tool_arguments'),native_plan_contract(name,payload.get('tool_arguments'),schemas),'tool_arguments')
     if problems:
         raise ValueError('Invalid planned '+name+' arguments: '+json.dumps(problems,ensure_ascii=False)+
             '. No mission was saved. Copy the required fields from that native tool; changing only operation_id does not repair the input.')
@@ -239,6 +259,60 @@ def mission_version(mission):
 
 def normalized_tool_arguments(arguments):
     return {k: v for k, v in arguments.items() if k != 'reason' and not k.startswith(('mission_', '_'))}
+
+
+def image_read_reference_schema():
+    return {'type':'object','properties':{
+        'path':{'type':'string','minLength':1,'description':'Exact evidence image path from the saved mission.'},
+        'mission_id':{'type':'string','minLength':1,'description':'Exact ID of the saved, unstarted image read/read_bytes mission.'},
+        'mission_version':{'type':'string','minLength':1,'description':'Unchanged saved mission version from next_call or current mission details.'},
+        'reason':{'type':'string'}},'required':['path','mission_id','mission_version'],'additionalProperties':False}
+
+
+def image_read_reference_call(mission):
+    """A proposed native call, never execution authority or a guessed mission."""
+    arguments=mission.get('tool_arguments') or {}
+    if (mission.get('proposed_tool_name')!='forsic_image_files' or
+            mission.get('design_timing')!='before_result' or mission.get('reuse_result_refs') or
+            mission.get('state') not in ('draft','candidate','ready') or
+            mission.get('execution_start_ids') or mission.get('result_ids') or
+            not isinstance(arguments,dict) or
+            arguments.get('action') not in ('read','read_bytes') or
+            not all(isinstance(value,str) and value for value in
+                    (arguments.get('path'),mission.get('id'),mission.get('version')))):
+        return None
+    return {'tool':'forsic_image_read_mission','arguments':{'path':arguments['path'],
+        'mission_id':mission['id'],'mission_version':mission['version']}}
+
+
+def resolve_image_read_reference(case, arguments, schemas):
+    """Resolve explicit immutable input inside Case.invoke's admission transaction.
+
+    No I/O, latest-mission selection, mutation, retry or goal transition happens here.
+    The caller still validates owner/version/definition/state and records the start.
+    """
+    from .host import current, find
+    allowed={'path','action','mission_id','mission_version','reason'}
+    if set(arguments)-allowed:
+        raise ValueError('from_mission accepts only path, action, mission_id, mission_version and reason; direct argument overrides are not allowed')
+    if not isinstance(arguments.get('path'),str) or not arguments['path']:
+        raise ValueError('from_mission requires an explicit nonempty evidence path')
+    if schemas is None or 'forsic_image_files' not in schemas:
+        raise ValueError('Saved-mission execution requires the registered native tool contract')
+    mission=find(current(case),'missions',arguments['mission_id'])
+    if (mission.get('state') not in ('draft','candidate','ready') or
+            mission.get('execution_start_ids') or mission.get('result_ids')):
+        raise ValueError('from_mission requires an unstarted plan; returned, assessed or uncertain executions cannot be retried by reference')
+    stored=mission.get('tool_arguments')
+    if (mission.get('proposed_tool_name')!='forsic_image_files' or
+            mission.get('design_timing')!='before_result' or mission.get('reuse_result_refs') or
+            not isinstance(stored,dict) or stored.get('action') not in ('read','read_bytes')):
+        raise ValueError('from_mission supports only a saved before-result image read/read_bytes plan')
+    if arguments['path']!=stored.get('path'):
+        raise ValueError('Submitted evidence path differs from this saved mission; no path was inferred')
+    # Revalidate old plans against today's actual native contract before any backend.
+    validate_native_plan({'tool_name':'forsic_image_files','tool_arguments':stored},schemas)
+    return deepcopy(stored)
 
 
 def pending_result(data):
@@ -436,6 +510,24 @@ def update_question(case, state, payload, host_args):
     return {'receipt':receipt,'question':{k:now[k] for k in ('id','revision','definition_version','work_state')},'semantic_approval':False}
 
 
+def validate_retained_mission(payload):
+    """The explicit retained-results entry never supplies a physical tool plan."""
+    validate_input('mission_from_results', payload)
+    strings = ('operation_id', 'question_id', 'gap_id', 'why_it_matters', 'inconclusive_rule',
+               'target_proposition', 'support_rule', 'refute_rule')
+    for key in strings:
+        if key in payload and not payload[key].strip():
+            raise ValueError(key + ' must be a nonempty string. No retained-result mission was saved.')
+    for key in ('result_ids', 'limits', 'reopen_conditions'):
+        if not payload[key]:
+            raise ValueError(key + ' must contain an explicit nonempty selection. No retained-result mission was saved.')
+    for key in ('result_ids', 'input_ids', 'counterevidence_ids', 'limits', 'reopen_conditions'):
+        if any(not item.strip() for item in payload.get(key, [])):
+            raise ValueError(key + ' contains an empty value. No retained-result mission was saved.')
+    if len(set(payload['result_ids'])) != len(payload['result_ids']):
+        raise ValueError('Select each retained result_id once; repetitions are not new evidence. No mission was saved.')
+
+
 def expand_mission(state, payload, *, goal_id='', session_id=''):
     from .host import find, ref
     validate_input('mission',payload)
@@ -446,7 +538,7 @@ def expand_mission(state, payload, *, goal_id='', session_id=''):
     if not g or g['id'] not in {gap['id'] for gap in gaps}:
         candidates=[{'gap_id':gap['id'],'reason_preview':gap['reason'][:240]} for gap in gaps[:6]]
         raise ValueError('Select gap_id from this question when it has several gaps. No mission was saved. '
-            'Use forsic_mission with gap_id at the top level, not forsic_reporting(action=mission). '
+            'Use '+('forsic_mission_from_results' if payload.get('result_ids') else 'forsic_mission')+' with gap_id at the top level, not forsic_reporting(action=mission). '
             'Changing only operation_id or rationale does not fix the missing reference. '
             'Current expected_revision='+str(q['revision'])+'; gap_candidates='+json.dumps(candidates,ensure_ascii=False)+
             '; omitted_gap_count='+str(max(0,len(gaps)-len(candidates)))+

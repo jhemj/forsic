@@ -74,10 +74,16 @@ image_files의 path는 E01 경로, file_path는 이미지 안의 경로다. TAR/
 멤버 목록을 보고 archive_read로 필요한 member_index를 읽는다. 목록만으로 내용 검토를 대신하지 않는다.
 
 ## 보고와 보존
-새 조사는 forsic-report-driven의 state/gaps → question → mission → 기존 증거 도구 → assess → render를 사용한다.
+새 조사는 forsic-report-driven의 state/gaps → question → mission → 기존 증거 도구 → assessment_basis → assess → render를 사용한다.
 새 수집은 정확 tool_name/tool_arguments로 미션을 계획하고 반환 mission_id/mission_version을 실제 도구에 연결한다.
-보존 결과는 result_ids로 재사용해 평가한다. 실행 서술·계획 저장은 실제 반환이 아니다. 평가에는 현재 질문 revision과
-명시한 mission/result/source 버전·정확 인용을 보내며, 평가 완료와 질문 범위 종결을 구별한다.
+보존 결과는 forsic_mission_from_results의 result_ids로 명시적으로 선택한다. 도구·경로를 다시 계획하지 않는다.
+사후 미션 영수증의 retained_result_ids는 저장된 선택이고 execution_result_ids는 그 미션의 실제 실행 반환이다.
+사후 미션의 execution_result_ids가 비어 있어도 저장 실패가 아니며, 선택한 보존 결과로 평가를 준비한다.
+실행 서술·계획 저장은 실제 반환이 아니다.
+평가할 mission_id/result_id와 source 조회의 citation_ref를 forsic_assessment_basis에 선택한다. 프로그램이
+질문·미션·결과 버전과 정확한 인용 위치를 고정한다. forsic_assess에는 basis_receipt_id와 판단만 보낸다.
+본문·메타데이터 및 일부/전체 범위는 여전히 직접 비교한다. 0건 조회에는 인용 참조가 없으며 만들어내지 않는다.
+기준이 바뀌어 거절되면 원문·질문을 다시 확인해 새 기준을 준비한다. 평가 완료와 질문 범위 종결은 별개다.
 노트 저장이 실패하면 현재 답은 아직 보존되지 않았다. 오류를 고쳐 같은 note_id/current revision으로
 재저장한 영수증을 확인한다. 실패한 초안을 저장한 것처럼 보고하지 않는다. 실제 새 판별 결과를 반영한
 최신 노트로 render하고 반환된 snapshot·경로를 전달한다. 옛 보고 경로를 새 발견의 보고서로 재사용하지 않는다.

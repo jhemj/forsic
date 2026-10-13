@@ -1,5 +1,4 @@
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import tempfile
@@ -8,12 +7,7 @@ from unittest.mock import patch
 import subprocess
 import sqlite3
 
-source = Path(__file__).parent / 'forsic_plugin/evidence.py'
-if not source.exists():
-    source = Path(__file__).parent / 'plugin/evidence.py'
-spec = importlib.util.spec_from_file_location('evidence', source)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+from forsic_plugin import evidence as module
 
 
 class EvidenceTests(unittest.TestCase):

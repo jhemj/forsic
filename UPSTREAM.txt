@@ -92,3 +92,12 @@ Maintained native summary prompt refinement: one existing checkpoint budget cove
 the structured sections and retrieval log. Repeated attempts are grouped while
 current judgments, corrections, counterevidence and unfinished checks remain explicit.
 No output hard cap, separate model, compression engine or persistence change is added.
+
+Maintained native request/response diagnostics: existing lifecycle hooks retain
+value-free field shapes before/after stream argument repair and the ordered tool
+schema fingerprint after extra_body merge. These are SDK-boundary observations,
+not raw provider or HTTP captures. No argument is inferred or modified.
+Response normalization preserves the stream's value-free pre-repair field shape
+so the existing post-response hook can compare both sides of argument repair.
+The native TUI goal continuation excludes controlled tool guardrail halts, so a
+halt cannot be judged as a successful turn and automatically restart its counters.

@@ -49,12 +49,11 @@ def register(ctx):
     specs['indicators'] = ('Case-local indicator registry. Load organize-indicators. Keep exact source citations and raw values; observed is not malicious. list/get/export make no network requests. upsert merges provenance by canonical value. CSV/JSON export is local only, not a blocklist or automatic delivery.', schema_properties(), ['action'])
     specs['search'][1]['cursor'] = {'type':'object','description':'Opaque next_cursor from the same search. Continue unchanged; not a new search or absence proof.'}
     specs['image_files'][1]['cursor'] = {'type':'object','description':'Opaque next_cursor from the same literal search, including its exact file/byte position.'}
-    specs['image_files'][1]['action']['enum'].append('hash')
     image_description, image_properties, image_required = specs['image_files']
-    image_properties['action']['enum'].extend(['archive_list', 'archive_read'])
-    image_properties['path'] = {'type':'string','description':'Evidence E01 segment path from forsic_list, e.g. disk.e01. This is NOT a path inside the image.'}
-    image_properties['file_path'] = {'type':'string','description':'Allocated path INSIDE the image, e.g. /var/log/auth.log or /tmp/collection.tar.gz. Keep path set to the E01.'}
-    image_properties['member_index'] = {'type':'integer','minimum':0,'description':'archive_read only: exact ordinal from archive_list. Duplicate member names are not interchangeable.'}
+    from .image_reader import image_action_contract, image_action_problems
+    image_contract=image_action_contract()
+    image_properties.update(image_contract['properties'])
+    image_required=image_contract['required']
     image_properties['archive_scan_bytes'] = {'type':'integer','minimum':10240,'maximum':1073741824,'description':'TAR/TAR.GZ expanded scan budget, default 268435456. A budget stop is incomplete, not an empty archive.'}
     specs['image_files'] = (image_description + ' archive_list pages TAR/TAR.GZ member headers (offset=member index); archive_read reads one returned member_index (offset=member byte offset, length up to 12000). No extraction, execution or links. Other archive formats are unsupported.', image_properties, image_required)
 
@@ -69,11 +68,18 @@ def register(ctx):
     req_schema = Requirement.model_json_schema(); req_schema.pop('$defs', None)
     report_defs.update(Gap=gap_schema, Requirement=req_schema)
     compact = compact_input_schemas()
+    from .report_driven.assessment_basis import schemas as basis_schemas
+    handoff = basis_schemas()
+    compact['assess'] = handoff['assess_basis']
+    compact['assessment_basis'] = handoff['assessment_basis']
     mutation_actions = {'forsic_' + action: action for action in compact}
+    mutation_actions['forsic_assess'] = 'assess_basis'
     descriptions = {
         'question': 'Create or update ONE scoped investigation question. All fields are top-level; no action or payload wrapper. New: question, scope, provisional answer. Update: question_id and the current integer expected_revision. reason is the correction/closure reason. Set priority explicitly before scoped_closed. Closing requires explaining why remaining checks cannot materially change the answer; listing a limitation alone is not that explanation. Stable operation_id identifies an identical retry; changed input needs a new ID. Do not add mission or assessment fields.',
-        'mission': 'Plan ONE discriminating check or evaluation of retained result_ids for a current question. All fields are top-level. Use the returned mission ID/version with native evidence tools; this tool does not execute a check. Keep limits and reopening conditions. Do not rewrite the aggregate answer here.',
-        'assess': 'Evaluate ONE mission result with exact result/source versions and citations. All fields are top-level. outcome concerns the local test only. Only explicit question_update changes the aggregate judgment; omit it for test-only evaluation. Completing a test does not close its question.',
+        'mission': 'Plan ONE new discriminating evidence check for a current question. All fields are top-level. Use the returned mission ID/version with native evidence tools; this tool does not execute a check. For already retained result evidence_ids use forsic_mission_from_results without a tool/path plan. Keep limits and reopening conditions. Do not rewrite the aggregate answer here.',
+        'mission_from_results': 'Plan ONE after-result assessment of explicitly selected retained result_ids. All fields are top-level. No tool_name, tool_arguments or evidence path: nothing is recollected or executed. Select the current question, revision and gap; state the purpose, inconclusive_rule, limits and reopening conditions. Supply support_rule/refute_rule only when you define those discriminating conditions. The receipt retained_result_ids are the saved selection; execution_result_ids may correctly be empty. Continue to forsic_assessment_basis using the saved mission and an explicitly selected retained result.',
+        'assess': 'Evaluate ONE explicitly prepared mission result. Send basis_receipt_id from forsic_assessment_basis and your judgment; the program restores its frozen versions and exact citations. Do not reconstruct coordinates or send mission/result/version/citations fields. An identical retry uses the same operation_id. Only explicit question_update changes the aggregate judgment. A local test does not close its question.',
+        'assessment_basis': 'Prepare ONE assessment without making a judgment or running evidence tools. Explicitly select mission_id, result_id and citation_refs returned by forsic_reporting source matches or exact scalar pages. Return basis_receipt_id for forsic_assess. No version/offset transcription. Unbound continuation results need forsic_mission_from_results with explicit result_ids; this tool never attaches them automatically. Zero-match lookups provide no citation refs. An actual failed result may use citation_refs=[] for unavailable.',
     }
     # Keep each native tool's required fields and allowed arguments together.
     # A flat optional-field union admits plans that every native tool rejects.
@@ -88,6 +94,21 @@ def register(ctx):
     compact['mission']['properties']['tool_arguments'] = {'type':'object',
         'anyOf': [{'title':name,**deepcopy(schema)} for name,schema in evidence_schemas.items()],
         'description':'Exact native arguments. Use the branch named by tool_name, including its required fields. Omit mission_id and mission_version before planning. The selected tool is also validated before a mission is saved.'}
+    # A reference entry has three unconditional required fields. It is not a
+    # physical action/plan; it reuses Case.invoke's existing admission and reader.
+    from .report_driven.investigation_state import image_read_reference_schema
+    reference_schema=image_read_reference_schema()
+    specs['image_read_mission'] = ('Execute one explicitly selected saved image read/read_bytes mission. Copy path, mission_id and mission_version from next_call/current mission details. The saved arguments are validated and used unchanged. No action, file_path or options are accepted; no paused-goal resume or retry of returned/uncertain work.',
+        reference_schema['properties'],reference_schema['required'])
+    from .image_reader import image_read_entry_schema
+    direct_read_schema=image_read_entry_schema()
+    specs['image_read'] = ('Read or continue one explicitly named allocated file inside an E01. path (E01), file_path (inside image) and action (read/read_bytes) are all required on EVERY call, including next_line/offset continuation. Copy exact paths from retained results. Uses the same image reader and canonical evidence records. For a saved unexecuted image-read mission use forsic_image_read_mission. Physical mission plans still use forsic_image_files with the exact read arguments.',
+        direct_read_schema['properties'],direct_read_schema['required'])
+    # The canonical physical plan above retains all actions for existing records.
+    # Expose content reads only through the entry where file_path is required.
+    description,properties,required=specs['image_files']
+    properties['action']={**properties['action'],'enum':[a for a in properties['action']['enum'] if a not in ('read','read_bytes')]}
+    specs['image_files']=('Inspect allocated E01 volumes, directories, metadata, archives, or literal search without mounting. Direct content reads and continuations use forsic_image_read with path, action and file_path. A single discovered volume is selected automatically; for multiple volumes select volume_offset. archive_list returns TAR/TAR.GZ member indexes; archive_read reads one explicit member_index. Search is bounded: follow returned next_cursor; partial or skipped scope is not absence. No extraction or execution.',properties,required)
     compact['mission']['properties']['gap_id'] = {**compact['mission']['properties']['gap_id'],
         'description': 'Select one current unresolved gap belonging to this question. Copy its ID from state/gaps; never invent one.'}
     compact['mission']['required'] = [*compact['mission']['required'], 'gap_id']
@@ -100,7 +121,7 @@ def register(ctx):
             if key == 'disposition' and key in legacy_properties:
                 field = {**field, 'enum': sorted(set(field['enum']) | set(legacy_properties[key]['enum']))}
             legacy_properties[key] = field
-    specs['reporting'] = ('Read current state/gaps and exact retained sources; render/finalize reports. For investigation writes use forsic_question, forsic_mission or forsic_assess, each with its own flat input contract. requirement/gap are legacy report-applicability actions only. Rendering does not complete the investigation. Optional review is advisory.', {'action':{'type':'string','enum':['state','gaps','source','requirement','gap','review','render','publish']},'snapshot_id':string,'source_id':string,'review_id':string,'question_ids':{'type':'array','items':string},'redact':strings,'payload':{'type':'object','properties':legacy_properties,'additionalProperties':False,'description':'Only legacy requirement/gap applicability fields. Question/mission/assessment writes use their dedicated tools.'}},['action'])
+    specs['reporting'] = ('Read current state/gaps and exact retained sources; render/finalize reports. For investigation writes use forsic_question, forsic_mission, forsic_mission_from_results or forsic_assess, each with its own flat input contract. requirement/gap are legacy report-applicability actions only. Rendering does not complete the investigation. Optional review is advisory.', {'action':{'type':'string','enum':['state','gaps','source','requirement','gap','review','render','publish']},'snapshot_id':string,'source_id':string,'review_id':string,'question_ids':{'type':'array','items':string},'redact':strings,'payload':{'type':'object','properties':legacy_properties,'additionalProperties':False,'description':'Only legacy requirement/gap applicability fields. Question/mission/assessment writes use their dedicated tools.'}},['action'])
     description, properties, required = specs['reporting']
     properties['action']['enum'].append('finalize')
     properties['bundle_id'] = {'type':'string','description':'Exact rendered bundle_id for action=finalize. Select the completed delivery copy only, never intermediate drafts. Also pass its current snapshot_id. This queues only its four HTML/Word files for the approved case topic; not investigation closure or publication approval.'}
@@ -110,7 +131,7 @@ def register(ctx):
                       offset={'type':'integer','minimum':0,'description':'Collection index or scalar UTF-8 byte offset; use returned next_offset.'},
                       limit={'type':'integer','minimum':1,'description':'Maximum collection items (up to 25) or scalar UTF-8 bytes (up to 4096). Response may return fewer to stay within its budget.'},
                       source_version={'type':'string','description':'Exact retained source.version/source_ref.version returned by source or the source index; required for source continuation.'})
-    specs['reporting'] = (description + ' state is a bounded overview, not the full inventory. Follow returned pointer/next_offset with its snapshot_id (or source_version for source). Large fields are exact UTF-8 pages; indexes/previews are not evidence. Do not read spillover/cache paths with evidence tools or repeat a whole state to recover omitted records.', properties, required)
+    specs['reporting'] = (description + ' state is a bounded overview, not the full inventory. Follow returned pointer/next_offset with its snapshot_id (or source_version for source). Source matches and exact text pages provide citation_ref selections for forsic_assessment_basis; indexes/previews and zero matches do not. Large fields are exact UTF-8 pages. Do not read spillover/cache paths with evidence tools or repeat a whole state to recover omitted records.', properties, required)
     _, note_properties, note_required = specs['note']
     note_properties['include_history'] = {'type': 'boolean', 'description': 'For get only: explicitly request revision history, paginated with offset/limit (default 1, maximum 10). Omit for the complete current note only.'}
     specs['note'] = ('Case-local question notes. list returns an index, get returns the complete CURRENT note, save returns a compact receipt. Full notes and revisions remain stored. Read history only for an explicit revision audit. Use one note per discriminating question and update when its answer/gap changes. Save with the CURRENT revision; the tool increments it. On conflict get again and preserve concurrent changes.', note_properties, note_required)
@@ -139,7 +160,10 @@ def register(ctx):
                 call_args = {'action': action, 'payload': args} if action else args
                 case = session_case(sid)
                 raw = case.invoke(call_tool, call_args, sid, request_context=request_context, tool_schemas=evidence_schemas)
-                write_action = action or (args.get('action') if tool == 'forsic_reporting' and args.get('action') in compact else None)
+                if action == 'assessment_basis':
+                    from .report_driven.assessment_basis import basis_view
+                    return json.dumps(basis_view(json.loads(raw)), ensure_ascii=False)
+                write_action = ('assess' if action == 'assess_basis' else action) or (args.get('action') if tool == 'forsic_reporting' and args.get('action') in compact else None)
                 if write_action:
                     result = json.loads(raw)
                     if result.get('error'):
@@ -148,12 +172,16 @@ def register(ctx):
                         result['input_contract'] = {'tool': canonical_tool, 'field_location': 'top_level',
                             'allowed_fields': list(compact[write_action]['properties'])}
                         if write_action == 'mission':
-                            from .report_driven.investigation_state import input_problems
+                            from .report_driven.investigation_state import input_problems, native_plan_contract
                             payload = call_args.get('payload', {})
                             native_name = payload.get('tool_name') if isinstance(payload, dict) else None
                             native_schema = evidence_schemas.get(native_name) if isinstance(native_name, str) else None
                             if native_schema and not (payload.get('result_ids') or payload.get('reuse_result_refs')):
+                                native_schema = native_plan_contract(native_name, payload.get('tool_arguments'), evidence_schemas)
                                 problems = input_problems(payload.get('tool_arguments'), native_schema, 'tool_arguments')
+                                if native_name=='forsic_image_files':
+                                    for problem in image_action_problems(payload.get('tool_arguments'),'tool_arguments'):
+                                        if problem not in problems:problems.append(problem)
                                 if problems:
                                     submitted = payload.get('tool_arguments')
                                     fields = set(native_schema['required']) | set(submitted if isinstance(submitted, dict) else {})
@@ -168,9 +196,12 @@ def register(ctx):
                 if tool == 'forsic_note':
                     from .notes import model_view
                     return json.dumps(model_view(json.loads(raw), args), ensure_ascii=False)
-                if tool in EVIDENCE_TOOLS:
+                if tool in EVIDENCE_TOOLS or tool in ('forsic_image_read_mission','forsic_image_read'):
                     from .model_results import evidence_view
                     return json.dumps(evidence_view(json.loads(raw), case), ensure_ascii=False)
+                if tool == 'forsic_reporting' and args.get('action') == 'source':
+                    from .report_driven.assessment_basis import citation_choices
+                    return json.dumps(citation_choices(case,json.loads(raw)), ensure_ascii=False)
                 return raw
             except ValueError:
                 return json.dumps({'error': '아직 증거가 접수되지 않았어요. 분석할 파일·폴더의 전체 경로를 알려주세요.'}, ensure_ascii=False)
@@ -220,10 +251,15 @@ def register(ctx):
             intake.after(session_id, ctx.inject_message)
 
     def receipt(kind, session_id="", **kwargs):
-        fields = ("api_request_id", "turn_id", "aux_task", "model", "response_model", "provider", "base_url", "api_duration", "usage", "finish_reason", "retry_count", "reason", "error")
+        fields = ("api_request_id", "turn_id", "aux_task", "model", "response_model", "provider", "base_url", "api_duration", "usage", "finish_reason", "retry_count", "reason", "error", "platform", "api_call_count")
         case = intake.case(session_id) if session_id else None
         if case:
-            case.record(kind, {key: kwargs[key] for key in fields if key in kwargs}, session_id)
+            value = {key: kwargs[key] for key in fields if key in kwargs}
+            for name in ("request", "response"):
+                payload = kwargs.get(name)
+                if isinstance(payload, dict) and isinstance(payload.get("boundary"), dict):
+                    value[name + "_boundary"] = payload["boundary"]
+            case.record(kind, value, session_id)
 
     ctx.register_hook("post_context_compaction", partial(post_context_compaction, **projection_options))
     ctx.register_hook("goal_evaluation_context", partial(goal_evaluation_context, **projection_options))
