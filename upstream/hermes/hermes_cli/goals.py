@@ -130,7 +130,14 @@ JUDGE_SYSTEM_PROMPT = (
     "out of scope, no valid path to the deliverable), or refuses to "
     "fabricate a deliverable that cannot exist, OR\n"
     "- The response explains progress is blocked and the next step needs "
-    "user input to proceed.\n"
+    "user input to proceed. A request for permission in assistant prose is not "
+    "by itself evidence that new user input is required.\n"
+    "When native turn outcome is iteration_limit_handoff, the runtime required "
+    "a toolless checkpoint at a per-turn limit. That limit alone is neither "
+    "a user stop nor an external dependency. If useful authorized work remains "
+    "and remaining_goal_turns is positive, choose CONTINUE; a separate concrete "
+    "blocker may still justify BLOCKED. Do not call the goal DONE just because "
+    "a checkpoint was produced. The runtime still enforces stops and budgets.\n"
     "A dependency blocking one part does not block all remaining work. "
     "If another useful authorized check, result assessment, or necessary "
     "scope decision is available, choose CONTINUE. An incomplete state or "
@@ -1000,6 +1007,7 @@ def judge_goal(
     contract: Optional[GoalContract] = None,
     active_delegations: int = 0,
     evaluation_context: Optional[str] = None,
+    turn_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, str, bool, Optional[Dict[str, Any]], bool]:
     """Ask the auxiliary model whether the goal is satisfied.
 
@@ -1041,6 +1049,9 @@ def judge_goal(
         prompt = JUDGE_USER_PROMPT_WITH_SUBGOALS_TEMPLATE.format(subgoals_block=_truncate(subgoals_block, 2000), **common)
     else:
         prompt = JUDGE_USER_PROMPT_TEMPLATE.format(**common)
+
+    if turn_context:
+        prompt += "\n\nNative turn outcome (runtime data, not assistant claims):\n" + json.dumps(turn_context)
 
     if evaluation_context:
         if len(evaluation_context) > _GOAL_EVALUATION_CONTEXT_CHARS:
@@ -1628,6 +1639,7 @@ class GoalManager:
         self, last_response: str, *, user_initiated: bool = True,
         background_processes: Optional[List[Dict[str, Any]]] = None,
         active_delegations: int = 0,
+        turn_result: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Evaluate an isolated snapshot; every evaluation write is an exact-value CAS.
 
@@ -1656,6 +1668,7 @@ class GoalManager:
             decision = worker._evaluate_after_turn(
                 last_response, user_initiated=user_initiated,
                 background_processes=background_processes, active_delegations=active_delegations,
+                turn_result=turn_result,
             )
         except _StaleGoalEvaluation:
             decision = None
@@ -1677,6 +1690,7 @@ class GoalManager:
         self, last_response: str, *, user_initiated: bool = True,
         background_processes: Optional[List[Dict[str, Any]]] = None,
         active_delegations: int = 0,
+        turn_result: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run gates + judge and update state. Return a decision dict (``status``, ``should_continue``,
         ``continuation_prompt``, ``verdict``, ``reason``, ``message``). Both real user prompts and our
@@ -1710,6 +1724,10 @@ class GoalManager:
                 f"⏸ Goal paused — evaluation context unavailable: {exc}",
             )
         context_kwargs = {"evaluation_context": projection["context"]} if projection["context"] else {}
+        from hermes_cli.goals_turn_context import goal_turn_context
+        turn_context = goal_turn_context(turn_result, remaining_goal_turns=max(0, state.max_turns - state.turns_used))
+        if turn_context:
+            context_kwargs["turn_context"] = turn_context
         self._assert_evaluation_current()
         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
             state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,

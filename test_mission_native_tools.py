@@ -284,8 +284,10 @@ class MissionNativeToolsTests(unittest.TestCase):
         args=wire['properties']['tool_arguments']
         branches={branch['title']:branch for branch in args['anyOf']}
         props=branches['forsic_image_files']['properties']
-        for key in ('path','action','file_path','member_index','archive_scan_bytes','start_line','text','cursor'):
+        for key in ('path','action','file_path','member_index','archive_scan_bytes','start_line','text'):
             self.assertIn(key,props)
+        self.assertNotIn('cursor',props)
+        self.assertNotIn('cursor_ref',props)  # Continue retained searches directly via next_call.
         self.assertIn('archive_list',props['action']['enum'])
         self.assertIn('archive_read',props['action']['enum'])
         self.assertNotIn('mission_id',props)
@@ -340,8 +342,9 @@ class MissionNativeToolsTests(unittest.TestCase):
         self.assertIn('forsic_question',tools)
         image=tools['forsic_image_files']['schema']['parameters']['properties']
         self.assertIn('archive_list',image['action']['enum'])
-        self.assertIn('archive_read',image['action']['enum'])
-        self.assertIn('member_index',image)
+        self.assertNotIn('archive_read',image['action']['enum'])
+        self.assertNotIn('member_index',image)
+        self.assertEqual(set(tools['forsic_archive_read']['schema']['parameters']['required']),{'listing_ref','member_index'})
         self.assertEqual(image['archive_scan_bytes']['maximum'],1073741824)
         self.assertEqual(reporting['properties']['payload']['type'], 'object')
         self.assertIn('mission_version',tools['forsic_read']['schema']['parameters']['properties'])

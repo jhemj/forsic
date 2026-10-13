@@ -29,6 +29,63 @@ class InvestigationStateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Unknown gaps ID: G-missing'):
             self.question('bad-gap',gap_dispositions=[dict(gap_id='G-missing',disposition='assessed_unresolved',reason='No data',reopen_conditions=['New data'])])
         self.assertEqual(self.q(),before)
+    def test_gap_validation_names_all_invalid_fields_before_any_save(self):
+        from forsic_plugin.report_driven.investigation_state import compact_input_schemas, input_problems
+        before = current(self.case)
+        gap = next(g for g in before['gaps'] if g['question_ref']['id'] == self.qid)
+        disposition = dict(gap_id=gap['id'], disposition='resolved', reason='Compared the retained record', reopen_conditions=[])
+        payload = dict(operation_id='repair-gap', question_id=self.qid,
+                       expected_revision=self.q()['revision'], gap_dispositions=[disposition])
+        self.assertTrue(input_problems(payload, compact_input_schemas()['question']))
+        with self.assertRaisesRegex(ValueError, r'payload.gap_dispositions\[0\].reopen_conditions'):
+            invoke(self.case, {'action': 'question', 'payload': payload})
+        self.assertEqual(current(self.case)['meta']['content_revision'], before['meta']['content_revision'])
+        # An explicit correction may reuse the failed operation ID: no receipt was saved.
+        payload['gap_dispositions'][0]['reopen_conditions'] = ['A conflicting retained record']
+        invoke(self.case, {'action': 'question', 'payload': payload})
+        gap_now = find(current(self.case), 'gaps', gap['id'])
+        self.assertEqual(gap_now['disposition'], 'resolved')
+        self.assertEqual(gap_now['reopen_conditions'], ['A conflicting retained record'])
+        payload['expected_revision'] = self.q()['revision']
+        payload['operation_id'] = 'blank-gap'
+        payload['gap_dispositions'][0].update(reason='  ', reopen_conditions=['\t'])
+        with self.assertRaises(ValueError) as error:
+            invoke(self.case, {'action': 'question', 'payload': payload})
+        self.assertIn('gap_dispositions[0].reason', str(error.exception))
+        self.assertIn('gap_dispositions[0].reopen_conditions[0]', str(error.exception))
+        self.assertEqual(find(current(self.case), 'gaps', gap['id']), gap_now)
+
+    def test_partial_gap_page_can_recover_closure_without_assuming_missing_dispositions(self):
+        from forsic_plugin.report_driven.model_pages import state_view
+        self.question('declare', gaps=['Synthetic uncertainty '+str(i) for i in range(7)],
+                      critical_gaps=[], priority='material')
+        before = current(self.case)
+        args = {'action': 'gaps', 'question_id': self.qid}
+        first = state_view(before, {}, args)
+        self.assertIsNotNone(first['next_call'])
+        def dispositions(page):
+            return [dict(gap_id=x['value']['id'], disposition='assessed_unresolved',
+                         reason='Retained scope does not distinguish explanations',
+                         reopen_conditions=['An independent new result']) for x in page['items']]
+        chosen = dispositions(first)
+        expected = {g['id'] for g in before['gaps'] if g['question_ref']['id'] == self.qid} - {d['gap_id'] for d in chosen}
+        with self.assertRaises(ValueError) as error:
+            self.question('partial-close', work_state='scoped_closed', reason='Explicit uncertain scope closure',
+                          reopen_conditions=['An independent new result'], gap_dispositions=chosen)
+        for gid in expected:
+            self.assertIn(gid, str(error.exception))
+        self.assertIn('missing_gap_count', str(error.exception))
+        self.assertEqual(current(self.case)['meta']['content_revision'], before['meta']['content_revision'])
+        page = first
+        while page['next_call']:
+            page = state_view(before, {}, page['next_call']['arguments'])
+            chosen.extend(dispositions(page))
+        self.question('partial-close', work_state='scoped_closed', reason='Explicit uncertain scope closure',
+                      reopen_conditions=['An independent new result'], gap_dispositions=chosen)
+        self.assertEqual(self.q()['work_state'], 'scoped_closed')
+        self.assertEqual(self.q()['assessment'], 'undetermined')
+        self.assertEqual(len(chosen), len(expected)+len(dispositions(first)))
+
     def mission(self,op='plan',**overrides):
         s=current(self.case);q=self.q()
         p=dict(operation_id=op,question_id=q['id'],expected_revision=q['revision'],

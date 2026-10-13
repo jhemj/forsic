@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 
 PIN = 'bafb42b431fca313471958fdf77f9c30e455f86b'
 DEPENDENCIES = {'python-docx': '1.2.0', 'lxml': '6.1.3', 'python-telegram-bot': '22.8'}
-ROOT_FILES = ('test_grounded_judgment.py', 'test_recovery_integration.py', 'AGENTS.md', '.hermes.md', 'run.py', 'telegram_mirror.py', 'telegram_mentions.py', 'telegram_reports.py',
+ROOT_FILES = ('test_acquisition_context.py', 'test_search_selection.py', 'test_context_result_refs.py', 'test_grounded_judgment.py', 'test_recovery_integration.py', 'AGENTS.md', '.hermes.md', 'run.py', 'telegram_mirror.py', 'telegram_mentions.py', 'telegram_reports.py',
               'telegram_actions.py', 'deploy_forsic.py',
               'smoke.py', 'library_smoke.py', 'requirements-forsic.txt', 'Dockerfile.tools',
               'UPSTREAM.txt', 'README.txt', 'DEPLOYMENT.txt', 'DESIGN.txt', 'HARNESS_REVIEW.txt', 'test_deployment.py',
@@ -34,13 +34,15 @@ ROOT_FILES = ('test_grounded_judgment.py', 'test_recovery_integration.py', 'AGEN
               'test_report_review_projection.py', 'test_reporting_pages.py', 'test_dashboard.cjs',
               'test_investigation_state.py', 'test_investigation_context.py', 'test_mission_native_tools.py',
               'test_native_goal_evaluation.py', 'test_native_tool_reload.py', 'test_current_judgment.py', 'test_direction_review.py', 'test_source_locator.py', 'test_relationship_api.py', 'test_execution_crash_windows.py',
-              'test_archive_reader.py', 'test_image_admission.py', 'test_image_read_entry.py', 'test_mission_reference.py', 'test_efficiency_contracts.py', 'test_assessment_basis.py', 'test_retained_mission_contract.py', 'test_indicators.py', 'test_search_resume.py', 'test_log_timeline.py', 'test_indicator_integration.py')
+              'test_archive_reader.py', 'test_archive_selection.py', 'test_image_admission.py', 'test_image_read_entry.py', 'test_mission_reference.py', 'test_efficiency_contracts.py', 'test_assessment_basis.py', 'test_retained_mission_contract.py', 'test_indicators.py', 'test_search_resume.py', 'test_log_timeline.py', 'test_indicator_integration.py')
 PUBLIC_FILES = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'SECURITY.md',
                 'NOTICE', 'NOTICE.txt', '.gitignore', '.dockerignore')
 REQUIRED_PUBLIC = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', '.gitignore', '.dockerignore')
 CONFIG_FILES = ('SOUL.md', 'AGENTS.md', 'skin.yaml', 'forsic-theme.yaml', 'config.example.yaml')
 FIXTURES = ('notes.txt', 'cron.log', 'change.txt')
 UPSTREAM_ADDITIONS = (
+    'tests/tui_gateway/test_goal_guardrail_pause.py',
+    'hermes_cli/goals_turn_context.py',
     'agent/tool_loop_comparison.py',
     'tests/hermes_cli/test_custom_banner_branding.py', 'tests/tui_gateway/test_goal_display.py',
     'ui-tui/src/__tests__/sessionGreeting.test.ts', 'ui-tui/src/app/sessionGreeting.ts',
@@ -51,6 +53,7 @@ UPSTREAM_ADDITIONS = (
     'tests/agent/test_long_inflight_compaction.py',
     'agent/tool_argument_diagnostics.py',
     'tests/agent/test_tool_boundary_diagnostics.py',
+    'tests/agent/test_tool_failure_groups.py',
 )
 
 

@@ -23,6 +23,10 @@ def _mission_summary(record):
 
 
 def evidence_view(result, case):
+    from .archive_selection import result_view
+    result = result_view(result, case)
+    from .search_selection import result_view as search_view
+    result = search_view(result, case)
     if not isinstance(result.get('text'),str) or not isinstance(result.get('base64'),str):
         return result
     from .report_driven.host import source_record

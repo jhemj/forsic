@@ -18,7 +18,8 @@ description: 현재 조사 현황·질문에 근거 범위 안에서 답하고, 
 
 중요한 답이 바뀌면 forsic_question으로 같은 질문을 갱신한다. 새 질문은 question/scope/answer와
 operation_id, 수정은 question_id와 현재 expected_revision이다. 직접 선택한 citation_ref는 judgment에
-넣어 answer/reason과 함께 저장한다. 미션·평가 준비 없이 현재 답과 정확 근거를 연결한다.
+넣어 answer/reason과 함께 저장한다. pointer/text_preview의 정확한 문장이 답을 뒷받침하는지 확인하고
+같은 결과의 다른 줄을 인용한 것으로 바꾸지 않는다. 미션·평가 준비 없이 현재 답과 정확 근거를 연결한다.
 구체적인 필드는 forsic-report-driven을 필요한 때 읽는다. 기존 forsic_note는 과거 노트 조회용이다.
 
 answer에서 관측 사실·현재 해석·미확인 연결을 구별한다. alternatives는 중요한 경쟁 설명,
@@ -31,6 +32,7 @@ gaps/critical_gaps는 한계·핵심 공백, next_checks는 다음 판별이다.
 제목·현재 답·반론·한계를 함께 대조한다. 이전 노트·보고서는 보존한다.
 
 정상 설명이 충분한 범위는 근거·중요도·남은 공백의 처분·재개 조건을 남기고 scoped_closed로 종결한다.
+현재 질문의 공백은 저장 영수증의 gap_lookup으로 조회한다. 다른 대화의 보존 질문을 함께 종결하지 않는다.
 자료 부족·미검토·예산 보류를 정상으로 바꾸지 않는다. 모든 파일 검사는 필요 없지만 원래 질문과
 가용 자료의 중요한 누락을 확인한다. 새 반증이 나오면 같은 질문의 필요한 범위만 다시 연다.
 상태 문의는 추가 수집이나 중단 해제 지시가 아니다. 답이 달라지지 않으면 노트·보고서를 반복 생성하지 않는다.

@@ -38,7 +38,8 @@ next_checks는 다음 검사 또는 재검토 조건이다. 질문 저장은 for
 answered는 범위 한정 답이며 악성/정상 확정이나 사건 전체 완료를 뜻하지 않는다.
 같은 질문은 현재 revision으로 갱신하고 충돌 시 최신 질문을 읽어 다른 변경을 보존한다. 저장 성공은 의미 검증이 아니다.
 조사 work_state와 노트 status는 구별한다. 범위 종결은 question의 scoped_closed와 reason/reopen_conditions,
-남은 gap_dispositions로 기록한다. 새 반증은 같은 질문을 open/active로 재개한다. 명제·scope 변경은 정의 버전을
+남은 gap_dispositions로 기록한다. 새 질문도 실제 근거 선택 후 한 번에 저장할 수 있으며, 공백은
+gap_text로 명시한 문장을 선택한다. 기존 gap_id를 꾸며내지 않는다. 새 반증은 같은 질문을 open/active로 재개한다. 명제·scope 변경은 정의 버전을
 바꾸므로 이전 미션·평가를 최신으로 간주하지 않는다. 근거 있는 불확실한 답도 종결 가능하나 보류·미검토는 숨기지 않는다.
 
 원문·상세 결과는 사건 저장소에 보존한다. 활성 문맥에는 현재 질문·핵심 근거 참조·중요 반론·다음 검사만,
@@ -70,8 +71,10 @@ Hermes의 압축을 사용하며 이미 읽은 출력이 즉시 문맥에서 사
 - report-executive / report-analyst / executive-followup: 전달에 필요한 독자별 질문과 추가 판별
 - threat-intelligence: 허용된 해시·공개 IP/도메인의 평판 확인
 모든 스킬을 매번 읽지 않는다. 이미지 내부는 forsic_image_files, 추출 파일은 forsic_search/read를 쓴다.
-image_files의 path는 E01 경로, file_path는 이미지 안의 경로다. TAR/TAR.GZ는 archive_list로
-멤버 목록을 보고 archive_read로 필요한 member_index를 읽는다. 목록만으로 내용 검토를 대신하지 않는다.
+image_files의 path는 E01 경로, file_path는 이미지 안의 경로다. search에는 file_path를 명시한다.
+루트를 검색하려면 /를 직접 선택하고 실제 반환 범위를 확인한다. TAR/TAR.GZ는 archive_list로
+멤버 목록의 source_ref를 listing_ref로 복사하고 필요한 member_index를 선택해 forsic_archive_read로 읽는다.
+목록만으로 내용 검토를 대신하지 않는다. 이어읽기는 반환 next_call을 사용한다.
 
 ## 보고와 보존
 기본 흐름은 사용자 질문 → 직접 읽기·검색 → 선택한 근거와 현재 판단 → 필요한 추가 조사 → 보고다.

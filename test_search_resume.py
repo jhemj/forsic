@@ -230,5 +230,37 @@ class SearchResumeTests(unittest.TestCase):
         self.assertEqual([h['line'] for h in final['matches']], [2])
 
 
+
+class ReopenedSearchIdentityTests(unittest.TestCase):
+    def node(self, device):
+        node = Node('/', children=[Node('/a', b'hit\nhit\n')])
+        for item in (node, *node.children):
+            original = item.lstat
+            item.lstat = lambda original=original: SimpleNamespace(**{**vars(original()), 'st_dev':device})
+        return node
+
+    def test_directory_and_current_file_resume_across_separate_reader_objects(self):
+        source = {'segments':[{'metadata':{'st_dev':55,'st_ino':7}}], 'volume_offset':4096}
+        args = {'text':'hit','max_matches':1}
+        first = search_node(self.node(101),args,source)
+        second = search_node(self.node(202),{**args,'cursor':first['next_cursor']},source)
+        self.assertEqual([h['line'] for h in first['matches']+second['matches']],[1,2])
+        self.assertFalse(second['coverage_complete'])
+        self.assertIsNone(second['next_cursor'])
+        changed = self.node(303);changed.children[0].mtime += 1
+        with self.assertRaisesRegex(ValueError,'changed'):
+            search_node(changed,{**args,'cursor':first['next_cursor']},source)
+        with self.assertRaisesRegex(ValueError,'cursor'):
+            search_node(self.node(303),{**args,'cursor':first['next_cursor']},{**source,'volume_offset':8192})
+
+    def test_host_device_remains_part_of_default_cursor_identity(self):
+        node = Node('/a',b'hit\nhit\n');args={'text':'hit','max_matches':1}
+        entries = lambda:[('/a',node.lstat,node.open,None)]
+        first = literal_search.search_entries(entries(),args,{'host':'selected'})
+        original=node.lstat
+        node.lstat=lambda:SimpleNamespace(**{**vars(original()),'st_dev':2})
+        with self.assertRaisesRegex(ValueError,'changed'):
+            literal_search.search_entries(entries(),{**args,'cursor':first['next_cursor']},{'host':'selected'})
+
 if __name__ == '__main__':
     unittest.main()

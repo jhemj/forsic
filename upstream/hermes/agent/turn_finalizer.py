@@ -121,6 +121,21 @@ def _guarded_cleanup(label: str, fn: Callable[[], Any], errors: List[str], logge
         logger.error("finalize_turn: _%s failed: %s", label, err, exc_info=True)
 
 
+def _has_active_native_goal(agent, logger) -> bool:
+    """Read only this agent's persisted goal; prose/platform is not goal authority."""
+    db = getattr(agent, "_session_db", None)
+    session_id = getattr(agent, "session_id", None)
+    if db is None or not isinstance(session_id, str) or not session_id:
+        return False
+    try:
+        from hermes_cli.goals import GoalState
+        raw = db.get_meta("goal:" + session_id)
+        return bool(raw and GoalState.from_json(raw).status == "active")
+    except Exception as exc:
+        logger.warning("Iteration handoff goal lookup unavailable (%s)", type(exc).__name__)
+        return False
+
+
 def _resolve_budget_fallback(
     agent, *, final_response, api_call_count, interrupted, failed, messages, _turn_exit_reason,
     _pending_verification_response, _pending_verification_response_previewed, logger,
@@ -145,6 +160,17 @@ def _resolve_budget_fallback(
             if _pending_verification_response_previewed:
                 agent._response_was_previewed = True
             preserved_verification_fallback = True
+        elif _has_active_native_goal(agent, logger):
+            # The existing goal controller owns the next decision and reads its
+            # current evaluation context. A tool-less extra synthesis cannot check
+            # new claims and is not needed to preserve the already recorded history.
+            final_response = (
+                "[Runtime checkpoint: iteration limit] This turn reached its tool-call limit. "
+                "The recorded tool results and current work state remain available. "
+                "No additional analysis or completion verdict was generated at this boundary. "
+                "The native goal controller will evaluate continuation within its remaining budget."
+            )
+            agent._emit_diagnostic_status("Iteration limit reached — handing off to the native goal controller")
         else:
             # _handle_max_iterations makes one extra toolless request for a summary.
             agent._emit_diagnostic_status(

@@ -1,10 +1,30 @@
 """Literal navigation over one immutable retained result, never evidence collection."""
 from .model_pages import MAX_BYTES, child, integer, size
 from .measurement import field_role
+import json
 
 MAX_CHARS = 32768
 MAX_NODES = 512
 MAX_QUERY_BYTES = 256
+
+
+def retained_coverage(source):
+    """Never drop partial-scan flags just because a path/description is long."""
+    raw = source['coverage']
+    if size(raw) <= 1600:
+        return raw
+    coverage = json.loads(raw)
+    keep = ('representation', 'encoding', 'decode_lossy', 'nul_bytes', 'records_decoded',
+            'content_bytes', 'complete_content', 'coverage_complete', 'complete_file', 'complete_member', 'scan_exhausted',
+            'has_next_cursor', 'files_skipped', 'files_completed', 'files_scanned', 'bytes_scanned',
+            'line_start', 'line_end', 'byte_start', 'byte_end', 'next_line', 'next_offset', 'truncated',
+            'stop_reason', 'match_type', 'search_text')
+    small = {k: coverage[k] for k in keep if k in coverage and
+             (coverage[k] is None or type(coverage[k]) in (bool, int, float) or
+              isinstance(coverage[k], str) and len(coverage[k]) <= 512)}
+    small['omitted_fields'] = sorted(set(coverage)-set(small))
+    small['meaning'] = 'Retained execution coverage, not this source-lookup page or semantic completeness. Omitted fields remain in the source record.'
+    return json.dumps(small, ensure_ascii=False)
 
 
 def nodes(value, path=''):
@@ -38,7 +58,7 @@ def locate(source, data, args):
     result = {
         'source_ref': {'id': source['id'], 'version': source['version']},
         'source_generation_group': source['source_generation_group'],
-        'retained_coverage': source['coverage'] if size(source['coverage']) <= 600 else {'omitted': True, 'reason': 'coverage exceeds navigation budget'},
+        'retained_coverage': retained_coverage(source),
         'retained_result_call': {'action': 'source', 'source_id': source['id'], 'source_version': source['version'], 'pointer': '', 'limit': 5},
         'view_kind': 'retained_literal_locations', 'matches': [],
         'searched_scope': 'String values of this retained tool result only; keys and non-string values excluded',

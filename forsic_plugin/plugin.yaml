@@ -18,6 +18,7 @@ provides_tools:
   - forsic_image_info
   - forsic_image_files
   - forsic_image_read
+  - forsic_archive_read
   - forsic_image_read_mission
   - forsic_reporting
   - forsic_question

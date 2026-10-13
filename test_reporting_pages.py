@@ -168,5 +168,50 @@ class ReportingPageTests(unittest.TestCase):
         self.assertNotIn('read_file', schemas)
 
 
+
+class QuestionGapScopeTests(unittest.TestCase):
+    setUp = ReportingPageTests.setUp
+    tearDown = ReportingPageTests.tearDown
+    bounded = ReportingPageTests.bounded
+    def scoped_state(self):
+        s=current(self.case)
+        sample=deepcopy(s['questions'][0]);gap=deepcopy(s['gaps'][0])
+        s['questions']=[{**sample,'id':'Q-old','goal_id':'old-goal','session_id':'old-chat'},
+                        {**sample,'id':'Q-current','goal_id':'goal','session_id':'chat'}]
+        s['gaps']=[{**gap,'id':'G-'+str(i),'question_ref':{**gap['question_ref'],'id':'Q-current' if i%2 else 'Q-old'}} for i in range(14)]
+        return s,{'_goal_id':'goal','_session_id':'chat'}
+
+    def test_owned_gap_pages_have_canonical_pointers_and_no_history_injection(self):
+        s,binding=self.scoped_state();before=deepcopy(s)
+        result=state_view(s,{}, {'action':'gaps',**binding});found=[]
+        while True:
+            self.bounded(result)
+            self.assertEqual(result['gap_scope']['mode'],'current_conversation')
+            self.assertEqual(result['gap_scope']['other_gap_count'],7)
+            for item in result['items']:
+                self.assertEqual(item['value'],select(s,item['pointer']))
+                self.assertEqual(item['value']['question_ref']['id'],'Q-current')
+                found.append(item['value']['id'])
+            if result['next_call'] is None:break
+            result=state_view(s,{}, {**result['next_call']['arguments'],**binding})
+        self.assertEqual(found,['G-'+str(i) for i in range(1,14,2)])
+        self.assertEqual(s,before)
+
+    def test_explicit_history_is_readable_and_selector_fences_pointer(self):
+        s,binding=self.scoped_state()
+        args={'action':'gaps','question_id':'Q-old',**binding}
+        result=state_view(s,{},args);self.assertEqual(result['gap_scope']['mode'],'explicit_question')
+        item=result['items'][0]
+        detail=state_view(s,{}, {**args,'snapshot_id':s['meta']['snapshot_id'],'pointer':item['pointer']})
+        self.bounded(detail)
+        with self.assertRaisesRegex(ValueError,'outside'):
+            state_view(s,{}, {**args,'snapshot_id':s['meta']['snapshot_id'],'pointer':'/gaps/1'})
+        with self.assertRaisesRegex(ValueError,'existing'):
+            state_view(s,{}, {**args,'question_id':'Q-missing'})
+        with self.assertRaisesRegex(ValueError,'snapshot'):
+            state_view(s,{}, {**args,'offset':1,'snapshot_id':'stale'})
+        all_gaps=state_view(s,{}, {'action':'state','snapshot_id':s['meta']['snapshot_id'],'pointer':'/gaps',**binding})
+        self.assertEqual(all_gaps['total'],14)
+
 if __name__ == '__main__':
     unittest.main()

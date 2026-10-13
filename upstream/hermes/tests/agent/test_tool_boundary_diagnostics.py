@@ -117,11 +117,13 @@ class ToolBoundaryTests(unittest.TestCase):
                 manager = Mock()
                 result = {"completed": True, "guardrail": decision.to_metadata()}
                 with patch.dict(prompt_turn._goal_followup_after_turn.__globals__, {
+                    "_emit": Mock(),
                     "_plan_goal_compression_recovery": lambda *a, **k: (None, None),
                     "_active_goal_manager": lambda *_: manager}):
                     self.assertIsNone(prompt_turn._goal_followup_after_turn(
                         "fixture", {"session_key": "fixture"}, result, "complete", "Stopped"))
                 manager.evaluate_after_turn.assert_not_called()
+                manager.pause.assert_called_once_with(reason="tool guardrail: same_tool_failure_halt")
 
     def test_exact_replay_blocks_but_corrected_call_can_succeed(self):
         guard = ToolCallGuardrailController(ToolCallGuardrailConfig.from_mapping(GUARD, platform="tui"))
@@ -140,10 +142,12 @@ class ToolBoundaryTests(unittest.TestCase):
         for action in ("block", "halt"):
             result = {"completed": True, "guardrail": {"action": action}}
             with patch.dict(prompt_turn._goal_followup_after_turn.__globals__, {
+                "_emit": Mock(),
                 "_plan_goal_compression_recovery": lambda *a, **k: (None, None),
                 "_active_goal_manager": lambda *_: manager}):
                 self.assertIsNone(prompt_turn._goal_followup_after_turn("fixture", {"session_key": "fixture"}, result, "complete", "Stopped"))
             manager.evaluate_after_turn.assert_not_called()
+        self.assertEqual(manager.pause.call_count, 2)
         self.assertTrue(prompt_turn._is_successful_goal_turn({"completed": True, "guardrail": {"action": "warn"}}, "complete", "Answer"))
         self.assertFalse(prompt_turn._is_successful_goal_turn({"interrupted": True}, "interrupted", "Stopped"))
 

@@ -107,4 +107,105 @@ class GroundedJudgmentTests(unittest.TestCase):
         pb=project('forsic_read',{'path':'request.log'},json.dumps(b))
         self.assertEqual(pa['result'],pb['result'])
 
+    def closure(self, **changes):
+        p=self.payload([self.ref(self.read())])
+        p.update(work_state='scoped_closed',reopen_conditions=['An independent execution receipt becomes available'],
+            gap_dispositions=[dict(gap_text=p['gaps'][0],disposition='assessed_unresolved',
+                reason='The retained request is informative but cannot establish execution',reopen_conditions=['New independent record'])])
+        p.update(changes)
+        return p
+
+    def test_direct_read_to_scoped_answer_with_exact_text_disposition_in_one_transaction(self):
+        before=current(self.case);p=self.closure();out=self.call('forsic_question',p)
+        self.assertNotIn('error',out,out);s=current(self.case);checked(s)
+        q=find(s,'questions',out['question']['question_id']);self.assertEqual(q['work_state'],'scoped_closed')
+        self.assertEqual(q['revision'],1);self.assertTrue(q['claim_refs'])
+        gs=[g for g in s['gaps'] if g['question_ref']['id']==q['id']]
+        self.assertEqual(len(gs),1);self.assertEqual(gs[0]['original_obligation'],p['gaps'][0])
+        self.assertEqual(gs[0]['disposition'],'assessed_unresolved');self.assertEqual(gs[0]['feasible_next_action'],'none')
+        for field in ('missions','tests','assessments'):self.assertEqual(s[field],before[field])
+        self.assertEqual(self.call('forsic_question',p)['question'],out['question'])
+
+    def test_new_closure_rejects_invented_ambiguous_or_missing_gap_selection_atomically(self):
+        for replacement in ([],[dict(gap_id='invented')],[dict(gap_text='different')],
+                            [dict(gap_text='Independent execution receipt not acquired',gap_id='invented')]):
+            with self.subTest(replacement=replacement):
+                p=self.closure()
+                p['gap_dispositions']=[{**p['gap_dispositions'][0],**v} for v in replacement]
+                if replacement and 'gap_id' in replacement[0] and 'gap_text' not in replacement[0]:
+                    p['gap_dispositions'][0].pop('gap_text')
+                before=current(self.case);out=self.call('forsic_question',p);self.assertIn('error',out,out)
+                after=current(self.case)
+                for field in ('questions','claims','observations','gaps'):self.assertEqual(before[field],after[field])
+
+    def test_gap_selector_contract_matches_sanitized_native_admission(self):
+        from jsonschema import Draft202012Validator
+        from tools.schema_sanitizer import sanitize_tool_schemas
+        from forsic_plugin.report_driven.investigation_state import input_problems
+        pin=sanitize_tool_schemas([{'type':'function','function':deepcopy(self.schemas['forsic_question'])}])[0]['function']['parameters']
+        for selectors in ({}, {'gap_id':'G-explicit','gap_text':'Both selected'},
+                          {'gap_id':''}, {'gap_text':''}, {'gap_id':'G-explicit'}, {'gap_text':'Exact gap text'}):
+            p={'operation_id':'selector-contract','gap_dispositions':[dict(disposition='assessed_unresolved',
+                reason='No supported discriminator',reopen_conditions=['New record'],**selectors)]}
+            valid=len(selectors)==1 and bool(next(iter(selectors.values())))
+            with self.subTest(selectors=selectors):
+                self.assertEqual(not list(Draft202012Validator(pin).iter_errors(p)),valid)
+                self.assertEqual(not input_problems(p,pin),valid)
+        p=self.closure();p['gap_dispositions'][0].pop('gap_text');before=current(self.case)
+        out=self.call('forsic_question',p)
+        self.assertIn('error',out);self.assertIn('gap_dispositions[0]',out['error'])
+        self.assertIn('gap_id',out['error']);self.assertIn('gap_text',out['error'])
+        after=current(self.case)
+        for field in ('questions','claims','observations','gaps'):self.assertEqual(before[field],after[field])
+        p['gap_dispositions'][0]['gap_text']=p['gaps'][0]
+        self.assertNotIn('error',self.call('forsic_question',p))
+
+    def test_no_synthetic_gap_for_grounded_closed_answer_without_declared_gaps(self):
+        p=self.closure(gaps=[],gap_dispositions=[]);out=self.call('forsic_question',p)
+        self.assertNotIn('error',out,out);s=current(self.case);checked(s)
+        self.assertFalse([g for g in s['gaps'] if g['question_ref']['id']==out['question']['question_id']])
+
+    def test_update_cannot_add_unaccounted_gap_while_closing(self):
+        out=self.call('forsic_question',self.payload([self.ref(self.read())]));q=find(current(self.case),'questions',out['question']['question_id'])
+        p=self.closure(question_id=q['id'],expected_revision=q['revision'],operation_id='update-close')
+        p['gaps'].append('A second material gap')
+        self.assertIn('error',self.call('forsic_question',p))
+        p['gap_dispositions'].append(dict(gap_text=p['gaps'][1],disposition='assessed_unresolved',reason='Explicit remaining limit',reopen_conditions=['New records']))
+        out=self.call('forsic_question',p);self.assertNotIn('error',out,out)
+        s=current(self.case);checked(s)
+        self.assertTrue(all(g['disposition']=='assessed_unresolved' for g in s['gaps'] if g['question_ref']['id']==q['id']))
+
+    def test_historical_generated_gap_is_preserved_after_grounded_update(self):
+        q=find(current(self.case),'questions',self.qid);before=list(q['remaining_gap_ids'])
+        p=self.payload([self.ref(self.read())]);p.update(question_id=q['id'],expected_revision=q['revision'],operation_id='legacy-update')
+        p.pop('gaps');p.pop('question');p.pop('scope')
+        out=self.call('forsic_question',p);self.assertNotIn('error',out,out)
+        q=find(current(self.case),'questions',self.qid)
+        self.assertEqual(q['remaining_gap_ids'],before)
+
+
+class CitationSelectionViewTests(unittest.TestCase):
+    setUp = GroundedJudgmentTests.setUp
+    call = GroundedJudgmentTests.call
+    read = GroundedJudgmentTests.read
+    payload = GroundedJudgmentTests.payload
+    ref = GroundedJudgmentTests.ref
+    def test_preview_is_exact_selected_field_not_whole_report_or_semantic_approval(self):
+        (self.case.root/'banner.log').write_text('==== HEADER ====\nRequested '+('detail '*40)+'\nOutcome not recorded\n')
+        r=self.read('banner.log')
+        first,second=r['presented_spans'][:2]
+        self.assertEqual(first['text_preview'],'==== HEADER ====')
+        self.assertTrue(first['preview_complete'])
+        self.assertFalse(second['preview_complete'])
+        from forsic_plugin.report_driven.grounded_judgment import selection
+        selected=selection(self.case,current(self.case),second['citation_ref'])
+        self.assertTrue(selected['literal'].startswith(second['text_preview']))
+        self.assertGreater(len(selected['literal']),len(second['text_preview']))
+        out=self.call('forsic_question',self.payload([second['citation_ref']]))
+        lookup=out['question']['gap_lookup']
+        self.assertEqual(lookup['arguments']['question_id'],out['question']['question_id'])
+        self.assertFalse(out['question']['semantic_approval'])
+        gaps=self.call(lookup['tool'],lookup['arguments']);self.assertNotIn('error',gaps,gaps)
+        self.assertEqual(gaps['gap_scope']['mode'],'explicit_question')
+
 if __name__=='__main__':unittest.main()

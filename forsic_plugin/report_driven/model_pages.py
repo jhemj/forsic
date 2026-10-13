@@ -137,6 +137,41 @@ def state_view(state, audit, args):
         'other_question_count':sum(not owned(q) for q in state['questions']),
         'new_question_tool':'forsic_question',
         'meaning':'Case-wide retained records remain readable. Only current-goal/current-conversation questions are editable here; no ownership is transferred.'}
+    question_id = args.get('question_id')
+    if question_id is not None:
+        if args['action'] != 'gaps' or not any(q['id'] == question_id for q in state['questions']):
+            raise ValueError('question_id must select an existing question for action=gaps')
+    # Preserve canonical state pointers while paging only the selected questions.
+    # Explicit historical selection remains readable; it grants no write ownership.
+    if args['action'] == 'gaps':
+        selected_ids = {question_id} if question_id else {q['id'] for q in state['questions'] if owned(q) or not bound}
+        gaps = {str(i): g for i, g in enumerate(state['gaps']) if g['question_ref']['id'] in selected_ids}
+        path = args.get('pointer', '/gaps')
+        if ('pointer' in args or args.get('offset', 0)) and args.get('snapshot_id') != snapshot:
+            raise ValueError('State changed or snapshot_id missing; read gaps again before paging')
+        if path == '/gaps':
+            selected = gaps
+        else:
+            match = re.match(r'/gaps/(0|[1-9][0-9]*)(?:/|$)', path)
+            if not match or match[1] not in gaps:
+                raise ValueError('Pointer is outside the selected question gaps; use its returned canonical pointer')
+            selected = select(state, path)
+        envelope = {'snapshot_id': snapshot, 'view_kind': 'report_state', 'conversation_scope': context,
+                    'audit': audit_view(audit), 'audit_scope': 'case-wide summary, independent of this gap filter',
+                    'requirement_count': len(state['requirements']), 'requirements_pointer': '/requirements',
+                    'gap_scope': {'question_id': question_id, 'mode': 'explicit_question' if question_id else 'current_conversation' if bound else 'case',
+                                  'selected_count': len(gaps), 'other_gap_count': len(state['gaps']) - len(gaps)},
+                    'meaning': 'This view is only the selected gap scope. Case-wide records remain at state pointer /gaps; no records are changed.'}
+        continuation_call = {'tool': 'forsic_reporting', 'arguments': {
+            'action': 'gaps', 'snapshot_id': snapshot, 'pointer': path,
+            'offset': 9999999999999999999, **({'question_id': question_id} if question_id else {})}}
+        # Reserve the continuation envelope within the same bounded page budget.
+        result = page(selected, path, args, {**envelope, 'next_call': continuation_call})
+        if result.get('next_offset') is not None:
+            result['next_call']['arguments']['offset'] = result['next_offset']
+        else:
+            result['next_call'] = None
+        return result
     continuation = 'pointer' in args or args.get('offset', 0) != 0
     if continuation and args.get('snapshot_id') != snapshot:
         raise ValueError('State changed or snapshot_id missing; read state again before paging')
@@ -151,10 +186,6 @@ def state_view(state, audit, args):
             call=image_read_reference_call(selected) if question and owned(question) and question['work_state'] in ('open','active') else None
             if call and size(call)<MAX_BYTES-2000:envelope['next_call']=call
         return page(selected, path, args, envelope)
-    if args['action'] == 'gaps':
-        return page(state['gaps'], '/gaps', args, {'snapshot_id': snapshot, 'view_kind': 'report_state',
-                    'conversation_scope':context,'audit': audit_view(audit), 'requirement_count': len(state['requirements']),
-                    'requirements_pointer': '/requirements'})
     from .current_judgment import navigation_view
     questions = [dict(editable_in_current_conversation=owned(q),current_judgment=navigation_view(state,q), id=q['id'], version=q['version'], revision=q['revision'], definition_version=q['definition_version'], question_preview=q['question'][:120],
                       assessment=q['assessment'], work_state=q['work_state'],
@@ -176,7 +207,7 @@ def state_view(state, audit, args):
     return result
 
 
-def source_view(source, data, args):
+def source_view(source, data, args, *, include_acquisition_context=True):
     continuation = 'pointer' in args or args.get('offset', 0) != 0
     if (continuation or 'source_version' in args or args.get('locator_cursor') is not None) and args.get('source_version') != source['version']:
         raise ValueError(
@@ -195,7 +226,12 @@ def source_view(source, data, args):
         raise ValueError('locator_cursor requires its original literal query')
     envelope = {'source_ref': {'id': source['id'], 'version': source['version']},
                 'meaning': '보존된 도구 반환 재제시; 새 수집·독립 근거가 아님'}
-    from .measurement import measurement_view
+    from .source_locator import retained_coverage
+    envelope['retained_coverage'] = retained_coverage(source)
+    from .measurement import measurement_view, acquisition_context
+    if include_acquisition_context:
+        envelope['presentation_contract'] = 'acquisition-context-v1'
+        envelope['acquisition_context'] = acquisition_context(data, args.get('pointer', ''))
     measurement=measurement_view(data)
     if measurement:envelope['measurement']=measurement
     original = {**envelope, 'source': source, 'result': data}

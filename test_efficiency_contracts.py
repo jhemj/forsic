@@ -57,6 +57,24 @@ class EfficiencyContracts(unittest.TestCase):
             why_it_matters='Distinguish request from execution',tool_name='forsic_read',tool_arguments={'path':'request.log'},
             inconclusive_rule='No execution receipt',limits=['No attribution'],reopen_conditions=['New independent receipt'],**changes)
 
+    def test_question_gap_schema_matches_native_rejection_and_corrected_save(self):
+        from tools.schema_sanitizer import sanitize_tool_schemas
+        wire = sanitize_tool_schemas([{'type': 'function', 'function': self.schemas['forsic_question']}])[0]['function']['parameters']
+        conditions = wire['properties']['gap_dispositions']['items']['properties']['reopen_conditions']
+        self.assertEqual(conditions['minItems'], 1)
+        self.assertIn('pattern', conditions['items'])
+        before = find(current(self.case), 'questions', self.qid)
+        payload = dict(operation_id='gap-repair', question_id=self.qid, expected_revision=before['revision'],
+                       gap_dispositions=[dict(gap_id=before['remaining_gap_ids'][0], disposition='resolved',
+                                              reason='Compared the retained source', reopen_conditions=[])])
+        rejected = self.call('forsic_question', payload)
+        self.assertIn('gap_dispositions[0].reopen_conditions', rejected['error'])
+        self.assertEqual(find(current(self.case), 'questions', self.qid), before)
+        payload['gap_dispositions'][0]['reopen_conditions'] = ['New contradictory record']
+        saved = self.call('forsic_question', payload)
+        self.assertNotIn('error', saved, saved)
+        self.assertEqual(find(current(self.case), 'gaps', before['remaining_gap_ids'][0])['disposition'], 'resolved')
+
     def test_invalid_native_plan_has_no_mutation_and_recovers_once(self):
         p=self.plan();before=current(self.case)
         for args in ({},{'path':None},{'path':'request.log','line_count':True},{'path':'request.log','invented':1}):
@@ -161,12 +179,19 @@ class EfficiencyContracts(unittest.TestCase):
         for name,branch in branches.items():
             native=sanitize_tool_schemas([{'type':'function','function':self.schemas[name]}])[0]['function']['parameters']
             self.assertEqual(branch['required'],native['required'])
-            self.assertEqual(set(branch['properties']),set(native['properties'])-{'mission_id','mission_version'})
+            # Retained search continuation is direct exploration, not a new plan.
+            expected=set(native['properties'])-{'mission_id','mission_version','cursor_ref'}
+            if name=='forsic_image_files':expected.add('member_index')  # Retained physical plans still admit legacy archive reads.
+            self.assertEqual(set(branch['properties']),expected)
             self.assertFalse(branch['additionalProperties'])
             for key,field in branch['properties'].items():
                 if name=='forsic_image_files' and key=='action':
-                    self.assertEqual(native['properties'][key],{**field,
-                        'enum':[action for action in field['enum'] if action not in ('read','read_bytes')]})
+                    self.assertEqual(set(field['enum'])-set(native['properties'][key]['enum']),{'read','read_bytes','archive_read'})
+                elif name=='forsic_image_files' and key=='member_index':
+                    self.assertNotIn(key,native['properties'])
+                elif name=='forsic_image_files' and key=='file_path':
+                    self.assertEqual({k:v for k,v in field.items() if k!='description'},
+                                     {k:v for k,v in native['properties'][key].items() if k!='description'})
                 elif key!='reason':self.assertEqual(field,native['properties'][key])
         args={'action':'read','file_path':'/var/log/synthetic.log','member_index':0}
         self.assertTrue(all(input_problems(args,branch) for branch in branches.values()))

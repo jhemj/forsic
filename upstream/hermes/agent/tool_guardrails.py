@@ -382,6 +382,12 @@ class ToolCallGuardrailController:
         if failed is None:
             failed, _ = classify_tool_failure(tool_name, result)
         warnings = self.config.warnings_enabled
+        # Public aliases of one backend must share the same failure budget.
+        # Only a registered, profile-scoped comparison callback supplies this;
+        # neither model arguments nor result metadata can choose the group.
+        failure_group = comparison(tool_name, args).get('failure_group', tool_name)
+        if not isinstance(failure_group, str) or not failure_group:
+            failure_group = tool_name
 
         if failed:
             # An identical failing call is only a REPLAY if nothing landed in between;
@@ -389,7 +395,7 @@ class ToolCallGuardrailController:
             if self._progress_since_failure.pop(signature, False):
                 self._exact_failure_counts.pop(signature, None)
             exact_count = self._exact_failure_counts[signature] = self._exact_failure_counts.get(signature, 0) + 1
-            same_count = self._same_tool_failure_counts[tool_name] = self._same_tool_failure_counts.get(tool_name, 0) + 1
+            same_count = self._same_tool_failure_counts[failure_group] = self._same_tool_failure_counts.get(failure_group, 0) + 1
             self._no_progress.pop(signature, None)
             # same_tool_failure counts DIFFERENT args on one tool; for failure-tolerant
             # tools a run of distinct red commands is diagnosis, not a loop — warn, never halt.
@@ -415,7 +421,7 @@ class ToolCallGuardrailController:
             return ToolGuardrailDecision(tool_name=tool_name, count=exact_count, signature=signature)
 
         self._exact_failure_counts.pop(signature, None)
-        self._same_tool_failure_counts.pop(tool_name, None)
+        self._same_tool_failure_counts.pop(failure_group, None)
         # A successful mutation is progress for every failing signature still counted
         # this turn. Pure loops never mutate between attempts, so the replay detector keeps its teeth.
         if tool_name in PROGRESS_RESET_TOOL_NAMES or file_mutation_result_landed(tool_name, result):

@@ -24,3 +24,31 @@ def measurement_view(data):
             'not_measured':['name inventory','past existence','execution or success'],
             'scope_pointers':['/'+k for k in scope_fields],
             **({'scope_pointer':'/'+scope_fields[0]} if scope_fields else {}), 'meaning':'No cursor means scan exhausted, not full coverage. This is a presentation of retained counters, not new evidence.'}
+
+
+# Shared by source navigation, observation storage, report and native pruning.
+READ_SCOPE_FIELDS = ('representation', 'encoding', 'decode_lossy', 'nul_bytes', 'records_decoded',
+    'content_bytes', 'complete_content', 'byte_start', 'byte_end', 'line_start', 'line_end',
+    'next_line', 'next_offset', 'complete_file', 'complete_member', 'coverage_complete',
+    'scan_exhausted', 'files_skipped', 'files_completed', 'files_scanned', 'bytes_scanned',
+    'stop_reason', 'match_type', 'search_text', 'scope')
+
+
+def acquisition_context(data, pointer):
+    """Returned measurement limits; not an agent's claim or semantic classification."""
+    context = {'field_role': field_role(data, pointer), 'tool': data.get('tool', '')}
+    scope = {k: data[k] for k in READ_SCOPE_FIELDS if k in data and
+             (data[k] is None or type(data[k]) in (bool, int, float) or
+              isinstance(data[k], str) and len(data[k]) <= 240)}
+    omitted = [k for k in READ_SCOPE_FIELDS if k in data and k not in scope]
+    if omitted:scope['omitted_fields'] = omitted
+    if 'next_cursor' in data:scope['has_next_cursor'] = data['next_cursor'] is not None
+    if pointer == '/text' and 'base64' in data:
+        # Older byte results lack the explicit codec/decoder fields. The retained
+        # text is still a byte preview, not a decoded authentication/other record.
+        scope.update(representation='byte_preview', records_decoded=False)
+    elif re.fullmatch(r'/(lines|matches)/(0|[1-9][0-9]*)/text', pointer):
+        scope.setdefault('representation', 'matched_text' if pointer.startswith('/matches/') else 'line_text')
+        scope.setdefault('records_decoded', False)
+    context['returned_scope'] = scope
+    return context

@@ -91,7 +91,10 @@ def catalog():
 def source_record(event):
     data=event['data']
     external=data.get('source_kind')=='external_intelligence'
-    coverage={k:data[k] for k in ('scope','line_start','line_end','byte_start','byte_end','next_line','next_offset','coverage_complete','complete_file','outcome','error','source_url','lookup_at','limitation','search_complete','truncated','allocated_only','files_skipped','files_scanned','files_completed','scan_exhausted','stop_reason','scope_note') if k in data}
+    coverage={k:data[k] for k in ('path','file_path','search_path','search_text','match_type','bytes_scanned','scope','line_start','line_end','byte_start','byte_end','next_line','next_offset','coverage_complete','complete_file','complete_member','identity_strength','identity_limitation','outcome','error','source_url','lookup_at','limitation','search_complete','truncated','allocated_only','files_skipped','files_scanned','files_completed','scan_exhausted','stop_reason','scope_note') if k in data}
+    from .measurement import READ_SCOPE_FIELDS
+    if 'representation' in data:
+        coverage.update({k:data[k] for k in READ_SCOPE_FIELDS if k in data})
     coverage['has_next_cursor']=bool(data.get('next_cursor'))
     for key in ('skipped','failed','skipped_files','failed_files','skips'):
         if key in data:
@@ -164,10 +167,10 @@ def current(case):
         for i, explanation in enumerate(note.get('alternatives',[])):
             h=dict(id=f'H-{qid}-{digest(explanation)[:16]}',version=ver,question_ref=ref('question',q),explanation=explanation,trigger_refs=cited,support_refs=[],counterevidence_refs=[],assumptions=['기존 노트의 경쟁 설명; 판별 미완료'],prediction='다음 미션에서 판별 조건 설정',compatibility='양립 가능성 미평가',status='candidate')
             state['hypotheses'].append(h);q['hypothesis_refs'].append(ref('hypothesis',h))
-        reasons=list(dict.fromkeys(note.get('critical_gaps',[])+note.get('gaps',[]))) or ['현재 답과 원문을 판별 조건에 따라 평가해야 함']
-        for i,reason in enumerate(reasons):
-            g=dict(id=f'G-{qid}-{digest(reason)[:16]}',version=ver,question_ref=ref('question',q),section_targets=['E01','E02','A05','A11'],original_obligation=reason,kind='unassessed_result' if cited else 'unpresented_source',disposition='open',impact='decision_critical' if reason in note.get('critical_gaps',[]) else 'unassessed',reason=reason,basis_refs=cited,feasible_next_action='evaluate_result' if cited else 'read_source',missing_preconditions=[],reopen_conditions=['새 원문·반론·질문 범위 정정'],resolution_refs=[])
-            state['gaps'].append(g);q['remaining_gap_ids'].append(g['id'])
+        from .investigation_state import note_gap_records
+        projected_gaps = note_gap_records(note, q, cited)
+        state['gaps'].extend(projected_gaps)
+        q['remaining_gap_ids'].extend(g['id'] for g in projected_gaps)
         for i, action in enumerate(note.get('next_checks',[])):
             state['actions'].append(dict(id=f'ACT-{qid}-{i}',version=ver,action_kind='recommended',title=action,rationale=note['question'],basis_refs=cited,execution_receipt=None,owner=None,due_at=None,verification='결과와 질문 답의 실제 변화 확인'))
         for i,tm in enumerate(note.get('timeline',[])):
@@ -614,7 +617,9 @@ def assess(case,s,p):
         presented='full_field' if start==0 and end==len(raw.encode()) else 'exact_excerpt'
         if not body:presented='metadata'
         check_citation_view(m['required_view'],presented,citation_index)
-        ob=dict(id='O-'+digest(c)[:20],version=src['version'],source_ref=ref('source',src),statement='원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=literal,canonical_sha256=hashlib.sha256(literal.encode()).hexdigest(),presented_view=presented,coordinate_basis='retained tool-result scalar UTF-8 bytes; not original image offset',byte_start=start,byte_end=end,interpretation_limit='이 필드·제시 구간의 기록만 확인; 성공·승인·귀속·전체 부재는 별도 판별')
+        from .measurement import acquisition_context
+        context=acquisition_context(case.event(src['id'])['data'],c['pointer'])
+        ob=dict(id='O-'+digest({'citation':c,'acquisition_context':context})[:20],acquisition_context=context,version=src['version'],source_ref=ref('source',src),statement='원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=literal,canonical_sha256=hashlib.sha256(literal.encode()).hexdigest(),presented_view=presented,coordinate_basis='retained tool-result scalar UTF-8 bytes; not original image offset',byte_start=start,byte_end=end,interpretation_limit='이 필드·제시 구간의 기록만 확인; 성공·승인·귀속·전체 부재는 별도 판별')
         prior=next((x for x in s['observations'] if x['id']==ob['id']),None)
         if prior and definition(prior)==definition(ob):ob=deepcopy(prior)
         observations.append(ob)

@@ -51,8 +51,9 @@ def register(ctx):
     }
     from .indicators import schema_properties
     specs['indicators'] = ('Case-local indicator registry. Load organize-indicators. Keep exact source citations and raw values; observed is not malicious. list/get/export make no network requests. upsert merges provenance by canonical value. CSV/JSON export is local only, not a blocklist or automatic delivery.', schema_properties(), ['action'])
-    specs['search'][1]['cursor'] = {'type':'object','description':'Opaque next_cursor from the same search. Continue unchanged; not a new search or absence proof.'}
-    specs['image_files'][1]['cursor'] = {'type':'object','description':'Opaque next_cursor from the same literal search, including its exact file/byte position.'}
+    from .search_selection import reference_schema
+    specs['search'][1]['cursor_ref'] = reference_schema()
+    specs['image_files'][1]['cursor_ref'] = reference_schema()
     image_description, image_properties, image_required = specs['image_files']
     from .image_reader import image_action_contract, image_action_problems
     image_contract=image_action_contract()
@@ -64,7 +65,7 @@ def register(ctx):
     for key in ('search','image_files'):
         desc, props, req = specs[key]
         props.update(max_files={'type':'integer','minimum':1,'maximum':500},max_bytes={'type':'integer','minimum':1,'maximum':33554432},max_matches={'type':'integer','minimum':1,'maximum':60},max_seconds={'type':'number','exclusiveMinimum':0,'maximum':25})
-        specs[key] = (desc + ' Search streams large text files; follow next_cursor to continue inside a file. Skipped/partial files remain explicit. Image hash returns a whole allocated file SHA-256, not a slice or the E01 container hash.', props, req)
+        specs[key] = (desc + ' Search streams large text files; copy next_call with cursor_ref to continue the chosen page. A complete literal scan covers only that term and target, not all behavior. Skipped/partial files remain explicit. Image hash returns a whole allocated file SHA-256, not a slice or the E01 container hash.', props, req)
     from .report_driven.contracts import Gap, Requirement
     from .report_driven.investigation_state import compact_input_schemas
     gap_schema = Gap.model_json_schema()
@@ -79,7 +80,7 @@ def register(ctx):
     mutation_actions = {'forsic_' + action: action for action in compact}
     mutation_actions['forsic_assess'] = 'assess_selected'
     descriptions = {
-        'question': 'Save or revise the current answer with selected evidence and limits. A mission is NOT required. New question: operation_id, question, scope, answer; omit question_id/expected_revision. Update: question_id and CURRENT expected_revision. To adopt a grounded answer provide judgment with copied citation_refs, explicit counter_citation_refs, reasoning, assumptions and limitations, plus answer and reason. Exact versions/coordinates are resolved by the program. Stable operation_id is for identical retries. Priority and scoped_closed/reopen_conditions describe work disposition, not certainty. Do not edit another conversation question.',
+        'question': 'Save or revise the current answer with selected evidence and limits. A mission is NOT required. New question: operation_id, question, scope, answer; omit question_id/expected_revision. Update: question_id and CURRENT expected_revision. To adopt a grounded answer provide judgment with copied citation_refs, explicit counter_citation_refs, reasoning, assumptions and limitations, plus answer and reason. Exact versions/coordinates are resolved by the program. For a new scoped answer after reading, include judgment, priority, reason/reopen_conditions and gap_dispositions with exact gap_text from gaps/critical_gaps; no advance question registration is needed. gap_id selects only an existing returned ID. Stable operation_id is for identical retries. Priority and scoped_closed/reopen_conditions describe work disposition, not certainty. Do not edit another conversation question.',
         'mission': 'OPTIONAL: plan a discriminating check when advance support/refute/inconclusive conditions are useful. Ordinary reading, searching and grounded question updates need no mission. This stores a plan, not execution. Use its exact next_call for execution; preserve limits and reopening conditions.',
         'assess': 'Evaluate an OPTIONAL planned test in one call. Select mission_id, result_id, current question expected_revision and citation_refs returned by reading/source lookup, then state the local outcome, reasoning, limitations and next check. The program resolves exact versions and spans. No preparation receipt is needed. A test outcome does not automatically change the overall answer; use forsic_question for aggregate judgment.',
     }
@@ -91,6 +92,9 @@ def register(ctx):
         'properties':{'reason':{'type':'string'},**deepcopy(properties)},
         'required':list(required),'additionalProperties':False}
         for suffix,(_,properties,required) in specs.items() if 'forsic_'+suffix in EVIDENCE_TOOLS}
+    # Continuation is direct exploration. Opaque cursor restoration is not a new planned check.
+    for native_schema in evidence_schemas.values():
+        native_schema['properties'].pop('cursor_ref', None)
     from .image_reader import image_read_entry_schema
     evidence_schemas['forsic_image_read'] = image_read_entry_schema()
     for linkage in ('mission_id','mission_version'):
@@ -99,7 +103,7 @@ def register(ctx):
         'enum': list(evidence_schemas)}
     compact['mission']['properties']['tool_arguments'] = {'type':'object',
         'anyOf': [{'title':name,**deepcopy(schema)} for name,schema in evidence_schemas.items()],
-        'description':'Exact native arguments. Use the branch named by tool_name, including its required fields. Omit mission_id and mission_version before planning. The selected tool is also validated before a mission is saved.'}
+        'description':'Exact native arguments for a new check. Use the branch named by tool_name, including required fields; omit mission_id/mission_version. Continue existing searches directly with their next_call, without another mission. The selected tool is validated before a mission is saved.'}
     # A reference entry has three unconditional required fields. It is not a
     # physical action/plan; it reuses Case.invoke's existing admission and reader.
     from .report_driven.investigation_state import image_read_reference_schema
@@ -110,11 +114,19 @@ def register(ctx):
     direct_read_schema=image_read_entry_schema()
     specs['image_read'] = ('Read or continue one explicitly named allocated file inside an E01. path (E01), file_path (inside image) and action (read/read_bytes) are all required on EVERY call, including next_line/offset continuation. Copy exact paths from retained results. Uses the same image reader and canonical evidence records. For a saved unexecuted image-read mission use forsic_image_read_mission. Use forsic_image_read with these same arguments when planning a mission; the ledger retains canonical image-reader identity.',
         direct_read_schema['properties'],direct_read_schema['required'])
+    from .archive_selection import entry_schema
+    archive_schema = entry_schema()
+    specs['archive_read'] = ('Read one member explicitly selected from a retained archive_list page. Copy its source_ref as listing_ref and choose a displayed member_index. Optional offset/length select member bytes. The program checks the current case binding, retained version, original image segments/volume and archive/member metadata before using the existing reader. Metadata checks cannot prove unchanged contents when metadata is preserved. No extraction, execution, links, path overrides or mission required.',
+        archive_schema['properties'], archive_schema['required'])
     # The canonical physical plan above retains all actions for existing records.
     # Expose content reads only through the entry where file_path is required.
     description,properties,required=specs['image_files']
-    properties['action']={**properties['action'],'enum':[a for a in properties['action']['enum'] if a not in ('read','read_bytes')]}
-    specs['image_files']=('Inspect allocated E01 volumes, directories, metadata, archives, or literal search without mounting. Direct content reads and continuations use forsic_image_read with path, action and file_path. A single discovered volume is selected automatically; for multiple volumes select volume_offset. archive_list returns TAR/TAR.GZ member indexes; archive_read reads one explicit member_index. Search is bounded: follow returned next_cursor; partial or skipped scope is not absence. No extraction or execution.',properties,required)
+    actions = [a for a in properties['action']['enum'] if a not in ('read','read_bytes','archive_read')]
+    public_contract = image_action_contract(actions=actions)['properties']
+    for key in ('action', 'file_path'):
+        properties[key] = public_contract[key]
+    properties.pop('member_index')
+    specs['image_files']=('Inspect allocated E01 volumes, directories, metadata, archive listings, or literal search without mounting. Direct file content uses forsic_image_read. archive_list returns TAR/TAR.GZ member indexes and source_ref for forsic_archive_read. A single discovered volume is selected automatically; for multiple volumes select volume_offset. Search is bounded: copy next_call with cursor_ref. Complete means this literal term in this scope, not all behaviors or the whole system. No extraction or execution.',properties,required)
     compact['mission']['properties']['gap_id'] = {**compact['mission']['properties']['gap_id'],
         'description': 'Select one current unresolved gap belonging to this question. Copy its ID from state/gaps; never invent one.'}
     compact['mission']['required'] = [*compact['mission']['required'], 'gap_id']
@@ -127,7 +139,7 @@ def register(ctx):
             if key == 'disposition' and key in legacy_properties:
                 field = {**field, 'enum': sorted(set(field['enum']) | set(legacy_properties[key]['enum']))}
             legacy_properties[key] = field
-    specs['reporting'] = ('Read current state/gaps and exact retained sources; render/finalize reports. Use forsic_question for grounded answers. Mission/assess are optional planned tests. requirement/gap are legacy report-applicability actions only. Rendering does not complete the investigation. Optional review is advisory.', {'action':{'type':'string','enum':['state','gaps','source','requirement','gap','review','render','publish']},'snapshot_id':string,'source_id':string,'review_id':string,'question_ids':{'type':'array','items':string},'redact':strings,'payload':{'type':'object','properties':legacy_properties,'additionalProperties':False,'description':'Only legacy requirement/gap applicability fields. Question/mission/assessment writes use their dedicated tools.'}},['action'])
+    specs['reporting'] = ('Read current state and exact retained sources; gaps defaults to current-conversation questions, or select question_id; render/finalize reports. Use forsic_question for grounded answers. Mission/assess are optional planned tests. requirement/gap are legacy report-applicability actions only. Rendering does not complete the investigation. Optional review is advisory.', {'action':{'type':'string','enum':['state','gaps','source','requirement','gap','review','render','publish']},'snapshot_id':string,'source_id':string,'review_id':string,'question_id':{'type':'string','description':'For action=gaps, select one exact question ID. Omit to show current-conversation gaps; case-wide history stays in state /gaps.'},'question_ids':{'type':'array','items':string},'redact':strings,'payload':{'type':'object','properties':legacy_properties,'additionalProperties':False,'description':'Only legacy requirement/gap applicability fields. Question/mission/assessment writes use their dedicated tools.'}},['action'])
     description, properties, required = specs['reporting']
     properties['action']['enum'].append('finalize')
     properties['bundle_id'] = {'type':'string','description':'Exact rendered bundle_id for action=finalize. Select the completed delivery copy only, never intermediate drafts. Also pass its current snapshot_id. This queues only its four HTML/Word files for the approved case topic; not investigation closure or publication approval.'}
@@ -158,7 +170,7 @@ def register(ctx):
     for suffix, (description, properties, required) in specs.items():
         name = "forsic_" + suffix
         schema = {"name": name, "description": description, "parameters": {
-            "type": "object", "properties": properties if name in mutation_actions else {"reason": {"type": "string", "description": "A short public explanation of what you are checking and why."}, **properties},
+            "type": "object", "properties": properties if name in mutation_actions or suffix == 'archive_read' else {"reason": {"type": "string", "description": "A short public explanation of what you are checking and why."}, **properties},
             "required": required, "additionalProperties": False}}
         if suffix == 'reporting': schema['parameters']['$defs'] = report_defs
 
@@ -215,7 +227,7 @@ def register(ctx):
                 if tool == 'forsic_note':
                     from .notes import model_view
                     return json.dumps(model_view(json.loads(raw), args), ensure_ascii=False)
-                if tool in EVIDENCE_TOOLS or tool in ('forsic_image_read_mission','forsic_image_read'):
+                if tool in EVIDENCE_TOOLS or tool in ('forsic_image_read_mission','forsic_image_read','forsic_archive_read'):
                     from .model_results import evidence_view
                     from .report_driven.grounded_judgment import read_refs
                     return json.dumps(read_refs(case,evidence_view(json.loads(raw), case)), ensure_ascii=False)
@@ -241,7 +253,9 @@ def register(ctx):
                     'next_step':'Inspect retained state before retrying. This is not evidence absence or a request for new intake.'}, ensure_ascii=False)
 
         from .loop_comparison import project
-        ctx.register_tool(name=name, toolset="forsic", schema=schema, handler=handler, description=description, loop_comparison=partial(project, name))
+        from .context_results import summarize
+        ctx.register_tool(name=name, toolset="forsic", schema=schema, handler=handler, description=description,
+            loop_comparison=partial(project, name), result_summary=partial(summarize, name))
 
     def inspect(args, session_id='', task_id='', **kwargs):
         try:

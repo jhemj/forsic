@@ -97,16 +97,14 @@ class Case:
                                  'reports': ['executive', 'analyst']}}
 
     def read_bytes(self, args):
-        import base64
+        from .image_reader import byte_preview
         path = self.path(args['path'])
         offset = max(0, int(args.get('offset', 0)))
         with path.open('rb') as stream:
             stream.seek(offset)
             raw = stream.read(min(12000, max(1, int(args.get('length', 4096)))))
-        end = offset + len(raw)
-        return {'path': str(path.relative_to(self.root)), 'byte_start': offset, 'byte_end': end,
-                'base64': base64.b64encode(raw).decode(), 'text': raw.decode('utf-8', errors='replace'),
-                'sha256_slice': hashlib.sha256(raw).hexdigest(), 'next_offset': end if end < path.stat().st_size else None}
+        preview = byte_preview(raw, offset, path.stat().st_size)
+        return {'path': str(path.relative_to(self.root)), **preview, 'complete_file': preview['complete_content']}
 
     def verify(self, args):
         path = self.path(args['path'])
@@ -214,20 +212,23 @@ class Case:
                 "stdout": proc.stdout.decode(errors="replace")[:24000],
                 "stderr": proc.stderr.decode(errors="replace")[:2000], "is_integrity_verification": False}
 
-    def image_files(self, args):
+    def image_files(self, args, *, archive_selection=None):
         from .image_reader import validate_image_action
         validate_image_action(args)
         path = self.path(args['path'])
         reader = Path(__file__).with_name('image_reader.py')
         search = Path(__file__).with_name('literal_search.py')
         container = 'forsic-read-' + uuid.uuid4().hex
+        parser_args = {k: v for k, v in args.items() if not k.startswith('_')}
+        if archive_selection is not None:
+            parser_args['_archive_selection'] = archive_selection
         command = ['docker', 'run', '--rm', '--name', container, '--network', 'none', '--read-only', '--cap-drop', 'ALL',
                    '--security-opt', 'no-new-privileges', '--user', f'{os.getuid()}:{os.getgid()}',
                    '--memory', '8g', '--pids-limit', '64',
                    '--mount', f'type=bind,src={self.root},dst=/evidence,readonly',
                    '--mount', f'type=bind,src={reader},dst=/reader.py,readonly',
                    '--mount', f'type=bind,src={search},dst=/literal_search.py,readonly',
-                   'forsic-dissect:3.25.1', 'python', '-B', '/reader.py', '/evidence/' + str(path.relative_to(self.root)), json.dumps(args)]
+                   'forsic-dissect:3.25.1', 'python', '-B', '/reader.py', '/evidence/' + str(path.relative_to(self.root)), json.dumps(parser_args)]
         try:
             proc = subprocess.run(command, capture_output=True, timeout=300, check=False)
         except subprocess.TimeoutExpired:
@@ -285,7 +286,9 @@ class Case:
         submitted_tool = tool
         reference_entry = tool=='forsic_image_read_mission'
         direct_read_entry = tool=='forsic_image_read'
-        if reference_entry or direct_read_entry:
+        archive_entry = tool=='forsic_archive_read'
+        archive_selection = None
+        if reference_entry or direct_read_entry or archive_entry:
             tool='forsic_image_files'
         conversation_id = request_context.get('conversation_id') or request_context.get('session_id') or session
         # Model-only linkage fields never become evidence-parser arguments.
@@ -302,6 +305,12 @@ class Case:
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             try:
+                if 'cursor_ref' in args:
+                    from .search_selection import resolve
+                    call_args, argument_resolution = resolve(self, tool, call_args, session, request_context)
+                if archive_entry:
+                    from .archive_selection import resolve
+                    call_args, archive_selection, argument_resolution = resolve(self, args, session, request_context)
                 if not admission_error and (reference_entry or direct_read_entry):
                     from .report_driven.investigation_state import image_read_reference_schema, input_problems
                     from .image_reader import InvalidArguments, image_read_entry_schema
@@ -347,7 +356,7 @@ class Case:
             start_data = {"tool": tool, "reason": args.get("reason", ""),
                           "path": call_args.get("file_path") or call_args.get("path", ""),
                           "text": call_args.get("text", ""), 'arguments': call_args}
-            if reference or direct_read_entry or argument_resolution:
+            if reference or direct_read_entry or archive_entry or argument_resolution:
                 start_data['submitted_tool']=submitted_tool
                 start_data['submitted_arguments']=args
             if argument_resolution:
@@ -363,6 +372,8 @@ class Case:
                     "forsic_search": self.search, "forsic_hash": self.hash_file,
                     "forsic_image_info": self.image_info, "forsic_report": self.report}
         handlers['forsic_image_files'] = self.image_files
+        if archive_selection is not None:
+            handlers['forsic_image_files'] = lambda arguments: self.image_files(arguments, archive_selection=archive_selection)
         handlers.update(forsic_note=self.note, forsic_verify=self.verify, forsic_read_bytes=self.read_bytes, forsic_cases=self.cases)
         if tool == 'forsic_intel':
             from .intelligence import lookup
@@ -376,11 +387,11 @@ class Case:
         try:
             if admission_error:
                 raise ValueError(admission_error)
-            if args.get('cursor') is not None and (tool == 'forsic_search' or (tool == 'forsic_image_files' and args.get('action') == 'search')):
+            if call_args.get('cursor') is not None and (tool == 'forsic_search' or (tool == 'forsic_image_files' and call_args.get('action') == 'search')):
                 # A cursor carries unfinished text. Only reuse one actually returned
                 # in this case; accepting model-authored preview/matched state would
                 # turn a fabricated cursor into apparent source text.
-                cursor = args['cursor']
+                cursor = call_args['cursor']
                 if not isinstance(cursor, dict):
                     raise ValueError('Use a next_cursor returned by this case search')
                 with self.connect() as db:
@@ -402,6 +413,11 @@ class Case:
         result = {"tool": tool, "started_id": started, **result}
         if argument_resolution:
             result['argument_resolution']=argument_resolution
+        if archive_selection is not None and result.get('error'):
+            from .archive_selection import recovery_calls
+            listing_args = self.event(argument_resolution['listing_started_id'])['data']['arguments']
+            result.update(recovery_calls(argument_resolution['listing_ref'], listing_args, call_args['volume_offset']))
+            result['next_step']='Inspect this retained failure and source_call. If the archive changed, explicitly select relist_call and then a member from that new listing. Do not replay unknown work or resume a paused goal.'
         if mission_context:
             result['mission_context'] = mission_context
         if admission_error:
@@ -409,6 +425,8 @@ class Case:
             result.update(backend_started=False,**admission_details)
             if admission_details:
                 result['next_step']='Correct the named argument fields before retrying. No evidence backend started; this is not a missing-file observation. For a planned check, copy its exact saved next_call; for discovery use the current evidence inventory. Do not infer a path or mission.'
+            if archive_entry:
+                result['next_step']='Use listing_ref and a displayed member_index with the current forsic_archive_read contract. Follow source_call/relist_call only when returned; do not substitute a target or resume a paused goal.'
         eid = self.record("tool_result", result, session)
         if result.get('retryable_read_failure') and not args.get('retry_of'):
             result['retry_call']={'tool':'forsic_image_read_mission','arguments':{

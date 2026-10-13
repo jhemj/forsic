@@ -10,11 +10,12 @@ def schema():
     string={'type':'string'}
     strings={'type':'array','items':string}
     return {'type':'object','properties':{
-        'citation_refs':{**strings,'description':'Select unchanged citation_ref values from an actual read or source page. No preparation call or mission is required.'},
+        'citation_refs':{**strings,'description':'Select unchanged citation_ref values for the exact supporting text, not a heading or another line in the same result. Other lines can be selected through source lookup. No preparation call or mission is required.'},
         'counter_citation_refs':strings,
         'assertion_kind':{'type':'string','enum':['fact','interpretation']},
         'inference_strength':{'type':'string','enum':['favored','plausible','unrated']},
-        'reasoning_summary':string,'assumptions':strings,'limitations':strings},
+        'reasoning_summary':{**string,'description':'Briefly compare the strongest factual sentence in answer with the selected returned text and its acquisition_context. State what was observed, what connection is inferred, and the strongest competing explanation. A recorded command/search pattern is not its output. A byte preview is not decoded record coverage. An interpretation label or later limitation does not validate a stronger factual sentence.'},
+        'assumptions':strings,'limitations':strings},
         'required':['citation_refs','counter_citation_refs','assertion_kind','inference_strength','reasoning_summary','assumptions','limitations'],
         'additionalProperties':False}
 
@@ -54,7 +55,8 @@ def read_refs(case, view):
         except (ValueError,KeyError,IndexError,TypeError):continue
         if presented!=c['literal']:continue
         refs.append({'pointer':c['pointer'],'citation_ref':f"C2:{source['id']}:{source['content_sha256']}:{index}",
-                     'presented_view':'full_field'})
+                     'presented_view':'full_field', 'text_preview':c['literal'][:120],
+                     'preview_complete':len(c['literal'])<=120})
     if not refs:return view
     return {**view,'presented_spans':refs,'citation_scope':'Up to 8 displayed fields have direct refs; use source lookup for other spans. These references select only the displayed retained fields; not the entire source file, execution success or attribution.'}
 
@@ -87,7 +89,10 @@ def records(case,state,note,judgment):
         for value in dict.fromkeys(judgment[role]):
             c=selection(case,state,value);source,span=_citation(case,state,c)
             source_ids.append(source['id'])
-            ob=Observation.model_validate(dict(id='O-'+digest(c)[:20],version=source['version'],source_ref=ref('source',source),
+            from .measurement import acquisition_context
+            context=acquisition_context(case.event(source['id'])['data'],c['pointer'])
+            ob=Observation.model_validate(dict(id='O-'+digest({'citation':c,'acquisition_context':context})[:20],
+                acquisition_context=context,version=source['version'],source_ref=ref('source',source),
                 statement='원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=c['literal'],
                 canonical_sha256=hashlib.sha256(c['literal'].encode()).hexdigest(),presented_view=span['presented_view'],
                 coordinate_basis='retained tool-result scalar UTF-8 bytes; not original image offset',

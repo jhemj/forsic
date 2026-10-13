@@ -348,6 +348,18 @@ def _goal_followup_after_turn(
     chain once ``running`` is released, or None.  Compression failures are never judge
     input: the error text is not work toward the goal, and judging it spends a turn."""
     goal_followup = None
+    guardrail = result.get("guardrail") if isinstance(result, dict) else None
+    if isinstance(guardrail, dict) and guardrail.get("action") in {"block", "halt"}:
+        # Excluding this result from the judge prevents a retry, but leaves the
+        # persisted goal falsely active. Keep the native stop across reattach.
+        try:
+            if session.get("session_key") and (goal_mgr := _active_goal_manager(session)) is not None:
+                reason = "tool guardrail: " + str(guardrail.get("code") or "halt")
+                goal_mgr.pause(reason=reason)
+                _emit("status.update", sid, {"kind": "goal", "text": "Goal paused: " + reason})
+        except Exception as exc:
+            _hook_failure("goal guardrail pause", exc)
+        return None
     compression_exhausted = bool(isinstance(result, dict) and result.get("compression_exhausted"))
     try:
         recovery_prompt, recovery_notice = _plan_goal_compression_recovery(
@@ -374,7 +386,8 @@ def _goal_followup_after_turn(
             except Exception:
                 _bg_procs = None
             decision = goal_mgr.evaluate_after_turn(
-                raw, user_initiated=True, background_processes=_bg_procs, active_delegations=_active_deleg)
+                raw, user_initiated=True, background_processes=_bg_procs, active_delegations=_active_deleg,
+                turn_result=result)
             if verdict_msg := decision.get("message") or "":
                 _emit("status.update", sid, {"kind": "goal", "text": verdict_msg})
             if decision.get("should_continue") and (

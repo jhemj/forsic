@@ -339,9 +339,16 @@ _LEGACY_COMPRESSION_CONTINUATION_USER_CONTENT = (
     "transcript contained no preserved user turn."
 )
 # Content string is the authoritative marker: SessionDB drops ``_``-metadata.
-MAX_ITERATIONS_SUMMARY_REQUEST = (
+_LEGACY_MAX_ITERATIONS_SUMMARY_REQUEST = (
     "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response "
     "summarizing what you've found and accomplished so far, without calling any more tools."
+)
+MAX_ITERATIONS_SUMMARY_REQUEST = (
+    "This turn has reached its tool-calling iteration limit. Without calling more tools in this turn, "
+    "provide a checkpoint: verified progress, supported interpretations, unresolved scope, and the next "
+    "useful authorized action. Identify unfinished deliverables plainly. This is a runtime turn boundary, "
+    "not a user stop or a request for new permission. An active goal controller decides continuation "
+    "within its remaining budget; do not claim completion or require user input solely because of this limit."
 )
 _BACKGROUND_PROCESS_NOTIFICATION_PREFIX = "[IMPORTANT: Background process "
 
@@ -853,11 +860,13 @@ _MICRO_COMPACT_MAX_CONSECUTIVE_FAILURES = 3
 _SUMMARY_INPUT_MAX_CHARS = 160_000
 
 _PRUNED_TOOL_PLACEHOLDER = "[Old tool output cleared to save context space]"
+_REGISTERED_SUMMARY_PREFIX = "[Tool result summary]\n"
 
 
 def _is_summary_stub(content: str) -> bool:
     """True for a tool result already replaced by a 1-line ``[tool] ... (N chars)`` summary."""
-    return content.startswith("[") and " chars)" in content and len(content) < 400
+    return (content.startswith(_REGISTERED_SUMMARY_PREFIX) and len(content) <= 2048
+            or content.startswith("[") and " chars)" in content and len(content) < 400)
 
 
 # Shared floor; the clarify summary cap must stay strictly BELOW it so a preserved
@@ -1914,12 +1923,31 @@ def _json_dict(text: Any) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _registered_tool_summary(tool_name: str, args: dict, content: str) -> str | None:
+    from tools.registry import registry
+    entry = registry.get_entry(tool_name)
+    if entry is not None and entry.result_summary is not None:
+        try:
+            summary = entry.result_summary(args, content)
+            if isinstance(summary, str) and 0 < len(summary) <= 2048 - len(_REGISTERED_SUMMARY_PREFIX):
+                projected = _REGISTERED_SUMMARY_PREFIX + summary
+                # A small original can be safer AND shorter than its projection. Do
+                # not discard an explicit outcome merely because metadata would grow it.
+                return projected if len(projected) < len(content) else content
+        except Exception as exc:
+            logger.debug("Registered tool summary failed for %s: %s", tool_name, exc)
+    return None
+
+
 def _summarize_tool_result_unguarded(tool_name: str, tool_args: str, tool_content: str) -> str:
     """Build the summary line (unguarded; see ``_summarize_tool_result``)."""
     args = _json_dict(tool_args)
     content = tool_content or ""
     content_len = len(content)
     line_count = content.count("\n") + 1 if content.strip() else 0
+    registered = _registered_tool_summary(tool_name, args, content)
+    if registered is not None:
+        return registered
     summarizer = _TOOL_RESULT_SUMMARIZERS.get(tool_name)
     if summarizer is not None:
         return summarizer(tool_name, args, content, content_len, line_count)
@@ -3159,7 +3187,10 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
             _skill = _json_dict(tool_args).get("name", "")
             if isinstance(_skill, str) and _skill.lower() in protected_skills:
                 return False
-        result[idx] = {**msg, "content": _summarize_tool_result(tool_name, tool_args, content)}
+        summary = _summarize_tool_result(tool_name, tool_args, content)
+        if summary == content:
+            return False
+        result[idx] = {**msg, "content": summary}
         return True
 
     def _tail_soft_ceiling(self, token_budget: int) -> int:
@@ -3613,6 +3644,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         """Lean mode: demote tail tool results older than the newest ``_LEAN_TAIL_KEEP_TOOL_ROUNDS`` rounds to
         recovery stubs; skill-marker rows untouched. New list (untouched rows shared, demoted copied)."""
         session_id = getattr(self, "_session_id", "") or ""
+        call_id_to_tool = _tool_calls_by_id(messages)
         rounds_seen = 0
         protected: set[int] = set()
         prev_idx = None
@@ -3631,7 +3663,11 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 continue
             if len(content) < _LEAN_TAIL_DEMOTE_MIN_CHARS or SKILL_PRUNED_MARKER_PREFIX in content or _is_summary_stub(content):
                 continue
-            result[i] = _rewritten(msg, _lean_recovery_stub(msg.get("tool_name") or "", len(content), session_id))
+            name, args = call_id_to_tool.get(msg.get("tool_call_id", ""), (msg.get("tool_name") or "", ""))
+            summary = _registered_tool_summary(name, _json_dict(args), content)
+            if summary == content:
+                continue
+            result[i] = _rewritten(msg, summary or _lean_recovery_stub(name, len(content), session_id))
             demoted += 1
         if demoted and not self.quiet_mode:
             logger.info("Lean tail: demoted %d stale tool result(s)", demoted)
@@ -4316,7 +4352,8 @@ Write only the summary body. Do not include any preamble or prefix."""
         )
         return text in {
             COMPRESSION_CONTINUATION_USER_CONTENT, _LEGACY_COMPRESSION_CONTINUATION_USER_CONTENT,
-            MAX_ITERATIONS_SUMMARY_REQUEST, _CODEX_INCOMPLETE_NUDGE, _CODEX_ACK_CONTINUATION_NUDGE,
+            MAX_ITERATIONS_SUMMARY_REQUEST, _LEGACY_MAX_ITERATIONS_SUMMARY_REQUEST,
+            _CODEX_INCOMPLETE_NUDGE, _CODEX_ACK_CONTINUATION_NUDGE,
             _DEGENERATE_FINAL_NUDGE, _DROPPED_TOOLCALL_NUDGE_CONTENT, _EMPTY_TOOL_RESPONSE_NUDGE,
             _LENGTH_CONTINUATION_NETWORK_STUB, _LEGACY_LENGTH_CONTINUATION_NETWORK_STUB,
             _LENGTH_CONTINUATION_OUTPUT_LIMIT,

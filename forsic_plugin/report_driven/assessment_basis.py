@@ -92,7 +92,10 @@ def _source_choices(case, state, eid):
     event = case.event(source['id'])
     if source_record(event)['version'] != source['version']:
         raise ValueError('Retained source changed; review it before selecting a citation')
-    expected = source_view(source, event['data'], args)
+    contract = data.get('presentation_contract')
+    if contract not in (None, 'acquisition-context-v1'):
+        raise ValueError('Unknown retained source presentation contract')
+    expected = source_view(source, event['data'], args, include_acquisition_context=contract is not None)
     actual = {key: value for key, value in data.items() if key not in ('tool', 'started_id')}
     if actual != expected:
         raise ValueError('Source receipt does not match its retained source request and version')

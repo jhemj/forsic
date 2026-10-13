@@ -60,7 +60,7 @@ def compile_views(s,review=None):
                page('E02','사건 경과와 중요한 공백',([timeline] if s['timeline'] else [])+[alternatives,executive_gaps,limit]),
                page('E03','남은 조사와 확인할 자료',[actions,executive_missions,paragraph(scope_status),paragraph('기관의 검토자·배포 승인자는 아직 지정되지 않았습니다.')])]
     sources=table(['근거 / 생성 계보','출처와 보존 지문','실제 반환 범위'],[[x['id']+'\n'+x['source_generation_group'],x['label']+'\n'+x['locator']+'\nSHA-256 '+x['content_sha256'],x['coverage']] for x in s['sources']],[23,42,35])
-    observations=table(['관측 / 원문 위치','정확히 제시된 문자열','해석 한계'],[[o['id']+'\n'+o['source_ref']['id']+o['field_pointer']+f"\nUTF-8 [{o['byte_start']},{o['byte_end']})",o['literal'],o['presented_view']+'\n'+o['interpretation_limit']] for o in s['observations']],[30,38,32])
+    observations=table(['관측 / 원문 위치','정확히 제시된 문자열','해석 한계'],[[o['id']+'\n'+o['source_ref']['id']+o['field_pointer']+f"\nUTF-8 [{o['byte_start']},{o['byte_end']})",o['literal'],o['presented_view']+'\n'+o['interpretation_limit']+('\n취득·읽기 범위: '+json.dumps(o['acquisition_context'],ensure_ascii=False) if o.get('acquisition_context') else '')] for o in s['observations']],[30,38,32])
     sources['row_ids']=[x['id'] for x in s['sources']]
     observations['row_ids']=[x['id'] for x in s['observations']]
     tests=table(['검사와 결과','판별 조건','실행 / 평가'],[[t['id']+'\n'+t['target_proposition']+'\n'+str(t['physical_job_ref']),str(t['support_rule'] or '')+'\n'+str(t['refute_rule'] or '')+'\n'+t['inconclusive_rule'],t['execution_state']+' / '+t['assessment_state']+'\n'+t['design_timing']] for t in s['tests']],[34,42,24])

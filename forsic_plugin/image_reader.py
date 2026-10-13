@@ -17,22 +17,40 @@ else:  # The isolated Docker reader mounts only these two modules, not the plugi
     from literal_search import file_identity, search_entries
 
 
+def byte_preview(raw, offset, total):
+    """Describe actual byte presentation, never interpret a binary record format."""
+    try:
+        raw.decode('utf-8')
+        lossy = False
+    except UnicodeDecodeError:
+        lossy = True
+    end = offset + len(raw)
+    return {'byte_start': offset, 'byte_end': end, 'content_bytes': total,
+            'base64': base64.b64encode(raw).decode(), 'text': raw.decode('utf-8', errors='replace'),
+            'sha256_slice': hashlib.sha256(raw).hexdigest(),
+            'encoding': 'UTF-8 replacement preview; exact selected bytes in base64',
+            'decode_lossy': lossy, 'nul_bytes': raw.count(b'\x00'), 'records_decoded': False,
+            'next_offset': end if end < total else None, 'complete_content': offset == 0 and end == total,
+            'representation': 'byte_preview'}
+
+
 IMAGE_ACTION_REQUIRED = {
     'volumes': (), 'list': (), 'read': ('file_path',), 'read_bytes': ('file_path',),
-    'stat': ('file_path',), 'search': ('text',), 'hash': ('file_path',),
+    'stat': ('file_path',), 'search': ('file_path', 'text'), 'hash': ('file_path',),
     'archive_list': ('file_path',), 'archive_read': ('file_path', 'member_index'),
 }
 
 
-def image_action_contract(action=None):
+def image_action_contract(action=None, *, actions=None):
     """Small shared contract; optional range defaults and I/O checks stay in the reader."""
+    exposed = {name: fields for name, fields in IMAGE_ACTION_REQUIRED.items() if actions is None or name in actions}
     return {'type':'object', 'required':['path','action',*IMAGE_ACTION_REQUIRED.get(action, ())],
         'properties':{
             'path':{'type':'string','minLength':1,'description':'Evidence E01 segment path from forsic_list, e.g. disk.e01. This is NOT a path inside the image.'},
-            'action':{'type':'string','enum':list(IMAGE_ACTION_REQUIRED),'description':'Additional required fields: '+
-                '; '.join(name+'='+','.join(fields) for name,fields in IMAGE_ACTION_REQUIRED.items() if fields)+'. list/search default to the root directory; volumes needs no internal path.'},
+            'action':{'type':'string','enum':list(exposed),'description':'Additional required fields: '+
+                '; '.join(name+'='+','.join(fields) for name,fields in exposed.items() if fields)+'. list defaults to the root; search requires an explicit file_path (use / deliberately for root); volumes needs no internal path.'},
             'file_path':{'type':'string','minLength':1,'description':'Exact allocated path INSIDE the image. Required for '+
-                ', '.join(name for name,fields in IMAGE_ACTION_REQUIRED.items() if 'file_path' in fields)+'. Explicit stat("/") is valid. Keep path set to the E01.'},
+                ', '.join(name for name,fields in exposed.items() if 'file_path' in fields)+'. Explicit stat("/") is valid. Keep path set to the E01.'},
             'member_index':{'type':'integer','minimum':0,'description':'archive_read only: exact ordinal from archive_list. Duplicate member names are not interchangeable.'},
             'text':{'type':'string','minLength':1,'maxLength':512,'description':'search only: nonempty single-line literal, at most 512 characters.'}}}
 
@@ -40,7 +58,7 @@ def image_action_contract(action=None):
 def image_read_entry_schema():
     """Direct image content reads expose their shared required fields at the root."""
     from copy import deepcopy
-    common=image_action_contract()['properties']
+    common=image_action_contract(actions=('read', 'read_bytes'))['properties']
     return {'type':'object','required':['path','action','file_path'],
         'properties':{
             'path':deepcopy(common['path']),
@@ -93,6 +111,15 @@ def validate_image_action(args, location='arguments'):
         raise InvalidArguments(problems,image_action_contract(action if isinstance(action,str) else None))
 
 
+def image_file_identity(info):
+    """Image entry metadata: Dissect st_dev can be id(fs), local to one open.
+
+    The enclosing source/volume binding retains host segment device/inode checks.
+    This is still metadata comparison, never an archive-content digest.
+    """
+    return {key: value for key, value in file_identity(info).items() if key != 'st_dev'}
+
+
 def search_node(node, args, source_identity=None):
     recursive = bool(args.get('recursive', False))
 
@@ -131,8 +158,8 @@ def search_node(node, args, source_identity=None):
                 yield str(entry.path), entry.lstat, entry.open, None
 
     scope = {'path': str(node.path), 'recursive': recursive,
-             'identity': file_identity(node.lstat()), 'source': source_identity}
-    return {**search_entries(entries(), args, scope, 'file_path'),
+             'identity': image_file_identity(node.lstat()), 'source': source_identity}
+    return {**search_entries(entries(), args, scope, 'file_path', identity_of=image_file_identity),
             'search_path': str(node.path), 'recursive': recursive}
 
 
@@ -183,20 +210,43 @@ class ArchiveBudget:
         return data
 
 
-def inspect_archive(node, args):
+IDENTITY_LIMITATION = ('Metadata/header comparison only; not a cryptographic archive-content version. '
+                      'Same-metadata body replacement may go undetected. Retained source.version versions the result bytes only.')
+
+
+def archive_header(number, member):
+    kind = 'file' if member.isfile() else 'directory' if member.isdir() else 'link' if member.issym() or member.islnk() else 'special'
+    readable = member.isfile() and not member.issparse()
+    return {'member_index': number, 'name': member.name, 'kind': kind,
+            'bytes': member.size, 'mtime_epoch': member.mtime, 'type': member.type.decode('ascii', errors='replace'),
+            'header_offset': member.offset, 'data_offset': member.offset_data,
+            'linkname': member.linkname, 'sparse': member.issparse(), 'readable': readable,
+            'read_limit': None if readable else 'Only regular, non-sparse members are supported; links are not followed.'}
+
+
+def inspect_archive(node, args, selection=None):
     """Inspect TAR/TAR.GZ members in memory. Never extract or follow links."""
-    before = file_identity(node.lstat())
+    before = image_file_identity(node.lstat())
     if not stat.S_ISREG(before['st_mode']):
         raise ValueError('Archive inspection requires an allocated regular file, not a symlink')
+    if selection and selection['archive_identity'] != before:
+        raise ValueError('Archive metadata changed since the selected listing; explicitly re-list before reading')
     action = args['action']
     index = args.get('member_index')
     if action == 'archive_read' and (type(index) is not int or index < 0):
         raise ValueError('archive_read needs member_index returned by archive_list; names may be duplicated')
+    if selection:
+        for key, default, minimum, maximum in (('offset', 0, 0, None), ('length', 4096, 1, 12000)):
+            value = args.get(key, default)
+            if type(value) is not int or value < minimum or (maximum is not None and value > maximum):
+                raise ValueError('Invalid selected member byte range: '+key)
     offset = max(0, int(args.get('offset', 0)))
     limit = min(1024**3, max(10240, int(args.get('archive_scan_bytes', 256*1024**2))))
     result = {'archive_path': str(node.path), 'measurement': 'TAR member headers or selected regular member bytes',
               'scope_note': 'Archived records only; no extraction, execution, symlink following, deleted-file recovery or proof of activity on the host.',
-              'entries': [], 'coverage_complete': False, 'scan_exhausted': False}
+              'entries': [], 'coverage_complete': False, 'scan_exhausted': False,
+              'archive_identity': before, 'archive_listing_version': 1,
+              'identity_strength': 'metadata_checked', 'identity_limitation': IDENTITY_LIMITATION}
     with node.open() as raw:
         magic = raw.read(2); raw.seek(0)
         with ExitStack() as stack:
@@ -207,9 +257,7 @@ def inspect_archive(node, args):
                     for number, member in enumerate(archive):
                         # TarFile caches headers; the ordinal and returned page suffice.
                         archive.members.clear()
-                        kind = 'file' if member.isfile() else 'directory' if member.isdir() else 'link' if member.issym() or member.islnk() else 'special'
-                        header = {'member_index': number, 'name': member.name, 'kind': kind,
-                                  'bytes': member.size, 'mtime_epoch': member.mtime}
+                        header = archive_header(number, member)
                         if action == 'archive_list':
                             if number < offset: continue
                             if len(result['entries']) == 100:
@@ -217,6 +265,8 @@ def inspect_archive(node, args):
                                 break
                             result['entries'].append(header)
                         elif number == index:
+                            if selection and header != selection['member']:
+                                raise ValueError('Selected ordinal header changed since listing; no member-name fallback is allowed')
                             if not member.isfile() or member.issparse():
                                 raise ValueError('Only regular, non-sparse archive members can be read; links and devices are not followed')
                             if offset > member.size:
@@ -228,12 +278,12 @@ def inspect_archive(node, args):
                                     block = stream.read(min(65536, remaining))
                                     if not block: raise ValueError('Archive member ended before its declared size')
                                     remaining -= len(block)
-                                data = stream.read(min(12000, max(1, int(args.get('length', 4096)))))
+                                requested = min(member.size-offset, min(12000, max(1, int(args.get('length', 4096)))))
+                                data = stream.read(requested)
+                                if len(data) != requested:
+                                    raise ValueError('Archive member ended before its declared size')
                             end = offset+len(data)
-                            result.update(member=header, byte_start=offset, byte_end=end,
-                                          text=data.decode('utf-8', errors='replace'), encoding='UTF-8 replacement; exact bytes in base64',
-                                          base64=base64.b64encode(data).decode(), sha256_slice=hashlib.sha256(data).hexdigest(),
-                                          next_offset=end if end < member.size else None,
+                            result.update(member=header, **byte_preview(data, offset, member.size),
                                           complete_member=offset==0 and end==member.size)
                             break
                     else:
@@ -244,9 +294,20 @@ def inspect_archive(node, args):
                 result.update(stop_reason='scan_budget', limitation=str(exc), next_offset=None)
             result['decompressed_bytes_scanned'] = budget.used
             result['archive_scan_bytes'] = limit
-    if before != file_identity(node.lstat()):
+    if before != image_file_identity(node.lstat()):
         raise ValueError('Archive changed during inspection; discard this result')
     return result
+
+
+def image_segments(path):
+    return sorted(p for p in path.parent.glob(path.stem + '.*') if re.fullmatch(r'\.E\d{2}', p.suffix, re.I))
+
+
+def archive_origin(parts, volume_offset):
+    if any(part.is_symlink() for part in parts):
+        raise ValueError('Image segment symlinks are not supported')
+    return {'segments': [{'name': part.name, 'metadata': file_identity(part.stat())} for part in parts],
+            'volume_offset': volume_offset}
 
 
 def inspect(image, args):
@@ -258,7 +319,12 @@ def inspect(image, args):
     path = Path(image)
     if path.suffix.lower() != '.e01':
         raise ValueError('This adapter currently supports classic E01 segments only')
-    parts = sorted(p for p in path.parent.glob(path.stem + '.*') if re.fullmatch(r'\.E\d{2}', p.suffix, re.I))
+    parts = image_segments(path)
+    selection = args.get('_archive_selection')
+    # Capture before opening Dissect, not only after volume discovery.
+    origin = archive_origin(parts, args.get('volume_offset')) if args['action'] in ('archive_list', 'archive_read') else None
+    if selection and origin != selection['archive_origin']:
+        raise ValueError('Image segments or selected volume changed since listing; explicitly re-list before reading')
     with ExitStack() as stack:
         handles = []
         for index, part in enumerate(parts, 1):
@@ -284,11 +350,13 @@ def inspect(image, args):
         fs = open_filesystem(volume)
         node = fs.get(args.get('file_path', '/'))
         if args['action'] in ('archive_list', 'archive_read'):
-            source = [(str(p), file_identity(p.stat())) for p in parts]
-            result = inspect_archive(node, args)
-            if source != [(str(p), file_identity(p.stat())) for p in parts]:
+            origin['volume_offset'] = volume.offset
+            if selection and origin != selection['archive_origin']:
+                raise ValueError('Selected volume differs from the retained archive listing')
+            result = inspect_archive(node, args, selection)
+            if origin != archive_origin(image_segments(path), volume.offset):
                 raise ValueError('Image segments changed during archive inspection')
-            return {**selected, **result}
+            return {**selected, **result, 'archive_origin': origin}
         if args['action'] == 'search':
             source = {'segments': [(str(p), file_identity(p.stat())) for p in parts],
                       'volume_offset': volume.offset}
@@ -312,10 +380,8 @@ def inspect(image, args):
             with node.open() as stream:
                 stream.seek(offset)
                 raw = stream.read(min(12000, max(1, int(args.get('length', 4096)))))
-            end = offset + len(raw)
-            return {**selected, 'byte_start': offset, 'byte_end': end, 'base64': base64.b64encode(raw).decode(),
-                    'text': raw.decode('utf-8', errors='replace'), 'sha256_slice': hashlib.sha256(raw).hexdigest(),
-                    'next_offset': end if end < node.stat().st_size else None}
+            preview = byte_preview(raw, offset, node.stat().st_size)
+            return {**selected, **preview, 'complete_file': preview['complete_content']}
         if args['action'] == 'list':
             offset = max(0, int(args.get('offset', 0)))
             rows = []
@@ -330,6 +396,8 @@ def inspect(image, args):
         if args['action'] == 'read':
             start = max(1, int(args.get('start_line', 1)))
             rows, size = [], 0
+            selected = {**selected, 'encoding': 'UTF-8 replacement for undecodable bytes',
+                        'representation': 'line_text', 'records_decoded': False}
             with node.open() as stream:
                 for number in range(1, start + 80):
                     raw = stream.readline(16385)

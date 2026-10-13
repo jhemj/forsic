@@ -40,7 +40,7 @@ def _fresh_line(offset=0, line=1):
             'decoder_bytes': ''}
 
 
-def search_entries(entries, args, scope, path_key='path'):
+def search_entries(entries, args, scope, path_key='path', *, identity_of=file_identity):
     """Entries yield (name, stat callable, binary open callable, skip reason).
 
     Enumeration must be deterministic. Rewalking to the saved entry is not an
@@ -96,7 +96,7 @@ def search_entries(entries, args, scope, path_key='path'):
             continue
         reached_cursor = True
         if skip_reason:
-            identity = {'entry_kind': skip_reason, 'stat': file_identity(get_stat()) if get_stat else None}
+            identity = {'entry_kind': skip_reason, 'stat': identity_of(get_stat()) if get_stat else None}
             if cursor is not None and number == index and (cursor['file_path'] != name or cursor['file_identity'] != identity):
                 raise ValueError('Evidence traversal changed since the search cursor')
             reason = budget_reason() or ('file_limit' if visited >= limits['max_files'] else None)
@@ -123,7 +123,7 @@ def search_entries(entries, args, scope, path_key='path'):
             skips.append({path_key: name, 'reason': 'stat_failed', 'error_type': type(exc).__name__})
             visited += 1
             continue
-        identity = file_identity(info)
+        identity = identity_of(info)
         if cursor is not None and number == index:
             if cursor['file_path'] != name or cursor['file_identity'] != identity:
                 raise ValueError('Evidence changed since the search cursor; start a new search')
@@ -190,7 +190,7 @@ def search_entries(entries, args, scope, path_key='path'):
                             break
                     if not raw:
                         break
-            if file_identity(get_stat()) != identity:
+            if identity_of(get_stat()) != identity:
                 raise ValueError('Evidence changed during search; discard this page and start a new search')
         except OSError as exc:
             skips.append({path_key: name, 'reason': 'read_failed', 'error_type': type(exc).__name__})

@@ -269,7 +269,7 @@ class GatewayGoalsMixin:
         return factory(sid)
 
     async def _post_turn_goal_continuation(
-        self, *, session_entry: Any, source: Any, final_response: str,
+        self, *, session_entry: Any, source: Any, final_response: str, turn_result: Any = None,
     ) -> None:
         """Run the goal judge after a gateway turn (AFTER delivery) and, if still active, enqueue a
         continuation through the adapter FIFO so a simultaneous real user message takes priority."""
@@ -296,7 +296,7 @@ class GatewayGoalsMixin:
         decision = await self._run_in_executor_with_context(
             lambda: mgr.evaluate_after_turn(
                 final_response or "", user_initiated=True, background_processes=_bg_procs,
-                active_delegations=_active_deleg,
+                active_delegations=_active_deleg, turn_result=turn_result,
             ),
         )
         msg = decision.get("message") or ""
@@ -334,7 +334,11 @@ class GatewayGoalsMixin:
             hooks.insert(0, ("goal continuation", self._post_turn_goal_continuation))
         for label, hook in hooks:
             try:
-                await hook(session_entry=session_entry, source=source, final_response=final_text)
+                kwargs = {}
+                if label == "goal continuation":
+                    kwargs["turn_result"] = (agent_result if isinstance(agent_result, dict)
+                        else getattr(event, "_goal_turn_result", None))
+                await hook(session_entry=session_entry, source=source, final_response=final_text, **kwargs)
             except Exception as exc:
                 logger.debug("%s hook failed: %s", label, exc)
 

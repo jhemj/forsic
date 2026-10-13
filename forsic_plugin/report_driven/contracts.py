@@ -51,6 +51,7 @@ class Source(BaseRecord):
     source_generation_group: str
 
 class Observation(BaseRecord):
+    acquisition_context: dict = Field(default_factory=dict)
     source_ref: Ref
     statement: str
     field_pointer: str

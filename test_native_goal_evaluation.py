@@ -46,6 +46,25 @@ class NativeGoalEvaluationTests(unittest.TestCase):
         self.assertNotIn("evaluation_context", self.judge.call_args.kwargs)
         self.assertIsNone(goals.load_goal(self.manager.session_id).evaluation_receipt)
 
+    def test_gateway_delivered_and_streamed_turns_keep_runtime_cause(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        from gateway.run_goals import GatewayGoalsMixin
+        from hermes_cli.goals_turn_context import goal_turn_result
+        result = dict(completed=False, turn_exit_reason='max_iterations_reached(20/20)',
+                      final_response='Partial findings; review remains.')
+        source = SimpleNamespace()
+        for delivered in (result, None):
+            runner = GatewayGoalsMixin()
+            runner.async_session_store = SimpleNamespace(get_or_create_session=AsyncMock(return_value=SimpleNamespace(session_id='fixture')))
+            runner._post_turn_goal_continuation = AsyncMock()
+            runner._post_turn_loop_completion = AsyncMock()
+            event = SimpleNamespace(_goal_turn_result=goal_turn_result(result), _streamed_final_response=result['final_response'])
+            asyncio.run(runner._run_post_turn_hooks(agent_result=delivered, source=source, is_internal=False, event=event))
+            runner._post_turn_goal_continuation.assert_awaited_once()
+            self.assertEqual(runner._post_turn_goal_continuation.call_args.kwargs['turn_result'], result)
+            self.assertNotIn('turn_result', runner._post_turn_loop_completion.call_args.kwargs)
+
     def test_context_is_separate_and_revision_is_bound_to_done_receipt(self):
         calls = []
 
@@ -273,6 +292,116 @@ class NativeGoalEvaluationTests(unittest.TestCase):
         self.assertTrue(self.db.compare_and_swap_meta("fixture", "concurrent change", "after"))
         self.assertFalse(self.db.compare_and_swap_meta("absent", "old", "new"))
         self.assertIsNone(other.get_meta("absent"))
+
+    def test_active_goal_budget_handoff_preserves_history_without_summary_call(self):
+        import copy
+        import logging
+        from unittest.mock import Mock
+        from agent.turn_finalizer import _resolve_budget_fallback
+        agent = SimpleNamespace(session_id=self.manager.session_id, _session_db=self.db,
+            max_iterations=2, iteration_budget=SimpleNamespace(remaining=0), quiet_mode=True,
+            _handle_max_iterations=Mock(return_value="new unsupported interpretation"),
+            _emit_diagnostic_status=Mock())
+        messages = [{"role":"system", "content":"fixed prompt"},
+            {"role":"user", "content":"Compare the records"},
+            {"role":"assistant", "content":None, "tool_calls":[{"id":"read-a"}]},
+            {"role":"tool", "tool_call_id":"read-a", "content":"Exact observation"}]
+        before = copy.deepcopy(messages)
+        response, reason, preserved, interrupted = _resolve_budget_fallback(agent,
+            final_response=None, api_call_count=2, interrupted=False, failed=False,
+            messages=messages, _turn_exit_reason="budget_exhausted",
+            _pending_verification_response=None, _pending_verification_response_previewed=False,
+            logger=logging.getLogger(__name__))
+        agent._handle_max_iterations.assert_not_called()
+        self.assertEqual(messages, before)
+        self.assertEqual(reason, "max_iterations_reached(2/2)")
+        self.assertFalse(preserved or interrupted)
+        self.assertNotIn("new unsupported interpretation", response)
+        self.judge.return_value = ("continue", "Compare unresolved observations", False, None, False)
+        self.hook(lambda **kw: {**self.ready(), "pending_reason":"Unresolved comparison"})
+        decision = self.manager.evaluate_after_turn(response, turn_result={
+            "completed":False, "turn_exit_reason":reason, "final_response":response})
+        self.assertTrue(decision["should_continue"])
+        self.assertIn("evaluation_context", self.judge.call_args.kwargs)
+        self.assertEqual(self.judge.call_args.kwargs["turn_context"]["stop_cause"], "iteration_limit_handoff")
+
+    def test_goal_handoff_keeps_pending_answers_interrupts_and_non_goal_summary(self):
+        import logging
+        from unittest.mock import Mock
+        from agent.turn_finalizer import _resolve_budget_fallback
+        for pending, interrupted, failed, status, expected_calls in (
+                ("candidate awaiting verification", False, False, "active", 0),
+                (None, True, False, "active", 0), (None, False, True, "active", 0),
+                (None, False, False, "paused", 1), (None, False, False, None, 1)):
+            with self.subTest(pending=pending, interrupted=interrupted, failed=failed, status=status):
+                if status is None:
+                    self.db.set_meta("goal:"+self.manager.session_id, "")
+                else:
+                    self.manager.state.status=status;self.manager._save()
+                agent=SimpleNamespace(session_id=self.manager.session_id, _session_db=self.db,
+                    max_iterations=2, iteration_budget=SimpleNamespace(remaining=0), quiet_mode=True,
+                    _handle_max_iterations=Mock(return_value="ordinary summary"), _emit_diagnostic_status=Mock())
+                response, _, preserved, got_interrupt = _resolve_budget_fallback(agent,
+                    final_response=None, api_call_count=2, interrupted=interrupted, failed=failed,
+                    messages=[], _turn_exit_reason="budget_exhausted",
+                    _pending_verification_response=pending, _pending_verification_response_previewed=bool(pending),
+                    logger=logging.getLogger(__name__))
+                self.assertEqual(agent._handle_max_iterations.call_count, expected_calls)
+                self.assertEqual(got_interrupt, interrupted)
+                if pending:
+                    self.assertEqual(response,pending);self.assertTrue(preserved);self.assertTrue(agent._response_was_previewed)
+                elif interrupted or failed:self.assertIsNone(response)
+                else:self.assertEqual(response,"ordinary summary")
+
+    def test_native_limit_outcome_reaches_judge_through_tui_and_budget_still_wins(self):
+        from tui_gateway import server as prompt_turn
+        result = {"completed": False, "failed": False, "interrupted": False,
+                  "turn_exit_reason": "max_iterations_reached(20/20)",
+                  "final_response": "Partial findings; the report is unfinished. Please ask me to continue."}
+        self.judge.return_value = ("continue", "Finish the remaining supported comparison", False, None, False)
+        session = {"session_key": self.manager.session_id, "agent": SimpleNamespace(session_id=self.manager.session_id)}
+        with patch.object(prompt_turn, "_active_goal_manager", return_value=self.manager), patch.object(
+                prompt_turn, "_plan_goal_compression_recovery", return_value=(None, None)), patch.object(
+                prompt_turn, "_emit"), patch.object(goals, "gather_background_processes", return_value=[]), patch.object(
+                goals, "count_active_delegations", return_value=0):
+            followup = prompt_turn._goal_followup_after_turn("ui", session, result, "complete", result["final_response"])
+        self.assertTrue(followup)
+        self.assertEqual(self.manager.state.turns_used, 1)
+        self.assertEqual(self.judge.call_args.args[1], result["final_response"])
+        self.assertEqual(self.judge.call_args.kwargs["turn_context"], {
+            "stop_cause": "iteration_limit_handoff", "turn_completed": False,
+            "remaining_goal_turns": self.manager.state.max_turns - 1})
+        self.manager.state.max_turns = 2
+        self.manager._save()
+        decision = self.manager.evaluate_after_turn(result["final_response"], turn_result=result)
+        self.assertFalse(decision["should_continue"])
+        self.assertEqual(self.manager.state.status, "paused")
+        self.assertIn("turn budget exhausted", self.manager.state.paused_reason)
+        before = self.judge.call_count
+        self.manager.evaluate_after_turn(result["final_response"], turn_result=result)
+        self.assertEqual(self.judge.call_count, before)
+
+    def test_runtime_handoff_context_is_not_inferred_from_text_or_failed_and_halted_turns(self):
+        from hermes_cli.goals_turn_context import goal_turn_context, goal_turn_result
+        text = "Hit the tool limit; please resume."
+        base = {"completed": False, "turn_exit_reason": "max_iterations_reached(3/3)", "final_response": text}
+        for changes in ({"failed": True}, {"interrupted": True}, {"guardrail": {"action": "halt"}},
+                        {"guardrail": {"action": "block"}}, {"turn_exit_reason": "timeout"}, {"completed": True}):
+            self.assertIsNone(goal_turn_context({**base, **changes}, remaining_goal_turns=10))
+        self.assertIsNone(goal_turn_context({"final_response": text}, remaining_goal_turns=10))
+        transported = goal_turn_result({**base, "messages": ["private history"], "api_key": "secret"})
+        self.assertNotIn("messages", transported)
+        self.assertNotIn("api_key", transported)
+        context = goal_turn_context(transported, remaining_goal_turns=10)
+        with patch("agent.auxiliary_client.call_llm") as llm:
+            llm.return_value = SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content='{"verdict":"blocked","reason":"An independent permission is missing"}'))])
+            verdict = REAL_JUDGE("question", text, turn_context=context, evaluation_context="Current source state")
+        self.assertEqual(verdict[0], "blocked")  # No unconditional continuation/semantic override.
+        prompt = llm.call_args.kwargs["messages"][1]["content"]
+        self.assertIn(text, prompt)
+        self.assertIn('"stop_cause": "iteration_limit_handoff"', prompt)
+        self.assertIn("Current source state", prompt)
 
     def test_real_judge_prompt_gets_separate_context_once(self):
         with patch("agent.auxiliary_client.call_llm") as llm:

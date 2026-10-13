@@ -6,7 +6,10 @@ description: 삭제 자료 복구와 카빙의 필요성을 판단하고 연결�
 보존 파일과 메타데이터부터 살핀다. 삭제·손상 영역의 자료가 질문 해결에 필요할 때
 대상 영역과 파일 유형, 기대 관측을 설명한다. 전체 카빙을 모든 조사의 첫 단계로 만들지 않는다.
 할당된 TAR/TAR.GZ는 복구나 실행 없이 forsic_image_files(archive_list)로 멤버를 열거하고,
-필요한 member_index만 archive_read로 읽는다. path는 E01, file_path는 압축파일의 이미지 내부 경로다.
+목록의 source_ref를 listing_ref로 복사하고 필요한 전역 member_index를 골라 forsic_archive_read로 읽는다.
+목록 조회의 path는 E01, file_path는 압축파일의 이미지 내부 경로다. 읽기에서는 경로를 재입력하지 않는다.
+목록 참조는 본문 근거가 아니다. 읽기 결과의 C2를 선택하고 이어읽기는 next_call을 사용한다.
+자료 동일성은 metadata_checked 수준이다. 메타데이터를 유지한 내용 교체까지 검증했다고 하지 않는다.
 멤버 이름은 아카이브 메타데이터다. 원래 호스트에서의 존재·실행이나 악성 여부로 승격하지 않는다.
 중복 이름은 member_index로 구별한다. next_offset·scan_budget·complete_member의 범위를 유지하고,
 미지원 형식이나 링크·특수 파일을 읽었다고 하지 않는다. 디스크 추출·중첩 압축 해제·명령 실행은 하지 않는다.

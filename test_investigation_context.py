@@ -18,6 +18,21 @@ from test_report_driven import fixture
 
 
 class InvestigationContextTests(unittest.TestCase):
+    def test_compaction_projects_actual_query_scope_for_this_conversation_without_body_or_verdict(self):
+        partial=self.case.record('tool_result',dict(tool='forsic_search',path='synthetic.log',search_text='literal',
+            match_type='casefold_literal',matches=[],bytes_scanned=80,coverage_complete=False,scan_exhausted=False,
+            next_cursor={'state':'retained'},stop_reason='match_limit',scope_note='Not whole scope'),self.sid)
+        other=self.case.record('tool_result',dict(tool='forsic_search',path='other.log',search_text='foreign',
+            coverage_complete=False,scan_exhausted=False,next_cursor={'state':'other'}),'other-conversation')
+        resolved=context.resolve_context(self.sid,intake_root=self.intake,native_db=self.native)
+        before=current(self.case);text,_,_=context.project_context(resolved,before);view=json.loads(text)
+        facts={f['source_id']:f for f in view['observed_scope']}
+        self.assertIn(partial,facts);self.assertNotIn(other,facts)
+        self.assertFalse(facts[partial]['observed']['coverage_complete'])
+        self.assertEqual(facts[partial]['observed']['search_text'],'literal')
+        self.assertTrue(facts[partial]['observed']['has_next_cursor'])
+        self.assertNotIn('citation_ref',json.dumps(facts));self.assertEqual(current(self.case),before)
+
     def setUp(self):
         self.stack = ExitStack(); self.addCleanup(self.stack.close)
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))

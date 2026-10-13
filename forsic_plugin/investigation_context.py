@@ -236,6 +236,31 @@ def work_inventory(questions, missions, tests):
         'meaning': 'Agent-declared states for this goal, including omitted items; not verified feasibility or a global blocked verdict.'}
 
 
+def recent_observed_scope(resolved, state):
+    """Execution metadata from this conversation; not a parallel judgment ledger."""
+    with resolved['case'].connect() as db:
+        ids = [row[0] for row in db.execute(
+            "SELECT id FROM events WHERE session=? AND kind='tool_result' ORDER BY rowid DESC LIMIT 64",
+            (resolved['conversation_id'],))]
+    sources = {s['id']: s for s in state['sources']}
+    facts = []
+    for eid in ids:
+        if eid not in sources:
+            continue
+        data = json.loads(sources[eid]['coverage'])
+        fields = ('file_path', 'path', 'search_text', 'match_type', 'line_start', 'line_end', 'byte_start', 'byte_end',
+                  'complete_file', 'complete_member', 'coverage_complete', 'scan_exhausted', 'has_next_cursor',
+                  'files_skipped', 'bytes_scanned', 'stop_reason')
+        if not any(k in data for k in ('coverage_complete', 'complete_file', 'complete_member', 'line_start', 'byte_start')):
+            continue
+        shown = {k: v for k in fields if k in data for v in (data[k],)
+                 if v is None or type(v) in (bool, int, float) or isinstance(v, str) and len(v) <= 180}
+        facts.append({'source_id': eid, 'observed': shown,
+                      'omitted_fields': [k for k in fields if k in data and k not in shown]})
+    return sorted(facts, key=lambda f: not (f['observed'].get('has_next_cursor') or
+        any(f['observed'].get(k) is False for k in ('coverage_complete','complete_file','complete_member'))))
+
+
 def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
     """Small navigation projection. Truncated strings and omitted records are explicit."""
     budget = min(MAX_CONTEXT_BYTES, int(max_bytes))
@@ -259,13 +284,15 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
                            'truth_approval': False},
             'work_inventory': work_inventory(questions, missions, tests),
             'work_decision': 'Closed questions and zero pending items describe declared work, not coverage. Before DONE, compare requested_scope and known source inventory with content actually examined, including important areas never registered as questions. A benign collection process does not establish benign collected system state. Choose a useful local content check or explain its low value/constraint; do not require every file or infer global blockage from counts.',
-            'active_questions': [], 'active_missions': [], 'unassessed_results': [], 'closed_index': [],
+            'active_questions': [], 'active_missions': [], 'unassessed_results': [], 'closed_index': [], 'observed_scope': [],
+            'observed_scope_note': 'Execution metadata selected from the latest 64 results of this conversation, partial scopes first; omitted counts cover this window only. Complete literal search means its exact term and target, not all behavior. This is not body evidence or a whole-investigation coverage score.',
             'reports': reports,
             'omitted': {'active_questions': 0, 'active_missions': 0, 'unassessed_results': 0, 'closed_index': 0,
                         'other_goal_or_unbound_questions': len(state['questions']) - len(questions)},
             'preserved_history': {'excluded_records':state['meta'].get('excluded_history_records',0), 'meaning':'Excluded old definitions are preserved, not current evidence; note(get, include_history=true) locates revisions.'},
             'retrieval': 'forsic_note(get, note_id) and forsic_reporting(state/source); closure is scoped and reversible.'}
-    entries = {'active_questions': [], 'active_missions': [], 'unassessed_results': [], 'closed_index': []}
+    entries = {'active_questions': [], 'active_missions': [], 'unassessed_results': [], 'closed_index': [],
+               'observed_scope': recent_observed_scope(resolved, state)}
     from .report_driven.current_judgment import navigation_view
     for q in questions:
         item=navigation_view(state,q)

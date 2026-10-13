@@ -14,7 +14,8 @@ description: 자유로운 자료 탐색에서 선택한 근거를 현재 판단�
 - `forsic_case`로 현재 사건과 자료 범위를 확인한다. 상태 색인은 `forsic_reporting(action=state)`다.
   색인은 원문이 아니다. 필요한 pointer/next_offset과 snapshot_id로 상세를 조회한다.
 - 지원되는 증거 도구를 직접 사용한다. 이미지 본문은 `forsic_image_read`의 path(E01), file_path(내부 경로),
-  action(read/read_bytes)를 명시한다. TAR/TAR.GZ는 archive_list 후 필요한 member_index를 archive_read한다.
+  action(read/read_bytes)를 명시한다. TAR/TAR.GZ는 archive_list의 source_ref와 필요한 member_index를
+  forsic_archive_read의 listing_ref/member_index로 선택한다. 본문 근거는 실제 읽기 결과의 C2를 쓴다.
 - 본문 읽기의 `presented_spans[].citation_ref`는 실제 표시된 보존 필드만 선택한다. 파일 전체·과거 실행·
   성공·승인·귀속을 보장하지 않는다. 더 좁은 인용이나 긴 결과 재조회에는
   `forsic_reporting(action=source, source_id=...)`의 query 또는 pointer/offset을 쓴다.
@@ -26,6 +27,7 @@ description: 자유로운 자료 탐색에서 선택한 근거를 현재 판단�
 
 `forsic_question`은 생성과 수정을 함께 처리한다. 인자는 평평한 JSON이며 action/payload로 감싸지 않는다.
 새 질문은 operation_id, question, scope, answer를 보내고 question_id/expected_revision을 생략한다.
+이미 읽은 근거가 있으면 첫 저장에서도 judgment와 함께 범위를 종결할 수 있다. 사전 등록은 필요 없다.
 수정은 반환된 자신의 question_id와 **현재** expected_revision을 보낸다. 버전을 직접 증가시키지 않는다.
 동일 요청 재시도는 같은 operation_id, 바뀐 내용은 새 operation_id다. 충돌하면 최신 질문을 먼저 읽는다.
 
@@ -64,7 +66,9 @@ outcome/ reasoning_summary/ limitations/ next_check/ operation_id를 한 번에 
 
 work_state는 open/active/held/scoped_closed/blocked_internal/blocked_external/budget_deferred다.
 priority는 decision_critical/material/contextual/unassessed이며 신뢰도와 별개다.
-범위 종결에는 reason, reopening 조건인 reopen_conditions와 남은 gap_dispositions를 적는다.
+범위 종결에는 priority, reason, reopen_conditions와 남은 gap_dispositions를 적는다.
+새 질문의 처분은 gaps/critical_gaps의 문장을 그대로 gap_text로 선택한다. 기존 질문은 반환된 gap_id
+또는 정확한 gap_text 하나를 선택하며 ID를 만들지 않는다. 각 처분에는 disposition, reason, reopen_conditions가 필요하다.
 자료 부족·미검토·예산 보류는 정상 판단이 아니다. 불확실한 결론으로도 한정된 범위는 종결할 수 있다.
 원래 요청→확보 자료 색인→실제 검토 범위를 대조한다. 모든 파일 검사는 필요 없지만,
 등록 질문·미션을 모두 닫았다는 것만으로 중요한 미검토 영역을 숨기지 않는다.

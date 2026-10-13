@@ -20,6 +20,25 @@ copyrights and license terms remain applicable; see THIRD_PARTY_NOTICES.txt.
 
 Maintained integration areas
 ----------------------------
+- An active goal's iteration limit hands a deterministic runtime checkpoint to
+  the existing controller instead of an additional tool-less model synthesis.
+  The agent's own session DB supplies goal identity; recorded history, pending
+  verification answers, interruption/failure handling and non-goal summaries
+  remain intact. This removes one unsupported synthesis boundary, not model
+  reasoning errors; the existing judge still owns continuation and completion.
+- Native goal evaluation receives the typed per-turn iteration-limit outcome
+  across CLI, messaging and TUI delivery. It still uses the existing judge,
+  completion checks, turn budget and pause/CAS fences; no verdict is overridden.
+- Tool registration optionally supplies a pure bounded result_summary(args,
+  content) for native pruning. The profile-scoped registry owns its lifetime.
+  Invalid/oversized summaries fall back to native behavior; valid projections
+  that would grow a short result preserve the original and do not count as a
+  prune. Read and mutation errors retain their actual outcome and bounded error
+  text, including failures without an evidence source. Mutation acknowledgements
+  use returned records, not requested outcomes, and their execution record IDs
+  are not offered as body-source lookups. No ledger mutation,
+  tool execution or extra model call is performed. Forsic retains lookup IDs
+  and observed scope, not a fabricated conclusion or complete-file claim.
 - The Forsic-skinned TUI uses a compact analysis status, a lens emoji, context
   usage and runtime-reported token speed. Secondary voice/cache/session chrome
   is hidden; other skins and native execution are unchanged.
@@ -104,9 +123,15 @@ Response normalization preserves the stream's value-free pre-repair field shape
 so the existing post-response hook can compare both sides of argument repair.
 The native TUI goal continuation excludes controlled tool guardrail halts, so a
 halt cannot be judged as a successful turn and automatically restart its counters.
+The TUI/desktop/web native completion path also persists the exact active goal's
+pause on a controlled block/halt before any goal judge or compression retry.
+User-paused and absent goals remain unchanged; no separate supervisor loop is added.
 
 Maintained native loop comparison adapter: optional profile-scoped registered tool
 callback supplies pure argument/result comparison and read/poll policy. Defaults
 remain unchanged. Forsic excludes only known top-level receipt bookkeeping from
 comparison and retains full model-visible receipts and the immutable ledger.
 No model-returned metadata grants authority or disables native failure guards.
+Registered comparison callbacks may also name a failure_group so public aliases
+of one backend share the native same-tool failure budget. Native thresholds and
+default tool behavior are unchanged; model arguments/results cannot set this group.

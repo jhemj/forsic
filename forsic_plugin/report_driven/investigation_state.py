@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+import re
 import time
 import uuid
 
@@ -45,6 +46,46 @@ def record_mutation(db, operation_id, request, response):
 def latest_note(db, note_id):
     row = db.execute("SELECT data FROM events WHERE kind='note' AND json_extract(data,'$.note_id')=? ORDER BY rowid DESC LIMIT 1", (note_id,)).fetchone()
     return json.loads(row['data']) if row else None
+
+
+def note_gap_records(note, question, cited):
+    """Project actual declared gaps; adopted direct judgments need no synthetic test gap."""
+    from .host import ref
+    reasons = list(dict.fromkeys(note.get('critical_gaps', []) + note.get('gaps', [])))
+    if not reasons and not note.get('declared_gaps_only'):
+        reasons = ['현재 답과 원문을 판별 조건에 따라 평가해야 함']
+    return [dict(id=f"G-{question['id']}-{hash_value(reason)[:16]}", version=str(note['revision']),
+        question_ref=ref('question', question), section_targets=['E01','E02','A05','A11'],
+        original_obligation=reason, kind='unassessed_result' if cited else 'unpresented_source',
+        disposition='open', impact='decision_critical' if reason in note.get('critical_gaps', []) else 'unassessed',
+        reason=reason, basis_refs=cited, feasible_next_action='evaluate_result' if cited else 'read_source',
+        missing_preconditions=[], reopen_conditions=['새 원문·반론·질문 범위 정정'], resolution_refs=[])
+        for reason in reasons]
+
+
+def disposed_gaps(gaps, dispositions, question):
+    """Resolve the analyst's exact gap ID or text, without choosing a gap for them."""
+    from .host import ref
+    changed = []; selected = set()
+    for index, d in enumerate(dispositions):
+        path = f'payload.gap_dispositions[{index}]'
+        selectors = [k for k in ('gap_id', 'gap_text') if k in d]
+        if len(selectors) != 1:
+            raise ValueError(path+': select exactly one gap_id or exact gap_text')
+        key = selectors[0]; field = 'id' if key == 'gap_id' else 'original_obligation'
+        found = [g for g in gaps if g[field] == d[key]]
+        if len(found) != 1:
+            prefix = 'Unknown gaps ID: '+d[key]+'. ' if key == 'gap_id' else ''
+            raise ValueError(path+': '+prefix+'Gap selection does not identify one current question gap. New questions use gap_text copied exactly from gaps/critical_gaps; existing questions can use returned gap_id. No mutation was saved.')
+        g = found[0]
+        if g['id'] in selected:
+            raise ValueError(path+': duplicate gap disposition for '+g['id'])
+        selected.add(g['id'])
+        basis = list(g['basis_refs']) or [ref('question', question)]
+        changed.append({**g, 'disposition': d['disposition'], 'reason': d['reason'],
+            'feasible_next_action': 'none', 'reopen_conditions': d['reopen_conditions'],
+            'resolution_refs': basis if d['disposition'] == 'resolved' else []})
+    return changed
 
 
 def save_note_locked(case, db, args, *, question_update=None):
@@ -123,6 +164,10 @@ def save_note_locked(case, db, args, *, question_update=None):
         claim=analytical['claims'][0]
         value['evidence_ids']=selected_sources
         value.setdefault('investigation',{}).update(claim_refs=[ref('claim',claim)],judgment_review_required=False)
+        if not old:
+            # Preserve historical generated gaps/mission dependencies. New direct
+            # judgments project only the analyst's declared gaps.
+            value['declared_gaps_only'] = True
         change={'question_ref':{'kind':'question','id':'Q-'+note_id,'version':str(value['revision'])},
                 'definition_versions':{'Q-'+note_id:value['definition_version']},'basis_definitions':[],
                 'records':analytical,'validation':{'receipt':claim['adoption_receipt'],
@@ -131,6 +176,19 @@ def save_note_locked(case, db, args, *, question_update=None):
         db.execute('INSERT INTO events VALUES (?,?,?,?,?)',
             (uuid.uuid4().hex,time.time(),'report_change','',json.dumps(change,ensure_ascii=False)))
     db.execute('INSERT INTO events VALUES (?,?,?,?,?)', (uuid.uuid4().hex, value['updated_at'], 'note', '', json.dumps(value, ensure_ascii=False)))
+    if '_new_gap_dispositions' in args:
+        from .host import ref, current, find
+        q = {'id': 'Q-'+note_id, 'version': str(value['revision'])}
+        state = current(case)
+        cited = [ref('source', find(state, 'sources', eid)) for eid in value.get('evidence_ids', [])]
+        gaps = note_gap_records(value, q, cited)
+        changes = disposed_gaps(gaps, args['_new_gap_dispositions'], q)
+        if value.get('investigation', {}).get('work_state') == 'scoped_closed' and {g['id'] for g in gaps} - {g['id'] for g in changes}:
+            raise ValueError('Account for every declared remaining gap before scope closure using exact gap_text and its disposition')
+        if changes:
+            change = {'question_ref': ref('question', q), 'definition_versions': {q['id']: value['definition_version']},
+                'basis_definitions': [], 'records': {'gaps': changes}}
+            db.execute('INSERT INTO events VALUES (?,?,?,?,?)', (uuid.uuid4().hex, time.time(), 'report_change', '', json.dumps(change, ensure_ascii=False)))
     return {'note': value}
 
 
@@ -138,6 +196,7 @@ def question_receipt(note):
     return {'question_id': 'Q-' + note['note_id'], 'revision': note['revision'],
             'definition_version': note['definition_version'],
             'work_state': note.get('investigation', {}).get('work_state', 'open'),
+            'gap_lookup': {'tool': 'forsic_reporting', 'arguments': {'action': 'gaps', 'question_id': 'Q-' + note['note_id']}},
             'semantic_approval': False}
 
 
@@ -145,6 +204,7 @@ def compact_input_schemas():
     from .contracts import Assessment
     string = {'type': 'string'}
     strings = {'type': 'array', 'items': string}
+    nonblank = {**string, 'minLength': 1, 'pattern': r'\S'}
     common = {'operation_id': string, 'expected_revision': {'type': 'integer', 'minimum': 1}, 'question_id': string}
     question = {**common, **{k: string for k in ('question', 'target_proposition', 'scope', 'answer', 'reason')},
                 **{k: strings for k in ('evidence_ids', 'alternatives', 'gaps', 'critical_gaps', 'next_checks', 'reopen_conditions')},
@@ -152,8 +212,12 @@ def compact_input_schemas():
                 'priority': {'type': 'string', 'enum': sorted(PRIORITIES)},
                 'assessment': {'type': 'string', 'enum': ['supported', 'refuted', 'conflicting', 'undetermined']},
                 'gap_dispositions': {'type': 'array', 'items': {'type': 'object', 'properties': {
-                    'gap_id': string, 'disposition': {'type': 'string', 'enum': ['resolved', 'not_applicable', 'assessed_unresolved']},
-                    'reason': string, 'reopen_conditions': strings}, 'required': ['gap_id', 'disposition', 'reason', 'reopen_conditions'], 'additionalProperties': False}}}
+                    'gap_id': {**string, 'minLength': 1, 'description': 'Existing exact gap ID from this question. Choose gap_id OR gap_text.'},
+                    'gap_text': {**string, 'minLength': 1, 'description': 'Exact text from gaps/critical_gaps. Use for a new question; no invented gap IDs.'},
+                    'disposition': {'type': 'string', 'enum': ['resolved', 'not_applicable', 'assessed_unresolved']},
+                    'reason': nonblank, 'reopen_conditions': {'type': 'array', 'items': nonblank, 'minItems': 1,
+                        'description': 'At least one explicit reopening condition, including for resolved gaps.'}}, 'required': ['disposition', 'reason', 'reopen_conditions'],
+                    'oneOf': [{'required': ['gap_id']}, {'required': ['gap_text']}], 'additionalProperties': False}}}
     from .grounded_judgment import schema as judgment_schema
     question['judgment'] = judgment_schema()
     question['claim_action'] = {'type':'string','enum':['retain','replace','retract']}
@@ -198,6 +262,16 @@ def input_problems(payload, schema, path='payload'):
                'number':type(value) in (int,float),'boolean':type(value) is bool}.get(kind,True)
         if not valid:
             problems.append({'path':path,'expected_type':kind});return
+        for union in ('anyOf', 'oneOf'):
+            if union in spec:
+                matches=sum(not input_problems(value, branch, path) for branch in spec[union])
+                if (union=='oneOf' and matches!=1) or (union=='anyOf' and matches==0):
+                    problems.append({'path':path, union+'_required':[b.get('required',[]) for b in spec[union]],
+                                     'matched_branches':matches})
+        if isinstance(value,str) and len(value)<spec.get('minLength',0):
+            problems.append({'path':path,'minLength':spec['minLength']})
+        if isinstance(value,str) and 'pattern' in spec and not re.search(spec['pattern'],value):
+            problems.append({'path':path,'pattern':spec['pattern']})
         if 'enum' in spec and value not in spec['enum']:
             problems.append({'path':path,'allowed_values':spec['enum']})
         if kind in ('integer','number'):
@@ -205,13 +279,15 @@ def input_problems(payload, schema, path='payload'):
                 if bound in spec and ((bound=='minimum' and value<spec[bound]) or
                     (bound=='maximum' and value>spec[bound]) or (bound=='exclusiveMinimum' and value<=spec[bound])):
                     problems.append({'path':path,bound:spec[bound]})
-        if kind=='object':
+        if isinstance(value,dict):
             unknown=sorted(set(value)-set(spec.get('properties',{}))) if spec.get('additionalProperties') is False else []
             missing=sorted(set(spec.get('required',[]))-set(value))
             if unknown or missing:problems.append({'path':path,'unknown_fields':unknown,'missing_fields':missing})
             for k,v in value.items():
                 if k in spec.get('properties',{}):check(v,spec['properties'][k],path+'.'+k)
         if kind=='array':
+            if len(value)<spec.get('minItems',0):
+                problems.append({'path':path,'minItems':spec['minItems'],'actual_items':len(value)})
             for i,v in enumerate(value):check(v,spec['items'],path+f'[{i}]')
     check(payload,schema,path)
     return problems
@@ -506,30 +582,40 @@ def update_question(case, state, payload, host_args):
                       deferred_reason=None if destination=='scoped_closed' else reason)
     elif destination in ('open','active'):
         update.update(closure_rationale=None,deferred_reason=None)
-    gap_changes=[]
     dispositions=payload.get('gap_dispositions',[])
-    if len({d['gap_id'] for d in dispositions})!=len(dispositions):raise ValueError('Duplicate gap disposition')
-    for d in dispositions:
-        g=find(state,'gaps',d['gap_id'])
-        if not old or g['question_ref']['id']!=old['id']:
-            raise ValueError('Gap belongs to a different question')
-        if d['disposition'] not in ('resolved','not_applicable','assessed_unresolved') or not d.get('reason','').strip() or not d.get('reopen_conditions'):
-            raise ValueError('Each gap disposition needs a reason and reopening conditions')
-        basis=list(g['basis_refs']) or [ref('question',old)]
-        gap_changes.append({**g,'disposition':d['disposition'],'reason':d['reason'],
-                            'feasible_next_action':'none','reopen_conditions':d['reopen_conditions'],
-                            'resolution_refs':basis if d['disposition']=='resolved' else []})
+    gap_changes=[]
+    proposed_gaps=[]
+    if old:
+        # Closing while adding a new gap must account for that gap as well.
+        with case.connect() as db:
+            note = latest_note(db, old['id'].removeprefix('Q-')) or {'revision': old['revision']}
+        note = {**note, **{k: deepcopy(payload[k]) for k in ('gaps','critical_gaps') if k in payload}}
+        existing=[g for g in state['gaps'] if g['question_ref']['id']==old['id']]
+        if 'gaps' in payload or 'critical_gaps' in payload:
+            cited=[ref('source',find(state,'sources',sid)) for sid in payload.get('evidence_ids',old.get('evidence_ids',[]))]
+            proposed_gaps=note_gap_records(note,old,cited)
+        combined={g['id']:g for g in [*proposed_gaps,*existing]}
+        gap_changes=disposed_gaps(list(combined.values()),dispositions,old)
+    else:
+        # The actual note ID and selected sources are resolved by the same writer.
+        args['_new_gap_dispositions']=deepcopy(dispositions)
     if destination=='scoped_closed':
-        if not old:raise ValueError('Create and investigate a question before closing its scope')
-        if update.get('priority',old['priority'])=='unassessed':
+        if not old and not payload.get('judgment'):
+            raise ValueError('A new scoped answer needs explicit judgment selections from actual reads; no prior question registration or mission is required')
+        if update.get('priority',(old or {}).get('priority','unassessed'))=='unassessed':
             raise ValueError('Assess this question priority before scope closure: decision_critical, material or contextual. Closure cannot substitute for importance assessment.')
-        pending=[m for m in state['missions'] if m['question_ref']['id']==old['id'] and m['state'] in ('running','queued','unassessed')]
-        unassessed=[t for t in state['tests'] if t['question_ref']['id']==old['id'] and t.get('result_ref') and t['assessment_state']=='unassessed']
+        pending=[m for m in state['missions'] if m['question_ref']['id']==(old or {}).get('id') and m['state'] in ('running','queued','unassessed')]
+        unassessed=[t for t in state['tests'] if t['question_ref']['id']==(old or {}).get('id') and t.get('result_ref') and t['assessment_state']=='unassessed']
         if pending or unassessed:raise ValueError('Running or unassessed native work remains for this question')
-        outstanding={g['id'] for g in state['gaps'] if g['question_ref']['id']==old['id'] and g['disposition'] not in ('resolved','not_applicable') and g['feasible_next_action']!='none'}
-        if outstanding-{g['id'] for g in gap_changes}:
-            raise ValueError('Account for remaining question gaps with explicit dispositions before scope closure')
-        if not old.get('claim_refs') and not (payload.get('evidence_ids') or old.get('evidence_ids') or payload.get('judgment',{}).get('citation_refs')):
+        outstanding={g['id'] for g in [*state['gaps'],*proposed_gaps] if g['question_ref']['id']==(old or {}).get('id') and g['disposition'] not in ('resolved','not_applicable') and g['feasible_next_action']!='none'}
+        missing=sorted(outstanding-{g['id'] for g in gap_changes})
+        if missing:
+            raise ValueError('Account for remaining question gaps with explicit dispositions before scope closure. No mutation was saved. '+json.dumps({
+                'missing_gap_count':len(missing), 'missing_gap_ids':missing[:10],
+                'omitted_gap_ids':max(0,len(missing)-10),
+                'read_call':{'tool':'forsic_reporting','arguments':{'action':'gaps','question_id':old['id']}},
+                'paging':'Each response may contain only a page; follow next_call until it is null.'}))
+        if not (old or {}).get('claim_refs') and not (payload.get('evidence_ids') or (old or {}).get('evidence_ids') or payload.get('judgment',{}).get('citation_refs')):
             raise ValueError('Scope closure requires retained basis; it is not an incident verdict')
     args['correction_reason']=reason or payload.get('reason','')
     args['_claim_action']=payload.get('claim_action')
@@ -554,7 +640,7 @@ def update_question(case, state, payload, host_args):
     receipt=write(case,state,change,note_update={'args':args,'question_update':update})
     from .host import current
     now=find(current(case),'questions',old['id'])
-    return {'receipt':receipt,'question':{k:now[k] for k in ('id','revision','definition_version','work_state')},'semantic_approval':False}
+    return {'receipt':receipt,'question':{**{k:now[k] for k in ('id','revision','definition_version','work_state')},'gap_lookup':{'tool':'forsic_reporting','arguments':{'action':'gaps','question_id':now['id']}}},'semantic_approval':False}
 
 
 def validate_retained_mission(payload):

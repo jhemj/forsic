@@ -15,7 +15,7 @@ class ImageAdmissionTests(unittest.TestCase):
         self.x=efficiency.EfficiencyContracts(); self.x.setUp(); self.addCleanup(self.x.doCleanups)
 
     def bad_calls(self):
-        for action in ('read','read_bytes','stat','hash','archive_list','archive_read'):
+        for action in ('read','read_bytes','stat','hash','archive_list','archive_read','search'):
             args={'path':'synthetic.e01','action':action,'member_index':0}
             yield args
             for value in ('',None,3,True):
@@ -65,7 +65,7 @@ class ImageAdmissionTests(unittest.TestCase):
         self.assertEqual(current(self.x.case)['missions'],before['missions'])
 
     def test_root_defaults_exact_paths_and_unbound_exploration_remain_valid(self):
-        calls=[{'action':'volumes'},{'action':'list'},{'action':'search','text':'literal'},
+        calls=[{'action':'volumes'},{'action':'list'},{'action':'search','file_path':'/','text':'literal'},
                {'action':'stat','file_path':'/'},{'action':'read','file_path':' relative name '},
                {'action':'read_bytes','file_path':'body'}, {'action':'hash','file_path':'body'},
                {'action':'archive_list','file_path':'archive.tar'},
@@ -137,7 +137,7 @@ class ImageAdmissionTests(unittest.TestCase):
         schema=self.x.schemas['forsic_image_files']['parameters']
         self.assertEqual(original,self.x.schemas['forsic_image_files'])
         self.assertEqual(wire['properties']['action']['enum'],
-            [action for action in image_reader.IMAGE_ACTION_REQUIRED if action not in ('read','read_bytes')])
+            [action for action in image_reader.IMAGE_ACTION_REQUIRED if action not in ('read','read_bytes','archive_read')])
         self.assertEqual(wire['properties']['file_path']['minLength'],1)
         self.assertEqual(wire['required'],['path','action'])
         branches=self.x.schemas['forsic_mission']['parameters']['properties']['tool_arguments']['anyOf']
@@ -148,9 +148,14 @@ class ImageAdmissionTests(unittest.TestCase):
             contract=image_reader.image_action_contract(action)
             self.assertEqual(selected['required'],contract['required'])
             for field in contract['required']:
-                expected=contract['properties'][field] if field=='action' else wire['properties'][field]
+                expected=contract['properties'][field]
                 self.assertEqual(selected['properties'][field],expected)
         self.assertEqual(schema['required'],['path','action'])
+        # Native provider compatibility strips top-level unions. Conditional requirements
+        # remain explicit guidance; shared admission (tested above) is authoritative.
+        self.assertIn('search=file_path,text',wire['properties']['action']['description'])
+        self.assertIn('search',wire['properties']['file_path']['description'])
+
 
 
 if __name__=='__main__':unittest.main()
