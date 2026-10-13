@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Mapping
 
 from utils import safe_json_loads
+from agent.tool_loop_comparison import comparison
 from agent.tool_result_classification import file_mutation_result_landed, is_guardrail_refusal
 
 
@@ -171,7 +172,7 @@ class ToolCallSignature:
 
     @classmethod
     def from_call(cls, tool_name: str, args: Mapping[str, Any] | None) -> "ToolCallSignature":
-        return cls(tool_name=tool_name, args_hash=_sha256(canonical_tool_args(args or {})))
+        return cls(tool_name=tool_name, args_hash=_sha256(canonical_tool_args(comparison(tool_name, args).get("arguments", args or {}))))
 
     def to_metadata(self) -> dict[str, str]:
         """Return public metadata without raw argument values."""
@@ -367,7 +368,7 @@ class ToolCallGuardrailController:
         exact_count = 0 if self._progress_since_failure.get(signature) else self._exact_failure_counts.get(signature, 0)
         if exact_count >= self.config.exact_failure_block_after:
             return self._decide("block", "repeated_exact_failure_block", tool_name, exact_count, signature)
-        record = self._no_progress.get(signature) if self._is_idempotent(tool_name) else None
+        record = self._no_progress.get(signature) if self._is_idempotent(tool_name, args) else None
         if record is not None and record[1] >= self.config.no_progress_block_after:
             return self._decide("block", "idempotent_no_progress_block", tool_name, record[1], signature)
         return allow
@@ -420,11 +421,11 @@ class ToolCallGuardrailController:
         if tool_name in PROGRESS_RESET_TOOL_NAMES or file_mutation_result_landed(tool_name, result):
             self._progress_since_failure.update(dict.fromkeys(self._exact_failure_counts, True))
             self._same_tool_failure_counts.clear()
-        if not self._is_idempotent(tool_name):
+        if not self._is_idempotent(tool_name, args):
             self._no_progress.pop(signature, None)
             return ToolGuardrailDecision(tool_name=tool_name, signature=signature)
 
-        result_hash = _result_hash(result, tool_name)
+        result_hash = _result_hash(result, tool_name, args)
         previous = self._no_progress.get(signature)
         repeat_count = previous[1] + 1 if previous is not None and previous[0] == result_hash else 1
         self._no_progress[signature] = (result_hash, repeat_count)
@@ -432,8 +433,10 @@ class ToolCallGuardrailController:
             return self._decide("warn", "idempotent_no_progress_warning", tool_name, repeat_count, signature)
         return ToolGuardrailDecision(tool_name=tool_name, count=repeat_count, signature=signature)
 
-    def _is_idempotent(self, tool_name: str) -> bool:
-        return tool_name not in self.config.mutating_tools and tool_name in self.config.idempotent_tools
+    def _is_idempotent(self, tool_name: str, args=None) -> bool:
+        if tool_name in self.config.mutating_tools:
+            return False
+        return comparison(tool_name, args).get("idempotent", tool_name in self.config.idempotent_tools)
 
     def observe_call(
         self, tool_name: str, args: Mapping[str, Any] | None, result: str | None,
@@ -448,7 +451,7 @@ class ToolCallGuardrailController:
         """
         is_plain_str = isinstance(result, str)
         signature = ToolCallSignature.from_call(tool_name, _coerce_args(args))
-        result_hash = _result_hash(result, tool_name) if is_plain_str else ""
+        result_hash = _result_hash(result, tool_name, args) if is_plain_str else ""
 
         if is_plain_str and (signature, result_hash) == (self._identical_streak_sig, self._identical_streak_result_hash):
             self._identical_streak_count += 1
@@ -461,7 +464,7 @@ class ToolCallGuardrailController:
         count = self._identical_streak_count
 
         notice = kind = None
-        if not is_stall_guard_repeatable(tool_name) and count >= STALL_GUARD_IDENTICAL_CALL_THRESHOLD:
+        if not (comparison(tool_name, args).get("repeatable", False) or is_stall_guard_repeatable(tool_name)) and count >= STALL_GUARD_IDENTICAL_CALL_THRESHOLD:
             notice, kind = _IDENTICAL_CALL_NOTICE.format(ordinal=_ordinal(count), tool_name=tool_name), "identical_call_streak"
             # The no-progress BLOCK in before_call only covers idempotent_tools; this streak
             # is tool-agnostic, so with hard stops on, halt at the same threshold (a model
@@ -472,7 +475,7 @@ class ToolCallGuardrailController:
         # Batch-cycle detection (oh-my-pi#10521): a repeating multi-call cycle resets the
         # consecutive streak on every alternation, so check the call history for a period-p lap.
         if is_plain_str:
-            self._call_history.append((signature, result_hash, is_stall_guard_repeatable(tool_name)))
+            self._call_history.append((signature, result_hash, (comparison(tool_name, args).get("repeatable", False) or is_stall_guard_repeatable(tool_name))))
         else:
             self._call_history.clear()
         if notice is None and is_plain_str:
@@ -484,7 +487,7 @@ class ToolCallGuardrailController:
                     self._decide("halt", "identical_cycle_halt", tool_name, laps, signature, period=period)
 
         stub = None
-        if is_plain_str and count >= 2 and not failed and len(result) >= IDENTICAL_RESULT_STUB_MIN_CHARS:
+        if is_plain_str and count >= 2 and not failed and len(result) >= IDENTICAL_RESULT_STUB_MIN_CHARS and comparison(tool_name, args).get("deduplicate", True):
             stub = self._build_result_reference_stub(tool_name, args)
         return IdenticalCallObservation(notice=notice, stub=stub, kind=kind)
 
@@ -617,7 +620,10 @@ def _without_execute_code_metadata(parsed: Any) -> Any:
     return cleaned
 
 
-def _result_hash(result: str | None, tool_name: str = "") -> str:
+def _result_hash(result: str | None, tool_name: str = "", args=None) -> str:
+    projected = comparison(tool_name, args, result)
+    if "result" in projected:
+        return _sha256(_canonical_json(projected["result"]))
     parsed = safe_json_loads(result or "")
     if parsed is None:
         return _sha256(result or "")

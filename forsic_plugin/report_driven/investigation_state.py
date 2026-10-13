@@ -110,10 +110,26 @@ def save_note_locked(case, db, args, *, question_update=None):
                                                      judgment_review_required=True)
     if question_update:
         value.setdefault('investigation', {}).update(deepcopy(question_update))
-    if old and all(old.get(k) == value.get(k) for k in value if k not in ('correction_reason', 'updated_at', 'revision')):
+    if not args.get('_judgment') and old and all(old.get(k) == value.get(k) for k in value if k not in ('correction_reason', 'updated_at', 'revision')):
         return {'note': old, 'reused': True}
     value['revision'] = old['revision'] + 1 if old else 1
     value['updated_at'] = time.time()
+    if '_judgment' in args:
+        from .grounded_judgment import records
+        from .host import current, ref
+        # No inferred mission/test: the same note transaction stores exact
+        # observations and the analyst's explicitly selected aggregate claim.
+        analytical, selected_sources = records(case,current(case),value,args['_judgment'])
+        claim=analytical['claims'][0]
+        value['evidence_ids']=selected_sources
+        value.setdefault('investigation',{}).update(claim_refs=[ref('claim',claim)],judgment_review_required=False)
+        change={'question_ref':{'kind':'question','id':'Q-'+note_id,'version':str(value['revision'])},
+                'definition_versions':{'Q-'+note_id:value['definition_version']},'basis_definitions':[],
+                'records':analytical,'validation':{'receipt':claim['adoption_receipt'],
+                'checks':['explicit retained selection','source version','exact UTF-8 span'],
+                'semantic_approval':False}}
+        db.execute('INSERT INTO events VALUES (?,?,?,?,?)',
+            (uuid.uuid4().hex,time.time(),'report_change','',json.dumps(change,ensure_ascii=False)))
     db.execute('INSERT INTO events VALUES (?,?,?,?,?)', (uuid.uuid4().hex, value['updated_at'], 'note', '', json.dumps(value, ensure_ascii=False)))
     return {'note': value}
 
@@ -138,6 +154,8 @@ def compact_input_schemas():
                 'gap_dispositions': {'type': 'array', 'items': {'type': 'object', 'properties': {
                     'gap_id': string, 'disposition': {'type': 'string', 'enum': ['resolved', 'not_applicable', 'assessed_unresolved']},
                     'reason': string, 'reopen_conditions': strings}, 'required': ['gap_id', 'disposition', 'reason', 'reopen_conditions'], 'additionalProperties': False}}}
+    from .grounded_judgment import schema as judgment_schema
+    question['judgment'] = judgment_schema()
     question['claim_action'] = {'type':'string','enum':['retain','replace','retract']}
     mission = {**common, **{k: string for k in ('gap_id', 'why_it_matters', 'tool_name', 'support_rule', 'refute_rule', 'inconclusive_rule', 'target_proposition')},
                'tool_arguments': {'type': 'object'},
@@ -216,7 +234,7 @@ def validate_native_plan(payload, schemas):
     if not name: return  # The existing mission contract explains missing identity.
     if schemas is not None and (not isinstance(name,str) or name not in schemas):
         raise ValueError('Unsupported planned evidence tool: '+str(name))
-    if name=='forsic_image_files':
+    if name in ('forsic_image_files','forsic_image_read'):
         from ..image_reader import validate_image_action
         validate_image_action(payload.get('tool_arguments'),'tool_arguments')
     if schemas is None:return  # Legacy callers have no registry; image admission still applies.
@@ -266,6 +284,7 @@ def image_read_reference_schema():
         'path':{'type':'string','minLength':1,'description':'Exact evidence image path from the saved mission.'},
         'mission_id':{'type':'string','minLength':1,'description':'Exact ID of the saved, unstarted image read/read_bytes mission.'},
         'mission_version':{'type':'string','minLength':1,'description':'Unchanged saved mission version from next_call or current mission details.'},
+        'retry_of':{'type':'string','minLength':1,'description':'Only from a returned retry_call: exact transient failed result ID. One retry maximum; no input overrides or uncertain-work retry.'},
         'reason':{'type':'string'}},'required':['path','mission_id','mission_version'],'additionalProperties':False}
 
 
@@ -292,7 +311,7 @@ def resolve_image_read_reference(case, arguments, schemas):
     The caller still validates owner/version/definition/state and records the start.
     """
     from .host import current, find
-    allowed={'path','action','mission_id','mission_version','reason'}
+    allowed={'path','action','mission_id','mission_version','reason','retry_of'}
     if set(arguments)-allowed:
         raise ValueError('from_mission accepts only path, action, mission_id, mission_version and reason; direct argument overrides are not allowed')
     if not isinstance(arguments.get('path'),str) or not arguments['path']:
@@ -300,7 +319,9 @@ def resolve_image_read_reference(case, arguments, schemas):
     if schemas is None or 'forsic_image_files' not in schemas:
         raise ValueError('Saved-mission execution requires the registered native tool contract')
     mission=find(current(case),'missions',arguments['mission_id'])
-    if (mission.get('state') not in ('draft','candidate','ready') or
+    if arguments.get('retry_of'):
+        validate_read_retry(case, mission, arguments['retry_of'])
+    elif (mission.get('state') not in ('draft','candidate','ready') or
             mission.get('execution_start_ids') or mission.get('result_ids')):
         raise ValueError('from_mission requires an unstarted plan; returned, assessed or uncertain executions cannot be retried by reference')
     stored=mission.get('tool_arguments')
@@ -325,7 +346,22 @@ def failed_result(data):
                 (data.get('tool')=='forsic_verify' and not pending_result(data) and data.get('verification_complete') is not True))
 
 
-def validate_execution_context(case, mission_id, expected_revision, tool_name, arguments, *, goal_id='', session_id=''):
+def validate_read_retry(case, mission, result_id):
+    # Only a committed, explicitly classified transient failure is retryable.
+    # A new tool_start fences this receipt immediately, including crash windows.
+    starts=mission.get('execution_start_ids', [])
+    results=mission.get('result_ids', [])
+    if (mission['state']!='failed' or len(starts)!=1 or len(results)!=1
+            or results[-1]!=result_id or mission.get('proposed_tool_name')!='forsic_image_files'
+            or mission.get('tool_arguments',{}).get('action') not in ('read','read_bytes')):
+        raise ValueError('Retry requires the single latest committed transient read failure; successful, running, uncertain or already retried work cannot be repeated')
+    event=case.event(result_id);data=event['data']
+    if (event['kind']!='tool_result' or data.get('started_id')!=starts[0]
+            or data.get('retryable_read_failure') is not True or not data.get('error')):
+        raise ValueError('Selected result is not a confirmed transient read failure')
+
+
+def validate_execution_context(case, mission_id, expected_revision, tool_name, arguments, *, goal_id='', session_id='', retry_of=None):
     """Read-only admission. Caller atomically stores this with tool_start.
 
     This checks identity and the analyst's exact intended input, not whether the
@@ -345,7 +381,9 @@ def validate_execution_context(case, mission_id, expected_revision, tool_name, a
         raise ValueError('Mission belongs to a superseded question definition')
     if q['work_state'] != 'active' and q['work_state'] != 'open':
         raise ValueError('Reopen the question before executing its mission')
-    if m['state'] in ('completed', 'failed', 'unassessed'):
+    if retry_of:
+        validate_read_retry(case, m, retry_of)
+    elif m['state'] in ('completed', 'failed', 'unassessed'):
         raise ValueError('Mission already returned; evaluate the retained result or create a materially changed mission')
     actual = normalized_tool_arguments(arguments)
     planned = normalized_tool_arguments(m.get('tool_arguments', {}))
@@ -431,6 +469,8 @@ def update_question(case, state, payload, host_args):
     from ..notes import sources
     validate_input('question',payload)
     question_id=payload.get('question_id')
+    if not question_id and 'expected_revision' in payload:
+        raise ValueError('New questions omit expected_revision and question_id; updates require both current values')
     old=find(state,'questions',question_id) if question_id else None
     if old:check_question_revision(old,payload,goal_id=host_args.get('_goal_id',''),session_id=host_args.get('_session_id',''))
     args={k:deepcopy(v) for k,v in payload.items() if k in NOTE_FIELDS}
@@ -489,10 +529,17 @@ def update_question(case, state, payload, host_args):
         outstanding={g['id'] for g in state['gaps'] if g['question_ref']['id']==old['id'] and g['disposition'] not in ('resolved','not_applicable') and g['feasible_next_action']!='none'}
         if outstanding-{g['id'] for g in gap_changes}:
             raise ValueError('Account for remaining question gaps with explicit dispositions before scope closure')
-        if not old.get('claim_refs') and not (payload.get('evidence_ids') or old.get('evidence_ids')):
+        if not old.get('claim_refs') and not (payload.get('evidence_ids') or old.get('evidence_ids') or payload.get('judgment',{}).get('citation_refs')):
             raise ValueError('Scope closure requires retained basis; it is not an incident verdict')
     args['correction_reason']=reason or payload.get('reason','')
     args['_claim_action']=payload.get('claim_action')
+    if 'judgment' in payload:
+        if not payload.get('answer','').strip() or not reason:
+            raise ValueError('A grounded judgment requires an explicit answer and reason')
+        if payload.get('claim_action') in ('retain','retract'):
+            raise ValueError('A new grounded judgment replaces the current claim; retain/retract cannot be combined')
+        args['_judgment']=deepcopy(payload['judgment'])
+        args['_claim_action']='replace'
     if not old or question_id=='Q-intake':
         with case.connect() as db:
             db.execute('BEGIN IMMEDIATE')

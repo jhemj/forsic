@@ -140,13 +140,15 @@ function FaceTicker({
   dimColor = false,
   startedAt,
   style,
-  verbOverride
+  verbOverride,
+  forensic = false
 }: {
   color: string
   dimColor?: boolean
   startedAt?: null | number
   style: IndicatorStyle
   verbOverride?: string
+  forensic?: boolean
 }) {
   const [tick, setTick] = useState(() => Math.floor(Math.random() * 1000))
   const [verbTick, setVerbTick] = useState(() => Math.floor(Math.random() * VERBS.length))
@@ -195,7 +197,7 @@ function FaceTicker({
 
   const { frame } = renderIndicator(style, tick)
   const verb = verbOverride ?? VERBS[verbTick % VERBS.length] ?? ''
-  const verbSegment = displayVerb ? ` ${padVerb(verb)}` : ''
+  const verbSegment = displayVerb ? ` ${forensic ? `${verb}…` : padVerb(verb)}` : ''
   // Leading space keeps a gap between the frame and the duration when the
   // verb segment is hidden (e.g. `unicode` spinner style).  When the verb
   // IS shown, its trailing padding already provides the gap, so the extra
@@ -204,7 +206,7 @@ function FaceTicker({
 
   return (
     <Text color={color} dimColor={dimColor}>
-      {frame}
+      {forensic ? '🔎' : frame}
       {verbSegment}
       {durationSegment}
     </Text>
@@ -561,18 +563,24 @@ export function StatusRule({
 }: StatusRuleProps) {
   // Not a hook: tests call StatusRule as a plain function, and the rule re-renders on every tick anyway.
   const T = messages()
+  const forensic = t.brand.name.toLowerCase() === 'forsic'
+  if (forensic) indicatorStyle = 'emoji'
+  const busyLabel = forensic ? (compacting ? '문맥 정리 중' : '분석 중') : undefined
   const pct = usage.context_percent ?? undefined
   const contextMark = usage.context_estimated ? '~' : ''
   const barColor = ctxBarColor(pct, t)
   const segs = statusBarSegments(cols)
+  if (forensic && cols < 110) segs.compactCtx = true
 
   // display.status_bar.fields visibility gate (same key + names as the
   // classic CLI bar). null = user hasn't customized → everything shows.
-  const ok = (name: string) => statusBarFields === null || statusBarFields.has(name)
+  const ok = (name: string) =>
+    !(forensic && ['voice', 'duration', 'cache_hit', 'latency', 'battery'].includes(name)) &&
+    (statusBarFields === null || statusBarFields.has(name))
 
   // On narrow terminals the context read-out collapses to a bare token count
   // (`12k tok`) and the visual fill bar is dropped entirely.
-  const ctxLabel =
+  const contextTokens =
     ok('context_detail') || ok('context_pct')
       ? usage.context_max
         ? segs.compactCtx
@@ -583,7 +591,11 @@ export function StatusRule({
           : ''
       : ''
 
-  const bar = !segs.compactCtx && usage.context_max && ok('context_pct') ? ctxBar(pct) : ''
+  const ctxLabel =
+    forensic && contextTokens
+      ? `문맥 ${contextTokens}${pct != null && !segs.compactCtx ? ` · ${contextMark}${pct}%` : ''}`
+      : contextTokens
+  const bar = !forensic && !segs.compactCtx && usage.context_max && ok('context_pct') ? ctxBar(pct) : ''
   const modelText = modelLabel(model, modelReasoningEffort, modelFast, modelReasoningEffortWire)
 
   // Battery read-out — the first (pinned) status-bar element when enabled.
@@ -610,18 +622,25 @@ export function StatusRule({
   // (kaomoji is wide + verb; unicode is a bare 1-col spinner). When a notice
   // occupies the slot it reserves only `noticeReserve` (it shrinks/truncates).
   const slotWidth = busy
-    ? busyIndicatorWidth(indicatorStyle, turnStartedAt != null)
+    ? forensic
+      ? stringWidth(`🔎 ${busyLabel}…`) + (turnStartedAt != null ? stringWidth(' · ') + MAX_DURATION_WIDTH : 0)
+      : busyIndicatorWidth(indicatorStyle, turnStartedAt != null)
     : showNotice
       ? noticeReserve
       : stringWidth(status)
 
+  const tpsText =
+    typeof usage.avg_tps === 'number' ? `↑ ${Math.round(usage.avg_tps)} ${forensic ? 'tok/s' : 't/s'}` : ''
+  const pinnedTps = forensic && ok('tps') && !!tpsText
+
   const essentialWidth =
-    stringWidth('─ ') +
+    stringWidth(forensic ? '포식이 · ' : '─ ') +
     batteryWidth +
     slotWidth +
     stringWidth(' │ ') +
     stringWidth(modelText) +
-    (ctxLabel ? stringWidth(' │ ') + stringWidth(ctxLabel) : 0)
+    (ctxLabel ? stringWidth(' │ ') + stringWidth(ctxLabel) : 0) +
+    (pinnedTps ? stringWidth(' │ ') + stringWidth(tpsText) : 0)
 
   const rightLabel = sessionTitle && ok('title') ? ` ${sessionTitle} ` : cwdLabel
   const { leftWidth, rightWidth, separatorWidth } = statusRuleWidths(cols, rightLabel, essentialWidth)
@@ -663,7 +682,7 @@ export function StatusRule({
   // (the FaceTicker's elapsed tail covers the live turn) and before the first
   // turn completes. Shares the duration breakpoint and width reservation.
   const showIdle =
-    segs.duration && !busy && lastTurnEndedAt != null && fits(SEP + stringWidth('✓ ') + MAX_DURATION_WIDTH)
+    !forensic && segs.duration && !busy && lastTurnEndedAt != null && fits(SEP + stringWidth('✓ ') + MAX_DURATION_WIDTH)
 
   const showCompressions =
     segs.compressions &&
@@ -678,11 +697,10 @@ export function StatusRule({
   const showCacheHit = segs.cacheHit && ok('cache_hit') && !!cacheHitText && fits(SEP + stringWidth(cacheHitText))
   const latencyText = typeof usage.avg_latency_s === 'number' ? `◷ ${usage.avg_latency_s.toFixed(1)}s` : ''
   const showLatency = segs.latency && ok('latency') && !!latencyText && fits(SEP + stringWidth(latencyText))
-  const tpsText = typeof usage.avg_tps === 'number' ? `↑ ${Math.round(usage.avg_tps)} t/s` : ''
-  const showTps = segs.tps && ok('tps') && !!tpsText && fits(SEP + stringWidth(tpsText))
+  const showTps = pinnedTps || (segs.tps && ok('tps') && !!tpsText && fits(SEP + stringWidth(tpsText)))
 
   const showVoice = segs.voice && ok('voice') && !!voiceLabel && fits(SEP + stringWidth(voiceLabel))
-  const showSessionCount = !!sessionCountText && fits(SEP + stringWidth(sessionCountText))
+  const showSessionCount = !forensic && !!sessionCountText && fits(SEP + stringWidth(sessionCountText))
   const showBg = segs.bg && ok('bg_tasks') && bgCount > 0 && fits(SEP + stringWidth(T.status.bgTasks(bgCount)))
   const subagentCount = typeof usage.active_subagents === 'number' ? usage.active_subagents : 0
 
@@ -729,7 +747,7 @@ export function StatusRule({
             renders as a separate shrinkable box below so a long notice
             ellipsizes instead of crushing model │ ctx (R3-M7). */}
         <Box flexDirection="row" flexShrink={0}>
-          <Text color={t.color.border}>{'─ '}</Text>
+          <Text color={forensic ? t.color.accent : t.color.border}>{forensic ? '포식이 · ' : '─ '}</Text>
           {showBattery ? (
             <Text color={batteryColorVal}>
               {batteryText}
@@ -742,7 +760,8 @@ export function StatusRule({
               dimColor={compacting}
               startedAt={turnStartedAt}
               style={indicatorStyle}
-              verbOverride={compacting ? T.status.compacting : undefined}
+              verbOverride={busyLabel ?? (compacting ? T.status.compacting : undefined)}
+              forensic={forensic}
             />
           ) : showNotice ? null : (
             <Text color={compacting ? t.color.muted : statusColor} dimColor={compacting} wrap="truncate-end">

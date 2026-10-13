@@ -275,7 +275,7 @@ class MissionReferenceTests(unittest.TestCase):
         entry = sanitize_tool_schemas([{'type': 'function', 'function':
             deepcopy(self.x.schemas['forsic_image_read_mission'])}])[0]['function']['parameters']
         self.assertEqual(set(entry['required']), {'path', 'mission_id', 'mission_version'})
-        self.assertEqual(set(entry['properties']), {'path', 'mission_id', 'mission_version', 'reason'})
+        self.assertEqual(set(entry['properties']), {'path', 'mission_id', 'mission_version', 'reason', 'retry_of'})
         self.assertFalse(entry['additionalProperties'])
         for field in entry['required']:
             self.assertEqual(entry['properties'][field]['type'], 'string')

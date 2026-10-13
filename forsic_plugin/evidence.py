@@ -289,13 +289,13 @@ class Case:
             tool='forsic_image_files'
         conversation_id = request_context.get('conversation_id') or request_context.get('session_id') or session
         # Model-only linkage fields never become evidence-parser arguments.
-        call_args = {k: v for k, v in args.items() if k not in ('mission_id', 'mission_version') and not k.startswith('_')}
+        call_args = {k: v for k, v in args.items() if k not in ('mission_id', 'mission_version', 'retry_of') and not k.startswith('_')}
         mission_context, admission_error, admission_details = None, None, {}
         reference = reference_entry or (tool=='forsic_image_files' and args.get('action')=='from_mission')
         argument_resolution = None
         supplied_mission = 'mission_id' in args or 'mission_version' in args
         writes_question = (tool == 'forsic_note' and args.get('action') == 'save') or (
-            tool == 'forsic_reporting' and args.get('action') in ('question', 'mission', 'mission_from_results', 'assess', 'assess_basis', 'assessment_basis', 'gap', 'requirement'))
+            tool == 'forsic_reporting' and args.get('action') in ('question', 'mission', 'mission_from_results', 'assess', 'assess_basis', 'assess_selected', 'assessment_basis', 'gap', 'requirement'))
         if request_context.get('status') == 'unavailable' and (writes_question or supplied_mission or reference):
             admission_error = 'Native session/goal binding is unavailable; retry this state change only after that binding can be read. No unrelated goal was selected.'
         started = uuid.uuid4().hex
@@ -312,6 +312,9 @@ class Case:
                 if not admission_error and tool=='forsic_reporting' and args.get('action')=='mission':
                     from .report_driven.investigation_state import validate_native_plan
                     validate_native_plan(args.get('payload'),tool_schemas)
+                    if args.get('payload',{}).get('tool_name')=='forsic_image_read':
+                        call_args={**call_args,'payload':{**args['payload'],'tool_name':'forsic_image_files'}}
+                        argument_resolution={'kind':'public_tool_alias','submitted_tool_name':'forsic_image_read','canonical_tool_name':'forsic_image_files'}
                 if not admission_error and (supplied_mission or reference):
                     from .image_reader import InvalidArguments
                     pair=('mission_id','mission_version')
@@ -321,6 +324,8 @@ class Case:
                     if problems:
                         raise InvalidArguments(problems,{'required':list(pair),
                             'properties':{key:{'type':'string','minLength':1} for key in pair}})
+                if not admission_error and args.get('retry_of') and (not reference_entry or request_context.get('goal_status')!='active'):
+                    raise ValueError('Explicit read retry requires an active owning native goal and the mission reference entry; paused or unknown goals are not resumed')
                 if not admission_error and reference:
                     from .report_driven.investigation_state import resolve_image_read_reference, hash_value, normalized_tool_arguments
                     call_args=resolve_image_read_reference(self,args,tool_schemas)
@@ -333,14 +338,16 @@ class Case:
                     from .report_driven.investigation_state import validate_execution_context
                     mission_context = validate_execution_context(
                         self, args.get('mission_id'), args.get('mission_version'), tool, call_args,
-                        goal_id=request_context.get('goal_id', ''), session_id=conversation_id)
+                        goal_id=request_context.get('goal_id', ''), session_id=conversation_id, retry_of=args.get('retry_of'))
+                    if args.get('retry_of'):
+                        mission_context['retry_of']=args['retry_of']
             except (ValueError, KeyError, TypeError, StopIteration) as exc:
                 admission_error = str(exc)
                 admission_details = getattr(exc,'details',{})
             start_data = {"tool": tool, "reason": args.get("reason", ""),
                           "path": call_args.get("file_path") or call_args.get("path", ""),
                           "text": call_args.get("text", ""), 'arguments': call_args}
-            if reference or direct_read_entry:
+            if reference or direct_read_entry or argument_resolution:
                 start_data['submitted_tool']=submitted_tool
                 start_data['submitted_arguments']=args
             if argument_resolution:
@@ -384,7 +391,11 @@ class Case:
                 call_args.update(_goal_id=request_context.get('goal_id', ''), _session_id=conversation_id)
             result = handlers[tool](call_args)
         except (OSError, ValueError, KeyError, TypeError, StopIteration, ImportError, sqlite3.Error, subprocess.SubprocessError) as exc:
-            result = {"error": str(exc), "error_type": type(exc).__name__, "next_step": "Explain the limitation; change the path/scope/tool if supported. Do not repeat the identical failed call."}
+            result = {"error": str(exc), "error_type": type(exc).__name__, "failure_stage": "admission" if admission_error else "execution", "next_step": "Explain the limitation; change the path/scope/tool if supported. Do not repeat the identical failed call."}
+            if (not admission_error and mission_context and tool=='forsic_image_files'
+                    and call_args.get('action') in ('read','read_bytes')
+                    and isinstance(exc,(TimeoutError,BlockingIOError))):
+                result['retryable_read_failure']=True
             if isinstance(exc, FileNotFoundError) and tool in ('forsic_read', 'forsic_read_bytes', 'forsic_search', 'forsic_list'):
                 result.update(outcome='not_found', path=args.get('path', ''),
                               meaning='Requested path was not found in the selected evidence; deletion history is not established.')
@@ -399,10 +410,21 @@ class Case:
             if admission_details:
                 result['next_step']='Correct the named argument fields before retrying. No evidence backend started; this is not a missing-file observation. For a planned check, copy its exact saved next_call; for discovery use the current evidence inventory. Do not infer a path or mission.'
         eid = self.record("tool_result", result, session)
-        if tool == 'forsic_intel':
-            from .intelligence import model_view
-            result = model_view(result)
-        from .report_driven.measurement import measurement_view
-        measurement=measurement_view(result)
-        # Presentation only: retained source bytes/version remain unchanged.
-        return json.dumps({**({'measurement':measurement} if measurement else {}), "evidence_id": eid, **result}, ensure_ascii=False)
+        if result.get('retryable_read_failure') and not args.get('retry_of'):
+            result['retry_call']={'tool':'forsic_image_read_mission','arguments':{
+                'path':call_args['path'],'mission_id':args['mission_id'],
+                'mission_version':args['mission_version'],'retry_of':eid}}
+            result['next_step']='A transient read failure was committed. You may select retry_call once without changing this plan. Persistent parser/input failures require diagnosis; this does not resume a paused goal.'
+        retained_result = result
+        try:
+            if tool == 'forsic_intel':
+                from .intelligence import model_view
+                result = model_view(result)
+            from .report_driven.measurement import measurement_view
+            measurement=measurement_view(result)
+            # Presentation only: retained source bytes/version remain unchanged.
+            return json.dumps({**({'measurement':measurement} if measurement else {}), "evidence_id": eid, **result}, ensure_ascii=False)
+        except (ValueError, TypeError) as exc:
+            return json.dumps({"evidence_id":eid, **retained_result, 'presentation_warning':{
+                'failure_stage':'presentation', 'error_type':type(exc).__name__,
+                'next_step':'Use the retained evidence_id. Do not repeat execution or intake for a display failure.'}},ensure_ascii=False)

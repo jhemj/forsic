@@ -56,10 +56,10 @@ scoped_closed와 이유·근거·남은 공백 처분·재검토 조건으로 �
 
 ## 결과에서 다음 검사로
 
-현재 질문에서 판별 미션을 기록하고 정확한 도구·입력과 반환 mission_id/mission_version을 실제 호출에 연결한다.
-이미 반환된 결과는 forsic_mission_from_results의 result_ids로 명시해 사후 평가 미션을 만든다. 도구·경로를 다시 보내지 않는다.
-영수증의 retained_result_ids가 보존 결과 결속이며 execution_result_ids는 별도의 실제 실행 기록이다. 사후 미션은 후자가 비어 있을 수 있다.
-선택한 원문 citation_ref를 forsic_assessment_basis로 준비하고 영수증과 판단을 forsic_assess에 보낸다. 실행·반환·평가 상태는 실제 영수증으로 확인하며 계획만으로 완료라 하지 않는다.
+자료를 직접 읽고 검색하며 답을 바꿀 관측을 선택한다. 읽기/원문 조회에서 받은 citation_ref를
+forsic_question.judgment에 넣어 현재 답·근거·반론·한계를 함께 저장한다. 준비 호출·사후 미션은 필요 없다.
+사전 판별 조건이 중요한 검사에만 선택적으로 forsic_mission을 사용한다. 계획했다면 next_call을 실행하고
+forsic_assess에 실제 결과와 선택한 인용·판단을 한 번에 전달한다. 계획·반환·국소 평가·전체 종결을 구별한다.
 
 답을 바꾸는 결과는 review-conclusions의 관측 → 추론 → 판별 대조 후 현재 답으로 채택한다.
 특히 기록에 등장한 검사·검색 명령과 실제 검출 출력의 출처를 구별한다. 도구가 반환한 속성으로만 관측을 기술하고

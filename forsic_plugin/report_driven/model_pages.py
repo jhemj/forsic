@@ -130,29 +130,36 @@ def audit_view(audit):
 
 def state_view(state, audit, args):
     snapshot = state['meta']['snapshot_id']
+    goal_id,session_id=args.get('_goal_id'),args.get('_session_id')
+    bound=bool(goal_id and session_id)
+    def owned(q):return bound and q.get('goal_id')==goal_id and q.get('session_id')==session_id
+    context={'binding_available':bound,'owned_question_count':sum(owned(q) for q in state['questions']),
+        'other_question_count':sum(not owned(q) for q in state['questions']),
+        'new_question_tool':'forsic_question',
+        'meaning':'Case-wide retained records remain readable. Only current-goal/current-conversation questions are editable here; no ownership is transferred.'}
     continuation = 'pointer' in args or args.get('offset', 0) != 0
     if continuation and args.get('snapshot_id') != snapshot:
         raise ValueError('State changed or snapshot_id missing; read state again before paging')
     if continuation:
         path = args.get('pointer', '/gaps' if args['action'] == 'gaps' else '')
         selected=select(state,path)
-        envelope={'snapshot_id': snapshot, 'view_kind': 'report_state'}
+        envelope={'snapshot_id': snapshot, 'view_kind': 'report_state','conversation_scope':context}
         # Existing saved missions also get today's exact native entry call on lookup.
         if re.fullmatch(r'/missions/(0|[1-9][0-9]*)',path) and isinstance(selected,dict):
             from .investigation_state import image_read_reference_call
             question=next((q for q in state['questions'] if q['id']==selected['question_ref']['id']),None)
-            call=image_read_reference_call(selected) if question and question['work_state'] in ('open','active') else None
+            call=image_read_reference_call(selected) if question and owned(question) and question['work_state'] in ('open','active') else None
             if call and size(call)<MAX_BYTES-2000:envelope['next_call']=call
         return page(selected, path, args, envelope)
     if args['action'] == 'gaps':
         return page(state['gaps'], '/gaps', args, {'snapshot_id': snapshot, 'view_kind': 'report_state',
-                    'audit': audit_view(audit), 'requirement_count': len(state['requirements']),
+                    'conversation_scope':context,'audit': audit_view(audit), 'requirement_count': len(state['requirements']),
                     'requirements_pointer': '/requirements'})
     from .current_judgment import navigation_view
-    questions = [dict(current_judgment=navigation_view(state,q), id=q['id'], version=q['version'], revision=q['revision'], definition_version=q['definition_version'], question_preview=q['question'][:120],
+    questions = [dict(editable_in_current_conversation=owned(q),current_judgment=navigation_view(state,q), id=q['id'], version=q['version'], revision=q['revision'], definition_version=q['definition_version'], question_preview=q['question'][:120],
                       assessment=q['assessment'], work_state=q['work_state'],
-                      pointer='/questions/' + str(i)) for i, q in enumerate(state['questions'][:2])]
-    result = {'snapshot_id': snapshot, 'state': {'meta': state['meta'],
+                      pointer='/questions/' + str(i)) for i, q in sorted(enumerate(state['questions']),key=lambda pair:not owned(pair[1]))[:2]]
+    result = {'snapshot_id': snapshot,'conversation_scope':context, 'state': {'meta': state['meta'],
               'status': {k: v for k, v in state['status'].items() if not isinstance(v, list)},
               'scope': descriptor(state['scope'], '/scope'), 'questions': questions},
               'audit': audit_view(audit), 'view_kind': 'overview', 'partial_view': True,
@@ -161,8 +168,8 @@ def state_view(state, audit, args):
                                  for k, v in state.items() if isinstance(v, list)},
               'next_step': 'Read needed pointer with this snapshot_id, offset and limit. Previews/indexes are not original evidence; omitted records are not shown on this page; their review status belongs to the records.'}
     if size(result) > MAX_BYTES:
-        result['state']['questions'] = []
-        result['omitted_counts']['questions'] = len(state['questions'])
+        result['state']['questions'] = [{k:v for k,v in q.items() if k!='current_judgment'} for q in questions]
+        result['omitted_counts']['questions'] = len(state['questions'])-len(questions)
         result['audit'] = {'snapshot_id': snapshot, 'counts': {k: len(v) for k, v in audit.items() if isinstance(v, list)}}
     if size(result) > MAX_BYTES:
         result['state'] = descriptor(state, '')

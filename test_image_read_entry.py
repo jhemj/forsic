@@ -188,12 +188,12 @@ class ImageReadEntryTests(unittest.TestCase):
         self.assertNotIn('read_bytes', generic['properties']['action']['enum'])
         self.assertTrue({'list', 'volumes'} <= set(generic['properties']['action']['enum']))
         mission = sanitized('forsic_mission')
-        self.assertNotIn('forsic_image_read', mission['properties']['tool_name']['enum'])
+        self.assertIn('forsic_image_read', mission['properties']['tool_name']['enum'])
         self.assertNotIn('forsic_image_read', EVIDENCE_TOOLS)
         branch = next(item for item in mission['properties']['tool_arguments']['anyOf'] if item['title'] == 'forsic_image_files')
         self.assertTrue({'read', 'read_bytes'} <= set(branch['properties']['action']['enum']))
         result = self.x.call('forsic_mission', {**self.x.plan(), 'tool_name': 'forsic_image_read', 'tool_arguments': self.args})
-        self.assertIn('error', result)
+        self.assertNotIn('error', result)
 
 
 if __name__ == '__main__':

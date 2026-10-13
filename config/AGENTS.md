@@ -34,7 +34,7 @@ forsic_intake로 접수한다. 접근·형식·분할 목록을 알려주되 초
 질문 기록을 사용한다. 기존 질문 변경에는 question_id/current expected_revision, 변경마다 operation_id를
 보내며 같은 요청 재시도에만 같은 ID·payload를 쓴다. answer에 현재 설명·신뢰도와 이유·관측/추정·판단 범위를 짧게 저장한다.
 evidence_ids는 실제 근거, alternatives는 중요한 반론, gaps/critical_gaps는 한계와 핵심 공백,
-next_checks는 다음 검사 또는 재검토 조건이다. status는 answered/open/needs_input만 사용한다.
+next_checks는 다음 검사 또는 재검토 조건이다. 질문 저장은 forsic_question을 사용한다.
 answered는 범위 한정 답이며 악성/정상 확정이나 사건 전체 완료를 뜻하지 않는다.
 같은 질문은 현재 revision으로 갱신하고 충돌 시 최신 질문을 읽어 다른 변경을 보존한다. 저장 성공은 의미 검증이 아니다.
 조사 work_state와 노트 status는 구별한다. 범위 종결은 question의 scoped_closed와 reason/reopen_conditions,
@@ -42,7 +42,7 @@ answered는 범위 한정 답이며 악성/정상 확정이나 사건 전체 완
 바꾸므로 이전 미션·평가를 최신으로 간주하지 않는다. 근거 있는 불확실한 답도 종결 가능하나 보류·미검토는 숨기지 않는다.
 
 원문·상세 결과는 사건 저장소에 보존한다. 활성 문맥에는 현재 질문·핵심 근거 참조·중요 반론·다음 검사만,
-종결 범위는 짧은 판단/노트 ID로 유지한다. list는 색인, get은 선택한 현재 노트, save는 영수증이다.
+종결 범위는 짧은 판단/노트 ID로 유지한다. state는 색인, 상세 pointer는 선택한 현재 판단이다. 과거 노트의 list/get은 이력 조회용이다.
 이력 전문은 실제 정정 이력 검토 때만 요청한다. 답이나 중요한 공백이 바뀌지 않으면 노트를 다시 쓰지 않는다.
 재개·압축 뒤에는 범위 색인과 진행할 질문을 먼저 읽는다. 전체 디렉터리를 다시 순회하거나 종결 원문을
 전부 재주입하지 않는다. 필요한 원문은 forsic_reporting(source)의 해당 필드로 재사용한다.
@@ -66,7 +66,7 @@ Hermes의 압축을 사용하며 이미 읽은 출력이 즉시 문맥에서 사
 - test-hypothesis / correlate-time: 경쟁 설명 판별, 시간 관계 검토
 - answer-question / review-conclusions: 현재 답 저장·정정, 핵심 주장 검토
 - initial-access / data-movement / personal-data-scope / organize-indicators: 해당 질문이 있을 때
-- forsic-report-driven: 현재 답·공백을 미션·실제 결과 평가에 연결하고 동일 snapshot의 두 독자 보고서 생성
+- forsic-report-driven: 선택한 근거와 현재 판단·공백을 연결하고 동일 snapshot의 두 독자 보고서 생성
 - report-executive / report-analyst / executive-followup: 전달에 필요한 독자별 질문과 추가 판별
 - threat-intelligence: 허용된 해시·공개 IP/도메인의 평판 확인
 모든 스킬을 매번 읽지 않는다. 이미지 내부는 forsic_image_files, 추출 파일은 forsic_search/read를 쓴다.
@@ -74,16 +74,13 @@ image_files의 path는 E01 경로, file_path는 이미지 안의 경로다. TAR/
 멤버 목록을 보고 archive_read로 필요한 member_index를 읽는다. 목록만으로 내용 검토를 대신하지 않는다.
 
 ## 보고와 보존
-새 조사는 forsic-report-driven의 state/gaps → question → mission → 기존 증거 도구 → assessment_basis → assess → render를 사용한다.
-새 수집은 정확 tool_name/tool_arguments로 미션을 계획하고 반환 mission_id/mission_version을 실제 도구에 연결한다.
-보존 결과는 forsic_mission_from_results의 result_ids로 명시적으로 선택한다. 도구·경로를 다시 계획하지 않는다.
-사후 미션 영수증의 retained_result_ids는 저장된 선택이고 execution_result_ids는 그 미션의 실제 실행 반환이다.
-사후 미션의 execution_result_ids가 비어 있어도 저장 실패가 아니며, 선택한 보존 결과로 평가를 준비한다.
-실행 서술·계획 저장은 실제 반환이 아니다.
-평가할 mission_id/result_id와 source 조회의 citation_ref를 forsic_assessment_basis에 선택한다. 프로그램이
-질문·미션·결과 버전과 정확한 인용 위치를 고정한다. forsic_assess에는 basis_receipt_id와 판단만 보낸다.
-본문·메타데이터 및 일부/전체 범위는 여전히 직접 비교한다. 0건 조회에는 인용 참조가 없으며 만들어내지 않는다.
-기준이 바뀌어 거절되면 원문·질문을 다시 확인해 새 기준을 준비한다. 평가 완료와 질문 범위 종결은 별개다.
+기본 흐름은 사용자 질문 → 직접 읽기·검색 → 선택한 근거와 현재 판단 → 필요한 추가 조사 → 보고다.
+새 수집마다 미션을 등록하거나 보존 결과를 사후 미션으로 바꾸지 않는다. 미션은 사전 판별 조건을
+보존할 가치가 있는 검사에만 사용하며 선택한 경우 실제 실행·반환·평가를 연결한다.
+읽기의 presented_spans 또는 source 조회에서 반환된 citation_ref를 forsic_question의 judgment에
+명시적으로 선택한다. answer/reason과 관측·해석 구분, 반론, 가정, 한계를 함께 저장한다.
+프로그램이 정확한 버전·좌표와 원장을 관리한다. 준비 영수증이나 별도 평가가 선행 조건이 아니다.
+C1/C2 참조의 범위는 실제 반환된 필드이며 전체 파일·실행 성공을 보장하지 않는다.
 노트 저장이 실패하면 현재 답은 아직 보존되지 않았다. 오류를 고쳐 같은 note_id/current revision으로
 재저장한 영수증을 확인한다. 실패한 초안을 저장한 것처럼 보고하지 않는다. 실제 새 판별 결과를 반영한
 최신 노트로 render하고 반환된 snapshot·경로를 전달한다. 옛 보고 경로를 새 발견의 보고서로 재사용하지 않는다.

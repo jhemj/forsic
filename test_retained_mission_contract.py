@@ -65,7 +65,9 @@ class RetainedMissionContractTests(unittest.TestCase):
 
     def test_retained_schema_survives_native_sanitization_without_execution_fields(self):
         from tools.schema_sanitizer import sanitize_tool_schemas
-        schema = self.x.schemas['forsic_mission_from_results']
+        from forsic_plugin.report_driven.investigation_state import compact_input_schemas
+        schema = {'parameters':compact_input_schemas()['mission_from_results']}
+        self.assertNotIn('forsic_mission_from_results',self.x.schemas)
         wire = sanitize_tool_schemas([{'type': 'function', 'function': schema}])[0]['function']['parameters']
         self.assertIn('result_ids', wire['required'])
         self.assertIn('gap_id', wire['required'])
@@ -132,7 +134,7 @@ class RetainedMissionContractTests(unittest.TestCase):
         self.assertNotIn('result_ids', receipt)
         self.assertNotIn('next_call', saved)
         self.assertFalse(saved['execution_authorized'])
-        self.assertEqual(saved['next_tool'], 'forsic_assessment_basis')
+        self.assertEqual(saved['next_tool'], 'forsic_assess')
         rules = receipt['assessment_rules']
         self.assertEqual(rules['purpose'], 'discriminate')
         self.assertEqual(rules['target_proposition'], stored['target_proposition'])

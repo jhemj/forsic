@@ -20,6 +20,9 @@ copyrights and license terms remain applicable; see THIRD_PARTY_NOTICES.txt.
 
 Maintained integration areas
 ----------------------------
+- The Forsic-skinned TUI uses a compact analysis status, a lens emoji, context
+  usage and runtime-reported token speed. Secondary voice/cache/session chrome
+  is hidden; other skins and native execution are unchanged.
 - The native plugin supplies read-only evidence tools, case intake, notes,
   report-driven investigation skills, reader-specific reports and case-library UI.
 - Existing TUI message/session components support distinct user/assistant
@@ -101,3 +104,9 @@ Response normalization preserves the stream's value-free pre-repair field shape
 so the existing post-response hook can compare both sides of argument repair.
 The native TUI goal continuation excludes controlled tool guardrail halts, so a
 halt cannot be judged as a successful turn and automatically restart its counters.
+
+Maintained native loop comparison adapter: optional profile-scoped registered tool
+callback supplies pure argument/result comparison and read/poll policy. Defaults
+remain unchanged. Forsic excludes only known top-level receipt bookkeeping from
+comparison and retains full model-visible receipts and the immutable ledger.
+No model-returned metadata grants authority or disables native failure guards.

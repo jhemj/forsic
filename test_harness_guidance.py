@@ -17,15 +17,13 @@ class HarnessGuidanceTests(unittest.TestCase):
             register(ctx)
         schemas = {c.kwargs['name']: c.kwargs['schema'] for c in ctx.register_tool.call_args_list}
         self.assertIn('forsic_reporting(render)', GOAL)
-        self.assertIn('실제 결과 평가', GOAL)
-        self.assertIn('Legacy report compatibility only', schemas['forsic_report']['description'])
+        self.assertIn('직접 읽은 근거', GOAL)
+        self.assertNotIn('forsic_report', schemas)
         reporting = schemas['forsic_reporting']['parameters']['properties']
         self.assertIn('review', reporting['action']['enum'])
         self.assertIn('review_id', reporting)
         self.assertIn('question_ids', reporting)
-        revision = schemas['forsic_note']['parameters']['properties']['revision']
-        self.assertIn('CURRENT stored revision', revision['description'])
-        self.assertIn('send 2 to save revision 3', revision['description'])
+        self.assertEqual(schemas['forsic_note']['parameters']['properties']['action']['enum'],['list','get'])
         self.assertIn('forsic_reporting(state)', schemas['forsic_read']['description'])
 
     def test_report_review_patience_uses_existing_native_setting(self):

@@ -25,6 +25,17 @@ class EfficiencyContracts(unittest.TestCase):
         self.schemas={c.kwargs['name']:c.kwargs['schema'] for c in ctx.register_tool.call_args_list}
 
     def call(self,tool,args):
+        legacy={'forsic_mission_from_results':'mission_from_results','forsic_assessment_basis':'assessment_basis'}
+        action=legacy.get(tool)
+        if tool=='forsic_assess' and 'basis_receipt_id' in args:action='assess_basis'
+        if action:
+            result=json.loads(self.case.invoke('forsic_reporting',{'action':action,'payload':args},'synthetic-session',
+                request_context={'goal_id':'synthetic-goal','conversation_id':'synthetic-session'}))
+            if action=='assessment_basis':
+                from forsic_plugin.report_driven.assessment_basis import basis_view
+                return basis_view(result)
+            from forsic_plugin.model_results import mutation_view
+            return mutation_view(result,self.case)
         return json.loads(self.handlers[tool](args,session_id='synthetic-session'))
 
     def test_api_boundary_receipt_keeps_metadata_without_request_contents(self):
@@ -145,8 +156,8 @@ class EfficiencyContracts(unittest.TestCase):
         from tools.schema_sanitizer import sanitize_tool_schemas
         wire=sanitize_tool_schemas([{'type':'function','function':self.schemas['forsic_mission']}])[0]['function']['parameters']
         branches={branch['title']:branch for branch in wire['properties']['tool_arguments']['anyOf']}
-        self.assertEqual(set(branches),EVIDENCE_TOOLS)
-        self.assertEqual(set(wire['properties']['tool_name']['enum']),EVIDENCE_TOOLS)
+        self.assertEqual(set(branches),EVIDENCE_TOOLS | {'forsic_image_read'})
+        self.assertEqual(set(wire['properties']['tool_name']['enum']),EVIDENCE_TOOLS | {'forsic_image_read'})
         for name,branch in branches.items():
             native=sanitize_tool_schemas([{'type':'function','function':self.schemas[name]}])[0]['function']['parameters']
             self.assertEqual(branch['required'],native['required'])

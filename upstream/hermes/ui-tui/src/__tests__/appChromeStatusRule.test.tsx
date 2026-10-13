@@ -1,3 +1,6 @@
+import { PassThrough } from 'node:stream'
+import { renderSync } from '@hermes/ink'
+import stripAnsi from 'strip-ansi'
 import React from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -479,4 +482,68 @@ describe('StatusRule perf read-outs (cache hit / latency / tps)', () => {
 
     expect(textContent(element)).not.toContain('weekly-digest')
   })
+})
+
+describe('Forsic status strip', () => {
+  const theme = { ...DEFAULT_THEME, brand: { ...DEFAULT_THEME.brand, name: 'Forsic' } }
+  it('keeps token speed ahead of a long title and removes secondary chrome', () => {
+    const text = textContent(
+      StatusRule({
+        ...baseProps,
+        t: theme,
+        cols: 100,
+        liveSessionCount: 6,
+        voiceLabel: '음성 꺼짐',
+        sessionTitle: 'A very long investigation session title',
+        usage: { ...baseProps.usage, avg_tps: 10.2, cache_hit_pct: 83, avg_latency_s: 26.4 }
+      })
+    )
+    expect(text).toContain('포식이')
+    expect(text).toContain('문맥 50k tok')
+    expect(text).toContain('↑ 10 tok/s')
+    expect(text).not.toContain('음성')
+    expect(text).not.toContain('83%')
+    expect(text).not.toContain('26.4s')
+    expect(text).not.toContain('sessions')
+    expect(text).not.toContain('█')
+  })
+  it('does not invent speed before the runtime has measured it', () => {
+    expect(textContent(StatusRule({ ...baseProps, t: theme }))).not.toContain('tok/s')
+  })
+})
+
+it.each([false, true])('renders Forsic busy/compaction text through Ink (compacting=%s)', compacting => {
+  const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 10, isTTY: false })
+  let output = ''
+  stdout.on('data', chunk => {
+    output += chunk.toString()
+  })
+  const view = renderSync(
+    <StatusRule
+      {...baseProps}
+      busy
+      compacting={compacting}
+      cols={100}
+      t={{ ...DEFAULT_THEME, brand: { ...DEFAULT_THEME.brand, name: 'Forsic' } }}
+      model="qwen3.8-flash-next:iq4_xs"
+      indicatorStyle="kaomoji"
+      turnStartedAt={Date.now() - 159000}
+      usage={{ ...baseProps.usage, avg_tps: 10 }}
+      voiceLabel="음성 꺼짐"
+      liveSessionCount={6}
+    />,
+    {
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      stdin: new PassThrough() as unknown as NodeJS.ReadStream,
+      patchConsole: false
+    }
+  )
+  view.unmount()
+  view.cleanup()
+  const text = stripAnsi(output)
+  expect(text).toContain('🔎')
+  expect(text).toContain(compacting ? '문맥 정리 중' : '분석 중')
+  expect(text).toContain('10 tok/s')
+  expect(text).not.toContain('reasoning')
+  expect(text).not.toContain('음성')
 })

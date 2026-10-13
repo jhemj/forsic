@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 
 PIN = 'bafb42b431fca313471958fdf77f9c30e455f86b'
 DEPENDENCIES = {'python-docx': '1.2.0', 'lxml': '6.1.3', 'python-telegram-bot': '22.8'}
-ROOT_FILES = ('AGENTS.md', '.hermes.md', 'run.py', 'telegram_mirror.py', 'telegram_mentions.py', 'telegram_reports.py',
+ROOT_FILES = ('test_grounded_judgment.py', 'test_recovery_integration.py', 'AGENTS.md', '.hermes.md', 'run.py', 'telegram_mirror.py', 'telegram_mentions.py', 'telegram_reports.py',
               'telegram_actions.py', 'deploy_forsic.py',
               'smoke.py', 'library_smoke.py', 'requirements-forsic.txt', 'Dockerfile.tools',
               'UPSTREAM.txt', 'README.txt', 'DEPLOYMENT.txt', 'DESIGN.txt', 'HARNESS_REVIEW.txt', 'test_deployment.py',
@@ -41,6 +41,7 @@ REQUIRED_PUBLIC = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', '.gitignor
 CONFIG_FILES = ('SOUL.md', 'AGENTS.md', 'skin.yaml', 'forsic-theme.yaml', 'config.example.yaml')
 FIXTURES = ('notes.txt', 'cron.log', 'change.txt')
 UPSTREAM_ADDITIONS = (
+    'agent/tool_loop_comparison.py',
     'tests/hermes_cli/test_custom_banner_branding.py', 'tests/tui_gateway/test_goal_display.py',
     'ui-tui/src/__tests__/sessionGreeting.test.ts', 'ui-tui/src/app/sessionGreeting.ts',
     'web/public/assets/forsic-lens.svg', 'web/src/plugins/slots.test.tsx',

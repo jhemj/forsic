@@ -346,6 +346,12 @@ def write(case, state, change, *, note_update=None, response=None):
             request=mutation['request']
             validate_commit(case,now,request['payload']['basis_receipt_id'],
                 goal_id=request.get('_goal_id',''),session_id=request.get('_session_id',''))
+        if mutation and mutation['request'].get('action')=='assess_selected':
+            from .assessment_basis import expand_selected
+            request=mutation['request']
+            kwargs={'goal_id':request.get('_goal_id',''),'session_id':request.get('_session_id','')}
+            if expand_selected(case,now,request['payload'],**kwargs)!=expand_selected(case,state,request['payload'],**kwargs):
+                raise ValueError('Selected test or source changed before commit; review the current records')
         if compact:
             owner_ids={r['id'] for _,r in find_refs(change) if r['kind']=='question'}
             for owner in owner_ids:
@@ -448,9 +454,9 @@ def invoke(case,args):
     if not isinstance(payload, dict):
         raise ValueError('payload must be a JSON object, not a serialized string, list or null. Send payload: {operation_id: ..., ...}; for question use answer and evidence_ids, and the current integer expected_revision when updating. No question or mission state was changed.')
     operation=payload.get('operation_id') or args.get('operation_id')
-    compact=args['action'] in ('question','assess_basis','mission_from_results') or (args['action']=='mission' and 'question_id' in payload) or (args['action']=='assess' and 'expected_revision' in payload)
+    compact=args['action'] in ('question','assess_basis','assess_selected','mission_from_results') or (args['action']=='mission' and 'question_id' in payload) or (args['action']=='assess' and 'expected_revision' in payload)
     if compact and not operation:
-        if args['action']=='assess_basis':
+        if args['action'] in ('assess_basis','assess_selected'):
             raise ValueError('payload.operation_id must be nonempty for safe retries; no mutation was saved')
         from .investigation_state import validate_input
         validate_input(args['action'], payload)
@@ -486,6 +492,10 @@ def _invoke(case,args):
     if action=='assessment_basis':
         from .assessment_basis import prepare
         return prepare(case,s,p,goal_id=args.get('_goal_id',''),session_id=args.get('_session_id',''))
+    if action=='assess_selected':
+        from .assessment_basis import expand_selected
+        p=expand_selected(case,s,p,goal_id=args.get('_goal_id',''),session_id=args.get('_session_id',''))
+        return assess(case,s,expand_assessment(s,p,goal_id=args.get('_goal_id',''),session_id=args.get('_session_id','')))
     if action=='assess_basis':
         from .assessment_basis import expand
         p=expand(case,s,p,goal_id=args.get('_goal_id',''),session_id=args.get('_session_id',''))

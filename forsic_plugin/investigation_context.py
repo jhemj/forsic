@@ -128,7 +128,7 @@ def native_goal_binding(session_id, *, intake_root, native_db=None):
         resolved = resolve_context(session_id, intake_root=intake_root, native_db=native_db)
         if resolved is None:
             return {'status': 'not_applicable'}
-        return {'status': 'ready', **{key: resolved[key] for key in
+        return {'status': 'ready', 'goal_status': resolved['goal'].status if resolved['goal'] else None, **{key: resolved[key] for key in
                 ('goal_id', 'session_id', 'requested_session_id', 'conversation_id', 'case_id')}}
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
         return {'status': 'unavailable', 'reason': _clip(str(exc), 300)}

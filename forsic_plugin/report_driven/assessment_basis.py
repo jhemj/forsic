@@ -220,7 +220,8 @@ def prepare(case, state, payload, goal_id='', session_id=''):
     citations, ranges = [], []
     sources = {result['id']: result}
     for selected in payload['citation_refs']:
-        citation = _selection(case, state, selected)
+        from .grounded_judgment import selection
+        citation = selection(case, state, selected)
         source, span = _citation(case, state, citation)
         if allowed_sources.get(source['id']) != source['version']:
             raise ValueError('Selected citation was not part of this mission input; use an explicit retained-result mission for additional results')
@@ -292,3 +293,25 @@ def basis_view(result):
         'semantic_approval': False, 'next_tool': 'forsic_assess',
         'required_judgment_fields': ['operation_id', 'outcome', 'reasoning_summary', 'limitations', 'next_check'],
         'next_step': 'Call forsic_assess with basis_receipt_id and your explicit local judgment. This basis neither evaluates meaning nor closes the question.'}
+
+
+def selected_schema():
+    legacy=schemas()['assess_basis']
+    properties={k:deepcopy(v) for k,v in legacy['properties'].items() if k!='basis_receipt_id'}
+    properties.update(deepcopy(schemas()['assessment_basis']['properties']))
+    properties['expected_revision']={'type':'integer','minimum':1,'description':'Current owning question revision; do not increment it yourself.'}
+    return {'type':'object','properties':properties,'required':[k for k in legacy['required'] if k!='basis_receipt_id']+['mission_id','result_id','citation_refs','expected_revision'],'additionalProperties':False}
+
+
+def expand_selected(case,state,payload,goal_id='',session_id=''):
+    """One call for an optional planned test; old basis receipts remain readable."""
+    from .investigation_state import input_problems
+    problems=input_problems(payload,selected_schema())
+    if problems:raise ValueError('Invalid test evaluation: '+str(problems)+'. No assessment was saved.')
+    selected={k:payload[k] for k in ('mission_id','result_id','citation_refs')}
+    basis=prepare(case,state,selected,goal_id,session_id)['assessment_basis']
+    if payload['expected_revision']!=basis['question']['revision']:
+        raise ValueError('Question revision changed; review its current answer before evaluating')
+    proposal={k:deepcopy(v) for k,v in payload.items() if k not in ('citation_refs',)}
+    proposal.update(mission_version=basis['mission']['version'],result_version=basis['result']['version'],citations=basis['citations'])
+    return proposal

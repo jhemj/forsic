@@ -62,8 +62,8 @@ def mutation_view(result, case):
                 view['current_question']={k:question[k] for k in ('id','revision','definition_version','work_state')}
             view['current_mission_state']=current_record['state'] if current_record else 'not_current'
             if current_record and current_record.get('reuse_result_refs'):
-                view['next_tool']='forsic_assessment_basis'
-                view['next_step']='This after-result mission has saved the explicit retained_result_ids. execution_result_ids records only native calls made under this mission and may be empty. Select one retained result and its source citation_refs for forsic_assessment_basis; no physical execution is needed. If assessment_rules lists clipped_fields, read those conditions through details_call before judging.'
+                view['next_tool']='forsic_assess'
+                view['next_step']='This after-result mission has saved the explicit retained_result_ids. execution_result_ids records only native calls made under this mission and may be empty. Select one retained result and its source citation_refs for forsic_assess; no physical execution is needed. If assessment_rules lists clipped_fields, read those conditions through details_call before judging.'
         if key=='mission' and current_record and current_record['state']=='draft' and question and question['work_state'] in ('open','active') and not record.get('reuse_result_refs') and record.get('proposed_tool_name'):
             from .report_driven.investigation_state import image_read_reference_call
             view['next_call']=image_read_reference_call(current_record) or {'tool':record['proposed_tool_name'],'arguments':{

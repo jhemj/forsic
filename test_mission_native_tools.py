@@ -132,7 +132,10 @@ class MissionNativeToolsTests(unittest.TestCase):
         register(ctx)
         schemas={c.kwargs['name']:c.kwargs['schema'] for c in ctx.register_tool.call_args_list}
         for action,shape in compact_input_schemas().items():
-            if action=='assess':shape=basis_schemas()['assess_basis']
+            if action in ('question_create','mission_from_results'):continue
+            if action=='assess':
+                from forsic_plugin.report_driven.assessment_basis import selected_schema
+                shape=selected_schema()
             schema=schemas['forsic_'+action]
             wire=sanitize_tool_schemas([{'type':'function','function':schema}])[0]['function']['parameters']
             self.assertEqual(set(wire['properties']),set(shape['properties']))
@@ -142,9 +145,11 @@ class MissionNativeToolsTests(unittest.TestCase):
             self.assertFalse(wire['additionalProperties'])
         self.assertNotIn('mission_id',schemas['forsic_question']['parameters']['properties'])
         self.assertNotIn('question',schemas['forsic_assess']['parameters']['properties'])
-        for field in ('mission_id','mission_version','result_id','result_version','citations','expected_revision'):
+        for field in ('mission_version','result_version','citations','basis_receipt_id'):
             self.assertNotIn(field,schemas['forsic_assess']['parameters']['properties'])
-        prepared=schemas['forsic_assessment_basis']['parameters']
+        from forsic_plugin.report_driven.assessment_basis import schemas as legacy_schemas
+        prepared=legacy_schemas()['assessment_basis']
+        self.assertNotIn('forsic_assessment_basis',schemas)
         self.assertEqual(prepared,basis_schemas()['assessment_basis'])
         for action in compact_input_schemas():
             self.assertNotIn(action,schemas['forsic_reporting']['parameters']['properties']['action']['enum'])
@@ -182,7 +187,7 @@ class MissionNativeToolsTests(unittest.TestCase):
             register(ctx)
             handler=next(c.kwargs['handler'] for c in ctx.register_tool.call_args_list if c.kwargs['name']=='forsic_assess')
             out=json.loads(handler(p,session_id='synthetic-session'))
-        self.assertIn('Invalid assess_basis input',out['error'])
+        self.assertIn('Invalid test evaluation',out['error'])
         self.assertIn('payload.outcome',out['error']);self.assertIn('allowed_values',out['error'])
         self.assertIn('supports',out['error']);self.assertIn('No assessment was saved',out['error'])
         self.assertEqual(current(self.case)['assessments'],before['assessments'])
@@ -218,11 +223,9 @@ class MissionNativeToolsTests(unittest.TestCase):
                 'source_version':src['version'],'pointer':'/lines/0/text','offset':0,'limit':4096})
             self.assertNotIn('error',located,located)
             self.assertEqual(located['text'],result['lines'][0]['text'])
-            basis=invoke('forsic_assessment_basis',{'mission_id':m['id'],
-                'result_id':src['id'],'citation_refs':[located['citation_ref']]})
-            self.assertNotIn('error',basis,basis)
             assessed=invoke('forsic_assess',{'operation_id':'assessment',
-                'basis_receipt_id':basis['evidence_id'],'outcome':'inconclusive',
+                'mission_id':m['id'],'result_id':src['id'],'expected_revision':q['revision'],
+                'citation_refs':[located['citation_ref']],'outcome':'inconclusive',
                 'reasoning_summary':'A recorded request is not an execution receipt','limitations':['Execution unverified'],
                 'next_check':'Independent execution record'})
             self.assertNotIn('error',assessed,assessed)
@@ -346,9 +349,8 @@ class MissionNativeToolsTests(unittest.TestCase):
              patch('forsic_plugin.investigation_context.native_goal_binding',return_value={'goal_id':'trusted'}):
             # register captured the imported binding, so register once more inside the patch.
             ctx.reset_mock();register(ctx)
-            handler=next(call.kwargs['handler'] for call in ctx.register_tool.call_args_list if call.kwargs['name']=='forsic_note')
-            out=json.loads(handler({'action':'save','question':'A new question','answer':'Unknown',
-                '_goal_id':'untrusted'},session_id='synthetic-session'))
+            handler=next(call.kwargs['handler'] for call in ctx.register_tool.call_args_list if call.kwargs['name']=='forsic_question')
+            out=json.loads(handler({'operation_id':'trusted-context','question':'A new question','scope':'Synthetic logs','answer':'Unknown'},session_id='synthetic-session'))
         self.assertNotIn('error',out)
         q=next(q for q in current(self.case)['questions'] if q['question']=='A new question')
         self.assertEqual(q['goal_id'],'trusted')
