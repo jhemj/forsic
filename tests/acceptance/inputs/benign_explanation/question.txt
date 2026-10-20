@@ -1,0 +1,2 @@
+Does the supplied inventory export require an unexplained-execution conclusion?
+Initial read: records.jsonl, line_start=1, line_count=20.

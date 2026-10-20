@@ -1,0 +1,90 @@
+Forsic 하네스 P0/P1 구현 계약 — 2026-10-14
+
+설계 입력
+Pro의 f8ba261538ecb8040ef19a3ee04bf764a451048d 검토를 첫 수직 경로에 적용한다.
+원격 공개 기준과 로컬 운영 계보는 다르므로 배포 영수증에서 각각 기록한다.
+외부 프로젝트를 이번 구현에서 다시 조사하거나 새 실행 엔진을 설치하지 않았다.
+
+책임과 상태 소유권
+Hermes: 단일 native 실행 루프, goal, 취소, 실패 예산, 세션, 압축.
+Forsic adapter (__init__.py/evidence.py): 현재 사건과 native goal 결속, 실제 모델 메뉴,
+신뢰된 계약 버전, 입력/실행/반환 경계. 모델이 내부 소유권이나 버전을 덮어쓰지 못한다.
+Forensic domain (report_driven): 정확한 출처와 읽기 범위, 명시 C1/C2 선택,
+기존 Note 단일 writer, CAS/중복 방지, 정정 이력, 질문별 보고 보기.
+분석 판단: 에이전트가 가장 유력한 설명·경쟁 설명·가정·추가 가치·종결을 판단한다.
+정확한 인용과 구조 검사는 그 판단의 의미 정확성 승인이 아니다.
+
+첫 변경 묶음의 계약
+1. 새 v2 질문은 잠정 답을 먼저 저장하거나 즉시 근거 판단을 저장해도 declared_gaps_only다.
+   입력하지 않은 평가 의무나 Mission/Test/Assessment를 합성하지 않는다.
+   기존 v1 노트와 실제 미션 dependency는 그대로 재생한다. 문자열로 옛 공백을 삭제하지 않는다.
+2. judgment의 필수 입력은 citation_refs/assertion_kind/reasoning_summary다.
+   counter_citation_refs/inference_strength/assumptions/limitations는 선택 입력이며,
+   생략과 명시적 빈 값은 declared_analysis_fields로 구분한다. 생략은 검토 완료가 아니다.
+   내부 기존 자료형의 빈 배열/unrated 기본값에는 미선언 상태를 함께 표시한다.
+3. 같은 질문의 정정은 기존 question_id+expected_revision CAS와 operation_id를 유지한다.
+   native call identity가 writer까지 안정적으로 전달된다는 검증 없이 ID를 숨기지 않는다.
+4. closure는 실제 state.snapshot_id, 공유 reason, retain_unresolved=true,
+   reopen_conditions를 받는다. 잠금 안에서 snapshot을 다시 비교한다.
+   일반 미해결 한계를 assessed_unresolved로 보존하며 resolved로 바꾸지 않는다.
+   material/decision_critical 또는 계획된 검사는 항목별 명시적 재평가가 필요하다.
+   실행 중/대기 중/반환 후 미평가 작업은 이 경로로 종결할 수 없다.
+   기존 next_checks는 명시적으로 재평가해야 한다. 질문 정의나 공백 집합 변경과
+   snapshot 기반 일괄 종결을 한 호출로 섞지 않는다.
+5. state(question_id)는 기존 canonical 질문 경로와 동일 snapshot의 bounded page를 반환한다.
+   다음 페이지는 정확한 next_call로 이어 간다. source_version 충돌은 실제 버전 조회 경로를 준다.
+   source 페이지의 이전 C1 좌표 규칙은 보존하며 새 continuation을 옛 인용에 소급하지 않는다.
+6. 기본 reporting 메뉴는 state/gaps/source/review/render/finalize다.
+   requirement/gap/publish 및 구형 write wrapper는 native 메뉴에서 숨긴다.
+   내부 호환 재생/구형 report/assessment_basis 저장 해석기는 삭제하지 않는다.
+7. render는 명시 question_ids 또는 현재 native goal/대화가 소유한 질문을 선택한다.
+   현재 대화에 질문이 없으면 옛 답으로 대신 보고하지 않는다.
+   immutable 원장 snapshot과 과거 산출물은 유지한다. 선택 답/근거의 변경은 stale이며,
+   무관한 질문의 변경은 선택 보고를 stale로 만들지 않는다.
+   selected_scope_status, case_inventory, snapshot artifact 상태를 구별한다.
+
+함께 포함한 입력 복구 개선
+search 최대값을 스키마와 실행 검증이 공유한다. 이미지 검색은 backend 전에 모든 잘못된
+필드 경로를 반환한다. source 이어읽기는 실제 ID/버전/범위의 next_call을 사용한다.
+경로 추정, 새 인용 토큰, 검증 완화, 두 번째 실행기, 별도 의미 판정 모델은 추가하지 않았다.
+
+기존 소비자와 호환
+native tools: register의 compact contract와 신뢰된 adapter context를 통해 v2를 쓴다.
+case history/internal compatibility: 기존 host.invoke/Note/report_change 해석기를 유지한다.
+context/goal projection: current_judgment 공통 보기를 사용하며 미선언 분석 항목을 표시한다.
+reports/review: selected_question_records로 동일 현재 답·근거·반론 연결을 사용한다.
+source/C1/C2: 기존 retained 원문/버전/span 검사를 유지한다.
+model skills: 기존 forsic-report-driven과 executive decision reference를 새 직접 조사 흐름에 맞춘다.
+export: 새 회귀 파일과 이 계약 문서를 포함한다. 운영 원장이나 프롬프트 덤프는 포함하지 않는다.
+
+검증 경계
+test_question_v2: 잠정/즉시 작성 순서, 미선언/빈 값, 같은 질문 정정, 한계 유지 종결,
+실제 HTML/Word 렌더, snapshot/CAS 충돌, 원자적 rollback, 요청 replay와 소유권,
+계획/반환 미평가 보호, 구형 dependency, 선택 보고 freshness, write rollback을 검증한다.
+실제 writer/원장/인용 resolver를 합성 증거와 함께 사용한다. native 세션 결속은 mock이다.
+기존 원장의 current projection과 compile_views는 패치 전 합성 golden과 동일함을 비교한다.
+제품 전체 계약 검사와 공개 source export 왕복을 별도 영수증으로 남긴다.
+실제 모델 행동(B), 실제 도구별 환경 검증(T), 독립 holdout E2E는 이 통과 수에 넣지 않는다.
+Pro의 24개 시나리오 전체가 통과했다고 선언하지 않는다. 실제 모델 비교도 수행하지 않았다.
+
+마이그레이션과 배포
+DB 일괄 변환은 없다. 옛 레코드를 다시 쓰지 않고 새 질문만 v2 계약 표식을 갖는다.
+유휴와 정지 주체를 확인한 뒤 allowlist 파일 해시를 비교하여 배포한다.
+기존 사용자 승인 범위의 빈 대화 E2E에서 실제 pin과 새 goal 한 번 제출을 확인한다.
+원본·원장·보고·진단을 유지하므로 동일 사건 재사용은 독립 신규 사건 시험이 아니다.
+
+롤백
+v2 기록 생성 전이면 유휴에서 변경 파일 backup을 복원할 수 있다.
+v2 기록 생성 후 구형 바이너리를 그대로 실행하면 새 레코드를 해석하지 못할 수 있다.
+이 경우 reader는 본 버전을 유지하고 plugin question_contract_version=v1로 write surface를
+되돌린다. 새 v2 질문의 수정은 명시 거절하며 v2 역사/보고 조회는 유지한다.
+v2 데이터를 v1로 강제 변환하거나 원장을 지우지 않는다. 재배포도 유휴와 pin 확인이 필요하다.
+
+후속 묶음과 진행 조건
+P2: 도구별 effects/admission/execution/unknown/cancel/replay 계약을 실제 wrapper에서 검증.
+P3: 기존 압축·정확 source 복원·비용 계측을 측정하고 필요한 부분만 개선.
+P4: 자료 유형의 실제 공백에 맞는 parser/격리 compute/skill을 검증해 선택.
+P5: 같은 모델·자료·권한·예산에서 대체 native engine과 독립 holdout 행동 비교.
+이 단계들은 본 변경으로 완료되지 않았다. P1의 실제 행동 개선이 없으면 facade를 계속
+늘리기 전에 제공자 파싱·문맥·모델 적합성을 분리한다. 최신 외부 하네스의 인기도나
+스키마 바이트 감소는 조사 성공·토큰 절약·속도 개선의 증거가 아니다.

@@ -1,0 +1,3 @@
+{"time":"2026-02-03T01:00:00Z","kind":"schedule","job":"inventory-export","approved_run":"M-42","account":"inventory-service","change":"CH-8","target":"/inventory"}
+{"time":"2026-02-03T01:00:01Z","kind":"request","run":"M-42","account":"inventory-service","job":"inventory-export","change":"CH-8","target":"/inventory"}
+{"time":"2026-02-03T01:00:05Z","kind":"process_exit","run":"M-42","account":"inventory-service","exit_code":0,"output":"/backup/inventory.csv"}

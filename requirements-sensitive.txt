@@ -1,0 +1,7 @@
+# CPython 3.12 Linux only. Offline wheel payloads installed by installer, no-deps.
+# Supported API is sensitive/presidio_local.py, not normal presidio_analyzer import.
+presidio-analyzer==2.2.364 \
+    --hash=sha256:0a9eeb60ccc416c505367b4989d056becb84ef082703ee3361c046fb75941739
+regex==2026.9.29 \
+    --hash=sha256:f93bc1c3486ef3747e07c9d7c1d0a147b8fbaab975f80e348aed6f71309dfaca \
+    --hash=sha256:39ab5894d971f9ac68baa6eca5c50387db579cfcacf36ae8df3feceb1815e6d0

@@ -1,0 +1,62 @@
+# Documentation/test template only; init generates the location-specific private copy.
+model:
+  provider: custom
+  default: qwen3.8:latest
+  base_url: http://127.0.0.1:11434/v1
+  context_length: 65536
+  ollama_num_ctx: 65536
+_config_version: 49
+fallback_model: {}
+providers:
+  custom: {request_timeout_seconds: 1800, stale_timeout_seconds: 1800}
+tools:
+  tool_search: {enabled: off}
+reasoning: {enabled: false}
+auxiliary:
+  report_review: {timeout: 1800}
+  goal_judge: {provider: custom, model: qwen3.8:latest, base_url:
+      http://127.0.0.1:11434/v1, api_key: ollama, timeout: 600, max_tokens: 1024}
+  title: {provider: custom, model: qwen3.8:latest, base_url:
+      http://127.0.0.1:11434/v1, api_key: ollama}
+  compression: {provider: custom, model: qwen3.8:latest, base_url:
+      http://127.0.0.1:11434/v1, api_key: ollama, timeout: 1200}
+  title_generation:
+    enabled: false
+    model_upgrade_enabled: false
+platform_toolsets:
+  cli: [forsic]
+  api: [forsic]
+  web: [forsic]
+  desktop: [forsic]
+  telegram: [forsic]
+agent:
+  # Forsic supplies investigation discipline; omit native coding and generic execution briefs.
+  coding_context: 'off'
+  execution_guidance: false
+  max_turns: 64
+  api_max_retries: 1
+  auto_recovery_cycles: 0
+  # Whole native goal allowance; continuation/restart do not renew it. Pause freezes it.
+  run_budget_seconds: 43200
+  local_stream_stale_timeout: 1800
+goals: {max_turns: 32}
+tool_loop_guardrails:
+  hard_stop_enabled: true
+  hard_stop_after: {exact_failure: 8, same_tool_failure: 8}
+memory: {memory_enabled: false, user_profile_enabled: false, nudge_interval: 0}
+curator: {enabled: false}
+background_review: {enabled: false}
+security: {allow_lazy_installs: false}
+dashboard: {theme: forsic}
+display: {skin: forsic, language: ko, tui_compact: true}
+updates: {check: false}
+plugins:
+  enabled: [forsic]
+  entries:
+    forsic:
+      enabled: true
+      settings: {}
+compression:
+  threshold_tokens: 40000
+  context_timeout_seconds: 1200
+  context_total_ceiling_seconds: 1800

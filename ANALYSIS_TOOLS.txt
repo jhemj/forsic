@@ -1,0 +1,215 @@
+Forsic analysis tools
+=====================
+
+The existing forsic_shell runs all tools in the same case/conversation workspace.
+No additional agent runner is introduced; typed actions use the existing tool. /evidence stays
+read-only, /work is writable, network is disabled, the root filesystem is read-only,
+and the existing 8 GiB / 2 CPU / 64 PID / 256 MiB per-file limits apply. Timeout,
+interrupt, retained output and completion-unknown handling use the existing runner.
+The separate small forsic-dissect:3.25.1 image still serves direct image reads.
+
+Bounded selected-file triage
+---------------------------
+forsic_shell(action="triage") runs one selected profile sequentially through the
+same native execution and cancellation boundary. It accepts exact retained file
+or complete workspace-export references, not a directory or whole disk image.
+Profiles and limits are declared by shell_workspace.workspace_info().
+
+windows_evtx: selected EVTX, installed Hayabusa 4.2.0 and hash-verified bundled
+rules/configuration. Returns detection candidates and original-event recheck
+locators. Rule metadata describes the rule; it is not evidence of compromise.
+linux_login_parser: explicitly asserted Linux/glibc x86 little-endian 384-byte
+login ABI. Returns parsed record candidates and exact byte ranges. It is a parser,
+not an anomaly detector; no account or authentication attribution is automatic.
+
+Limits: 8 selected files, 32 MiB combined staged inputs, 300 seconds of container
+runtime, 2,000 login records per file, 20 returned candidates and 8 MiB engine output
+per file. Input staging and hash validation are separate byte-bounded preprocessing.
+Existing native memory/CPU/PID limits remain. Private rows/diagnostics stay
+outside model-visible event payloads. Safe candidates keep source versions,
+input hashes, engine/rule identities, returned/omitted counts and per-input
+complete/partial/failed/skipped state. Source recheck and explicit note adoption
+remain separate. An identical completed scan can be selected with resume_ref.
+Unknown completion is inspected, never automatically rerun.
+
+The same catalogue offers optional OS/purpose starting points. Unknown OS is not
+treated as Windows; absent macOS/data-movement profiles remain explicitly absent.
+The agent chooses relevant checks and records important omissions in existing notes.
+
+forsic_shell(action="triage_query") reads the retained safe candidate index using
+the returned scan_id and index_sha256. It never starts a parser/container. Select
+input ID, numeric record range/type, event record ID or rule UUID, then follow
+selection.next_call. Pages contain at most 20 candidates; the index is limited to
+20,000 candidates and 8 MiB. Original coverage/counts, index truncation and filtered
+page counts remain separate. Missing legacy indexes and unknown completion are
+reported without rerunning. Case/conversation, source receipt version, retained
+parse-input hash and index digest must match. Raw rows remain private.
+
+Selected-file login candidates may return original_byte_call for their exact
+384-byte range. Other source_call values return acquisition receipts; these are
+not decoded EVTX event bodies. Use an available format reader to inspect the
+original event. No new EVTX parser or causal/absence judgment is implied.
+
+No typed YARA profile is enabled without a reviewed-rule selection contract.
+Existing scan-file-rules remains available for explicitly reviewed rules.
+Chainsaw, mac_apt and specialist-agent expansion require measured complementary
+benefit over the baseline before integration.
+
+Offline efficiency accounting
+-----------------------------
+python -m forsic_plugin.efficiency_metrics CASE_RESULTS/activity.sqlite3
+    [--session EXACT_NATIVE_SESSION_ID ...]
+This reads retained receipts only, using SQLite mode=ro/query_only. Main calls,
+compression, review and other auxiliary calls are separate. Each token subtotal
+reports how many calls supplied that field; unavailable usage is not zero.
+Call-duration sums may overlap and are not exclusive elapsed/GPU time. Provider
+output tokens can include reasoning; visible summary characters are independent.
+An unmatched request is a pending receipt, not proof that a process is still live.
+Do not add these totals to native cumulative session usage.
+
+Procedures loaded on demand
+---------------------------
+inspect-artifacts: selected Dissect Registry, Prefetch, Amcache, auth and login records.
+investigation-recipes: three locally authored procedures inspired by pinned DFIQ questions.
+query-structured-logs: bounded DuckDB CSV/JSONL SELECT with input hashes/row/byte locations.
+scan-windows-events: Hayabusa EVTX detections with pinned bundled rules/configuration.
+scan-file-rules: YARA-X scans with explicitly selected, reviewed rule files.
+scan-sensitive-data: selected retained targets, offline credential/Korean PII candidates and bounded safe counts.
+import-timeline: targeted Plaso extraction and bounded psort JSONL export.
+
+Only names and short purposes are exposed in the catalogue. Select a skill and its
+listed reference when needed; complete recipes are not added to every model input.
+Parser records, query results and scanner hits are derived output. They do not by
+themselves establish original observations, completeness, compromise or attribution.
+
+Optional filename observations inspect only already-returned listing names.
+Directional/hidden control characters retain raw names, escaped display, codepoints
+and source pointers. Bounded output discloses omissions. Ordinary non-ASCII names
+are not classified as malicious, and no whole-image scan is introduced.
+Keep original source coordinates, versions, rejected/skipped scope, raw timestamps
+and any time assumptions when adopting results into the existing case records.
+No YARA detection corpus is bundled: rules must have an explicit source and scope.
+
+Build (Linux amd64, development/build environment only)
+------------------------------------------------------
+1. Build the existing parser image:
+   docker build -f Dockerfile.tools -t forsic-dissect:3.25.1 .
+2. Prepare an empty directory outside the source release, e.g. build-context, and
+   a separate download cache. Fetch only public pinned packages (no evidence):
+   python3 tools/install_forensic_tools.py fetch --cache /path/to/download-cache
+   python3 tools/install_forensic_tools.py install --cache /path/to/download-cache --prefix /path/to/build-context/forensic-tools
+3. Copy requirements-analysis.txt into that build context. Build:
+   docker build -f Dockerfile.analysis -t forsic-analysis:1 /path/to/build-context
+
+Dockerfile.analysis pins the official Plaso image by digest and preserves its
+/usr/bin Python. Existing Dissect and DuckDB use the separate /usr/local Python3.12.
+DuckDB wheels are version/hash checked; Hayabusa and YARA-X assets and licenses are
+SHA256 checked before offline installation. The install tree contains per-file
+rule/configuration hashes. Do not treat the Hayabusa source submodule revision as
+identical to the bundled rule files; use the actual release and file hashes.
+See tools/forensic-tools.lock.json and THIRD_PARTY_NOTICES.txt for upstream sources.
+The pinned Plaso image currently supports amd64; do not assume arm64 compatibility
+from scanner assets alone. No downloads, installs or rule updates run in a case.
+
+Derived Word documents and PDF rendering
+---------------------------------------
+The analysis image installs python-docx 1.2.0, lxml 6.1.3 and typing-extensions
+4.15.0 from pinned, hashed Python3.12 wheels. Headless libreoffice-writer-nogui,
+fonts-noto-cjk and poppler-utils are installed at the exact Ubuntu package versions
+in Dockerfile.analysis, with no recommended GUI/Java packages. Ubuntu verifies
+repository metadata and package hashes; transitive OS packages follow that signed
+repository at build time. Preserve the build receipt and dpkg package list when
+reproducing an image; an unavailable pinned version must fail, not silently upgrade.
+
+Keep the native report.render route as the primary investigation-report generator.
+For derived DOCX manipulation in forsic_shell, use the preinstalled python-docx.
+Headless Writer needs writable HOME=/work and a temporary profile, e.g.:
+  libreoffice -env:UserInstallation=file:///tmp/forsic-writer-profile --headless --convert-to pdf --outdir /work /work/derived.docx
+Use derived files only, not an office application on original evidence. Confirm the
+produced PDF, extracted Korean/English text and rendered pages. A zero command exit
+does not establish complete document fidelity. Do not run pip/apt in a case.
+
+Build a unique candidate tag rather than replacing an active image, then run:
+  python3 tools/smoke_document_runtime.py --image forsic-analysis:YOUR-CANDIDATE --output /ABS/NEW/synthetic-document-smoke
+This creates only a synthetic Korean/English DOCX and PDF, extracts the PDF text,
+renders a page PNG, and records versions, hashes and the full package list. Its
+container uses the same non-root UID, network-none, read-only root, dropped
+capabilities, no-new-privileges and resource limits as forsic_shell. It mounts no
+evidence and makes no model calls. Inspect the PNG before accepting the candidate.
+
+
+Bounded file carving and deleted-file recovery
+----------------------------------------------
+The analysis-image build pins Sleuth Kit 4.12.1+dfsg-3build1, TestDisk/PhotoRec
+7.2-0.1build1 and ewf-tools 20140816-2build1. Use their installed CLI help and
+record the actual img_stat -i list / fsstat -f list outputs before selecting an
+image or filesystem backend. A listed format is not proof of deleted-file recovery
+for that filesystem. In particular, do not claim XFS deleted-file recovery from
+Dissect access, a generic filesystem list, or a successful ext2 synthetic check.
+
+The pinned Ubuntu PhotoRec build reports "ewf lib: none". An actual synthetic E01
+open fails even though its help mentions file.e01. Do not send E01 directly to
+this PhotoRec binary or present a failed open as a completed scan. The validated
+path uses ewfexport to create a bounded, hash-checked raw derivative under /work,
+then runs PNG-only PhotoRec on that derivative. Record the EWF segment hashes,
+exported byte range and raw-output hash; this is not an unbounded default export.
+The TSK image-type list includes EWF, but that list does not establish recovery
+of a particular deleted file. The actual filesystem list does not include XFS.
+
+PhotoRec signature carving and tsk_recover metadata-based recovery are different
+operations. PhotoRec output may lose original names/paths and miss fragmented or
+unsupported files; recovered bytes do not establish original placement, execution
+or complete acquisition. Keep source-image and segment hashes, selected volume or
+byte range, command/options, output hashes, errors and unexamined scope. Write
+recovered files only under /work, never into original evidence. Do not repair the
+source filesystem, attach host block devices, mount images, add privileges or
+expand the runner's existing resource bounds. Use the existing forsic_shell;
+these CLIs do not introduce another tool/agent execution loop.
+
+Build a unique candidate tag and run only the synthetic smoke:
+  python3 tools/smoke_recovery_runtime.py --image forsic-analysis:YOUR-CANDIDATE --output /ABS/NEW/synthetic-recovery-smoke
+It creates an 8 MiB raw image containing a known PNG at byte offset 4096 and a
+16 MiB ext2 image with an explicitly deleted marker plus an allocated control.
+It requires exact SHA-256 recovery and unchanged input hashes, then, when
+available, creates a tiny E01 using ewfacquire and tests PhotoRec's actual EWF
+support. No recovered file is executed. Per-command logs, help/format lists,
+package versions, input/output hashes and cleanup receipts remain in the output
+directory. The container mounts no real evidence and uses the same non-root UID,
+network-none, read-only root, dropped capabilities and resource bounds as the
+analysis shell. Small synthetic success is not evidence of broad format coverage,
+large-image throughput or actual investigation performance.
+
+Official command references:
+  https://www.cgsecurity.org/testdisk_doc/scripted_run.html
+  https://www.sleuthkit.org/sleuthkit/man/tsk_recover.html
+
+Validation and rollout
+----------------------
+Run the skill-loading, shell boundary, structured query and package tests. Tests
+requiring Docker must use synthetic fixtures; they do not request model inference.
+FORSIC_ARTIFACT_RUNTIME_TEST=1 FORSIC_ARTIFACT_TEST_IMAGE=forsic-analysis:1 python3 -m unittest test_artifact_recipes
+FORSIC_TEST_DOCKER_SHELL=1 FORSIC_SHELL_TEST_TMPDIR=/path/to/local/synthetic-tests python3 -m unittest test_shell_container
+Run test_structured_query with the pinned DuckDB installed or inside the analysis
+image. Confirm CLI help/version and selected real parser outputs, not just imports.
+
+Build and validate before a deployment. Replace a deployed tag only at an idle
+native boundary and retain its prior image ID for rollback. The runner resolves
+the local tag to an immutable image ID per invocation and never pulls at runtime.
+A workspace capability declaration is not a claim that a parser read a file.
+
+The structured query helper has a 1 GiB DuckDB limit; Python and intermediate
+serialization use additional memory. Its 1 MiB output cap bounds saved results,
+not peak process memory. The container limit remains the outer resource boundary.
+Large timelines must be narrowed before extraction, not silently retried with
+larger permissions or sizes. An error, skip or timeout is not a negative finding.
+
+Structured sensitive scans
+-------------------------
+forsic_shell action=sensitive_scan accepts retained source_id/source_version/pointer targets,
+optional supported encoding, profiles secrets/pii_kr, mode triage/scope_count and optional
+resume_ref. No arbitrary command/root/output path or online credential validation. Check actual
+capabilities, profile versions and scan coverage; unavailable/skipped/partial is not a negative.
+Safe scan results alone reach model/source/review/export flows. Raw local artifacts are private.
+The integrated report hydrates bounded originals into its technical appendix for adopted report
+sources only, recording exact locations and omissions. Such bundles are local-only and excluded
+from automatic Telegram documents; manual local download remains available.

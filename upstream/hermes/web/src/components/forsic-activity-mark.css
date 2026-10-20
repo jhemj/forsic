@@ -1,0 +1,77 @@
+.forsic-activity-mark {
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+  color: var(--forsic-accent);
+}
+
+.forsic-activity-mark__corners {
+  stroke: currentColor;
+  opacity: 0.7;
+}
+
+.forsic-activity-mark__track {
+  stroke: currentColor;
+  opacity: 0.16;
+}
+
+.forsic-activity-mark__shell {
+  fill: #faf7f3;
+  stroke: #cfb7b1;
+}
+
+.forsic-activity-mark__gleam {
+  stroke: #fff;
+}
+
+.forsic-activity-mark__face {
+  color: #6b5752;
+  stroke: currentColor;
+}
+
+.forsic-activity-mark[data-state='idle'] .forsic-activity-mark__track {
+  opacity: 0;
+}
+
+.forsic-activity-mark[data-state='waiting'] {
+  color: var(--forsic-muted);
+}
+
+.forsic-activity-mark[data-state='error'] {
+  color: #f3b9ad;
+}
+
+.forsic-activity-mark[data-state='error'] .forsic-activity-mark__shell {
+  fill: #ffe5dd;
+  stroke: #f3b9ad;
+}
+
+.forsic-activity-mark[data-state='error'] .forsic-activity-mark__face {
+  color: #8c443d;
+}
+
+.forsic-activity-mark[data-state='working'] .forsic-activity-mark__scan {
+  transform-origin: 20px 20px;
+  animation: forsic-evidence-scan 2.8s ease-in-out infinite;
+}
+
+.forsic-activity-mark[data-state='working'] .forsic-activity-mark__companion {
+  animation: forsic-companion-lift 2.8s ease-in-out infinite;
+}
+
+@keyframes forsic-evidence-scan {
+  0%, 100% { transform: rotate(-30deg); }
+  50% { transform: rotate(70deg); }
+}
+
+@keyframes forsic-companion-lift {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .forsic-activity-mark[data-state='working'] .forsic-activity-mark__scan,
+  .forsic-activity-mark[data-state='working'] .forsic-activity-mark__companion {
+    animation: none;
+  }
+}

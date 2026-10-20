@@ -1,0 +1,7 @@
+.forsic-pane-separator {position:relative;flex:0 0 6px;width:6px;min-height:0;cursor:col-resize;touch-action:none;user-select:none;background:var(--forsic-canvas);z-index:26;}
+.forsic-pane-separator::after {content:'';position:absolute;inset:0 2px;background:var(--forsic-border);transition:background-color .15s;}
+.forsic-pane-separator:hover::after,.forsic-pane-separator:focus-visible::after {background:var(--forsic-focus);}
+.forsic-pane-separator:focus-visible {outline:2px solid var(--forsic-focus);outline-offset:-2px;}
+@media(max-width:1023px) {.forsic-pane-separator[data-pane=left] {display:none;}}
+@media(max-width:900px) {.forsic-pane-separator[data-pane=right] {display:none;}}
+@media(prefers-reduced-motion:reduce) {.forsic-pane-separator::after {transition:none;}}

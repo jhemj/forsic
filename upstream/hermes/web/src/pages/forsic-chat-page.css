@@ -1,0 +1,16 @@
+.forsic-chat-page {display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; gap: 10px; color: var(--forsic-text);}
+.forsic-chat-recovery {display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--forsic-border); border-radius: 9px; background: var(--forsic-surface); font-size: var(--forsic-font-control, 14px); line-height: 1.7; color: var(--forsic-muted);}
+.forsic-chat-recovery button, .forsic-chat-back {display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; border: 1px solid var(--forsic-border); border-radius: 8px; background: var(--forsic-surface); color: var(--forsic-accent); font: inherit; font-size: var(--forsic-font-secondary, 13px); padding: 8px 12px; cursor: pointer; transition: background-color .15s;}
+.forsic-chat-recovery button:hover, .forsic-chat-back:hover {background: var(--forsic-hover);}
+.forsic-connection-card {display: flex; flex-direction: column; gap: 9px; text-align: left; width: calc(100% - 20px); margin: 10px; padding: 14px; border: 1px solid var(--forsic-border); border-radius: 11px; background: var(--forsic-surface); color: var(--forsic-text); cursor: pointer; min-width: 0; transition: background-color .15s, border-color .15s;}
+.forsic-connection-card:hover {background: var(--forsic-hover); border-color: var(--forsic-focus);}
+.forsic-connection-label {display: flex; justify-content: space-between; align-items: center; color: var(--forsic-muted); font-size: var(--forsic-font-secondary, 13px);}
+.forsic-connection-card strong {font-size: var(--forsic-font-control, 14px); font-weight: 600; overflow-wrap: anywhere; line-height: 1.6;}
+.forsic-connection-url {font-size: var(--forsic-font-meta, 12px); color: var(--forsic-muted); overflow-wrap: anywhere; line-height: 1.75;}
+.forsic-connection-card small {font-size: var(--forsic-font-meta, 12px); color: var(--forsic-warning); line-height: 1.7;}
+@media (max-width: 600px) {
+  .forsic-chat-recovery {align-items: flex-start; gap: 8px;}
+  .forsic-chat-recovery button {min-height: 40px;}
+  .forsic-chat-recovery span {max-width: 65%;}
+}
+@media (prefers-reduced-motion: reduce) {.forsic-connection-card, .forsic-chat-recovery button, .forsic-chat-back {transition: none;}}

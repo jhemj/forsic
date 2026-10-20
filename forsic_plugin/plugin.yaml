@@ -1,0 +1,58 @@
+name: forsic
+version: 0.1.0
+description: Forensic evidence tools and isolated analysis workspace.
+python_dependencies:
+  - python-docx==1.2.0
+  - lxml==6.1.3
+  - python-telegram-bot==22.8
+provides_tools:
+  - forsic_indicators
+  - forsic_intel
+  - forsic_intake
+  - forsic_cases
+  - forsic_shell
+  - forsic_list
+  - forsic_read
+  - forsic_search
+  - forsic_hash
+  - forsic_image_info
+  - forsic_image_files
+  - forsic_image_read
+  - forsic_image_search
+  - forsic_archive_read
+  - forsic_archive_relist
+  - forsic_image_read_mission
+  - forsic_reporting
+  - forsic_question
+  - forsic_mission
+  - forsic_assess
+  - forsic_review_response
+  - forsic_read_bytes
+  - forsic_verify
+  - forsic_note
+  - forsic_skill
+  - forsic_extension_builder
+provides_hooks:
+  - native_agent_options
+  - native_memory_policy
+  - pre_llm_call
+  - post_llm_call
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - pre_auxiliary_call
+  - post_auxiliary_call
+  - post_context_compaction
+  - goal_evaluation_context
+  - goal_advisory_context
+config_schema:
+  tenant_id: {type: str, description: Registry-owned immutable tenant identifier.}
+  library_path: {type: str, description: Registry-owned tenant case reference store.}
+  case_file: {type: str, description: Operator-selected case manifest.}
+  intake_root: {type: str, description: Session-local intake state directory.}
+  evidence_directory: {type: str, description: Optional operator-selected host evidence directory offered by the UI; analysis mounts only the selected scope read-only.}
+  evidence_directory_label: {type: str, default: '', description: Operator-supplied display label for the configured evidence directory.}
+  remote_evidence_directory_only: {type: bool, default: false, description: Restrict remote intake and folder selection to the configured evidence directory.}
+  synthetic_roots: {type: list, description: Operator-designated synthetic fixture roots.}
+  independent_review: {type: bool, default: false, description: Bounded separate-context advice using the configured private model at native goal checkpoints.}
+  executive_followup: {type: bool, default: false, description: Three final executive review rounds of five questions with current main-investigation dispositions. Requires independent_review.}

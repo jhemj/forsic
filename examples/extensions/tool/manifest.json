@@ -1,0 +1,67 @@
+{
+  "format_version": 1,
+  "id": "local.tool-example",
+  "version": "1.0.0",
+  "display_name": "Synthetic tool example",
+  "description": "Small redistributable extension example; no real evidence.",
+  "kind": "tool",
+  "source": {
+    "type": "local-authored"
+  },
+  "compatibility": {
+    "extension_api": 1,
+    "platforms": [
+      "linux/amd64"
+    ]
+  },
+  "dependencies": [],
+  "tools": [
+    {
+      "name": "count-lines",
+      "description": "Count lines and UTF-8 bytes in one explicitly selected text input. This is derived output, not complete evidence coverage.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "argv": [
+        "python",
+        "/extension/adapter/count_lines.py",
+        {
+          "argument": "path"
+        }
+      ],
+      "timeout_seconds": 30,
+      "max_output_bytes": 12000,
+      "output": {
+        "format": "json"
+      },
+      "fixtures": [
+        {
+          "path": "fixtures/sample.txt",
+          "sha256": "e49c81e2d2f84e259d40e2fb8192f3bcd198b355184845d76d8f58807d0d78ee",
+          "arguments": {
+            "path": "/extension/fixtures/sample.txt"
+          },
+          "expected": {
+            "lines": 2,
+            "bytes": 11
+          }
+        }
+      ]
+    }
+  ],
+  "skills": [],
+  "files": {
+    "adapter/count_lines.py": "93aa5a8010c382ca9b871148410de75dba13c81edd3b514726815ec597bf5eaf",
+    "fixtures/sample.txt": "e49c81e2d2f84e259d40e2fb8192f3bcd198b355184845d76d8f58807d0d78ee"
+  }
+}

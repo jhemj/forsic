@@ -1,0 +1,32 @@
+.forsic-entry {flex:1;min-height:0;overflow-y:auto;display:grid;align-items:center;padding:48px clamp(20px,6vw,88px);background:var(--forsic-canvas);color:var(--forsic-text);}
+.fe-window {width:100%;max-width:900px;margin:auto;padding:clamp(26px,4vw,48px);border:1px solid var(--forsic-border);border-radius:24px;background:var(--forsic-surface);box-shadow:0 24px 64px -40px #39242026;}
+.fe-brand {display:flex;align-items:center;gap:10px;font-size:var(--forsic-font-body, 15px);font-weight:760;letter-spacing:.12em;}
+.fe-brand>span,.fe-icon {display:grid;place-items:center;color:var(--forsic-accent);border-radius:12px;background:var(--forsic-accent-soft);width:42px;height:42px;}
+.fe-window header {margin:38px 0 28px;}
+.fe-window header>p {font-size:var(--forsic-font-control, 14px);color:var(--forsic-accent);font-weight:650;margin:0 0 10px;}
+.fe-window h1 {font-size:clamp(24px,3vw,32px);letter-spacing:-.04em;font-weight:680;margin:0;}
+.fe-options {display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+.fe-option {padding:26px;border:1px solid var(--forsic-border);border-radius:16px;display:flex;flex-direction:column;align-items:flex-start;}
+.fe-icon {background:var(--forsic-inset);margin-bottom:21px;}
+.fe-option h2 {font-size:19px;letter-spacing:-.03em;margin:0 0 10px;font-weight:660;}
+.fe-option p {font-size:var(--forsic-font-body, 15px);color:var(--forsic-muted);line-height:1.7;margin:0 0 26px;word-break:keep-all;}
+.fe-primary,.fe-secondary {display:flex;align-items:center;justify-content:center;gap:12px;align-self:stretch;margin-top:auto;padding:13px 18px;border:1px solid var(--forsic-border);border-radius:10px;font:inherit;font-size:var(--forsic-font-body, 15px);font-weight:600;text-decoration:none;cursor:pointer;}
+.fe-primary {color:var(--forsic-primary-text);background:var(--forsic-primary);border-color:transparent;}
+.fe-secondary {color:var(--forsic-text);background:var(--forsic-inset);}
+.fe-primary:disabled {opacity:.45;cursor:not-allowed;}
+.fe-primary:not(:disabled):hover,.fe-secondary:hover {filter:brightness(.95);}
+.fe-window a:focus-visible,.fe-window button:focus-visible {outline:2px solid var(--forsic-focus);outline-offset:3px;}
+.fe-availability {font-size:var(--forsic-font-control, 14px);line-height:1.8;color:var(--forsic-muted);margin-top:22px;}
+.fe-availability p {margin:0 0 8px;}
+.fe-availability a {display:inline-flex;align-items:center;gap:8px;color:var(--forsic-accent);text-decoration:none;}
+.fe-availability button {border:1px solid var(--forsic-border);border-radius:8px;padding:8px 12px;font:inherit;background:var(--forsic-inset);color:var(--forsic-text);cursor:pointer;}
+@media(max-width:650px) {.forsic-entry {padding:24px 16px;align-items:start;}.fe-options {grid-template-columns:1fr;}.fe-window header {margin-top:28px;}.fe-option {padding:22px;}}
+
+.fe-window {animation:fe-enter .28s ease-out both;}
+.fe-state {animation:fe-state-in .18s ease-out both;}
+.fe-state>button {display:block;margin-top:10px;}
+@keyframes fe-enter {from {opacity:0;transform:translateY(8px);}to {opacity:1;transform:translateY(0);}}
+@keyframes fe-state-in {from {opacity:0;}to {opacity:1;}}
+@media(prefers-reduced-motion:reduce) {.fe-window,.fe-state {animation:none;}}
+
+.fe-availability button:disabled {opacity:.5;cursor:wait;}

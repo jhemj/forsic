@@ -1,0 +1,86 @@
+.forsic-workbench {display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; color: var(--forsic-text);}
+.forsic-workbench-toolbar {display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 10px 16px 16px; border-bottom: 1px solid var(--forsic-border);}
+.forsic-workbench-status {display: flex; align-items: center; gap: 11px; min-width: 0;}
+.forsic-workbench-presence {width: 7px; height: 7px; border-radius: 50%; background: var(--forsic-muted); flex-shrink: 0;}
+.forsic-workbench-presence[data-running=true] {background: var(--forsic-accent); animation: forsic-presence 2.4s ease-in-out infinite;}
+@keyframes forsic-presence {0%,100% {box-shadow: 0 0 0 3px color-mix(in srgb, var(--forsic-accent) 8%, transparent);} 50% {box-shadow: 0 0 0 5px color-mix(in srgb, var(--forsic-accent) 15%, transparent);}}
+.forsic-workbench-status > span {display: flex; min-width: 0; flex-direction: column; gap: 5px;}
+.forsic-workbench-status strong {font-size: var(--forsic-font-body, 15px); font-weight: 650; letter-spacing: -.02em; color: var(--forsic-text);}
+.forsic-workbench-status small {font-size: var(--forsic-font-secondary, 13px); line-height: 1.5; color: var(--forsic-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.forsic-inspector-tabs {display: flex; align-items: center; gap: 4px; flex-shrink: 0;}
+.forsic-inspector-tabs button {display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: transparent; border: 1px solid transparent; border-radius: 9px; color: var(--forsic-muted); font-size: var(--forsic-font-control, 14px); cursor: pointer; transition: background-color .15s, color .15s;}
+.forsic-inspector-tabs button:hover {background: var(--forsic-hover); color: var(--forsic-text);}
+.forsic-inspector-tabs button[aria-expanded=true] {background: var(--forsic-accent-soft); border-color: color-mix(in srgb, var(--forsic-accent) 16%, transparent); color: var(--forsic-accent);}
+.forsic-inspector-tabs b {font: 500 var(--forsic-font-meta, 12px)/1.4 ui-monospace,monospace; padding: 2px 4px; color: var(--forsic-muted); border-radius: 4px; background: var(--forsic-inset);}
+.forsic-inspector-tabs button[aria-expanded=true] b {color: var(--forsic-accent); background: transparent;}
+.forsic-workbench-layout {position: relative; display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-height: 0; min-width: 0;}
+.forsic-workbench-layout[data-inspector-open=true] {grid-template-columns: minmax(0, 1fr) 6px var(--forsic-monitor-width);}
+.forsic-workbench-chat {display: flex; flex: 1; min-height: 0; min-width: 0;}
+.forsic-inspector {display: flex; flex-direction: column; flex: none; width: auto; max-width: 100%; min-width: 0; min-height: 0; background: var(--forsic-surface); border: 1px solid var(--forsic-border); border-top: 0; border-bottom: 0; border-right: 0; color: var(--forsic-text); z-index: 25; animation: forsic-panel-in .18s ease-out;}
+@keyframes forsic-panel-in {from {opacity: 0; transform: translateX(8px);} to {opacity: 1; transform: translateX(0);}}
+.forsic-inspector-header {display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--forsic-border); flex-shrink: 0;}
+.forsic-inspector-title {display: flex; align-items: center; gap: 8px; color: var(--forsic-text);}
+.forsic-inspector-title > svg {color: var(--forsic-muted);}
+.forsic-inspector-title strong {font-size: var(--forsic-font-body, 15px); font-weight: 600;}
+.forsic-inspector-header > div {display: flex; gap: 3px;}
+.forsic-inspector-header button {display: grid; place-items: center; width: 30px; height: 30px; padding: 5px; border-radius: 7px; background: transparent; border: 0; color: var(--forsic-muted); cursor: pointer;}
+.forsic-inspector-header button:hover {color: var(--forsic-text); background: var(--forsic-hover);}
+.forsic-inspector-header button:disabled {opacity: .5; cursor: wait;}
+.forsic-inspector-header button[data-loading=true] svg {animation: forsic-refresh 1.6s linear infinite;}
+@keyframes forsic-refresh {to {transform: rotate(360deg);}}
+.forsic-inspector-scroll {overflow: auto; min-height: 0; padding: 16px; scrollbar-width: thin; scrollbar-color: var(--forsic-border) transparent;}
+.forsic-inspector-caption {color: var(--forsic-muted); font-size: var(--forsic-font-secondary, 13px); line-height: 1.8; margin: 0 0 16px; overflow-wrap: anywhere;}
+.forsic-inspector .fc-tool-call {margin-bottom: 9px;}
+.forsic-disclosure {color: var(--forsic-muted); flex-shrink: 0; transition: transform .15s;}
+.forsic-workbench details[open] > summary > .forsic-disclosure {transform: rotate(90deg);}
+.forsic-catalogue-search {display: flex; align-items: center; gap: 8px; padding: 10px 11px; border: 1px solid var(--forsic-border); border-radius: 8px; background: var(--forsic-inset); color: var(--forsic-muted); margin-bottom: 13px;}
+.forsic-catalogue-search input {width: 100%; min-width: 0; font-size: var(--forsic-font-control, 14px); background: transparent; border: 0; outline: none; color: var(--forsic-text);}
+.forsic-catalogue-search:focus-within {border-color: var(--forsic-focus); outline: 2px solid color-mix(in srgb, var(--forsic-focus) 16%, transparent);}
+.forsic-catalogue-search input::placeholder {color: var(--forsic-muted);}
+.forsic-capability {border-bottom: 1px solid var(--forsic-border);}
+.forsic-capability code {font: var(--forsic-font-meta, 12px)/1.5 ui-monospace,monospace; color: var(--forsic-muted); overflow-wrap: anywhere; background: transparent; padding: 0;}
+.forsic-capability-body {padding: 0 2px 16px; font-size: var(--forsic-font-control, 14px); line-height: 1.85; color: var(--forsic-text);}
+.forsic-capability-body p {margin: 0 0 9px; white-space: pre-wrap; overflow-wrap: anywhere;}
+.forsic-capability-group {display: inline-block; font-size: var(--forsic-font-meta, 12px); padding: 2px 7px; border-radius: 5px; background: var(--forsic-inset); border: 1px solid var(--forsic-border); color: var(--forsic-muted);}
+.forsic-inspector-empty {padding: 40px 12px; text-align: center; font-size: var(--forsic-font-control, 14px); line-height: 1.8; color: var(--forsic-muted);}
+.forsic-inspector-empty > svg {margin: auto; opacity: .65;}
+.forsic-inspector-empty p {margin: 13px 0 4px;}
+.forsic-inspector-empty small {font-size: var(--forsic-font-secondary, 13px);}
+.forsic-inspector-notice {font-size: var(--forsic-font-secondary, 13px); line-height: 1.8; padding: 11px 12px; margin-bottom: 14px; color: var(--forsic-warning); background: var(--forsic-inset); border: 1px solid var(--forsic-border); border-radius: 7px;}
+.forsic-workbench :is(button, summary):focus-visible {outline: 2px solid var(--forsic-focus); outline-offset: 2px;}
+@media (max-width: 900px) {.forsic-workbench-layout[data-inspector-open=true] {grid-template-columns: minmax(0, 1fr);} .forsic-inspector {width: clamp(360px, 43vw, 760px); position: absolute; right: 0; top: 0; bottom: 0; box-shadow: -12px 0 32px #16253816;}}
+@media (max-width: 600px) {
+  .forsic-workbench-toolbar {flex-wrap: wrap; gap: 10px; padding: 10px 12px 11px;}
+  .forsic-workbench-status {flex: 1; width: 100%;}
+  .forsic-inspector-tabs {width: 100%; justify-content: space-between; gap: 0;}
+  .forsic-inspector-tabs button {padding: 8px 6px; min-height: 44px; gap: 4px; font-size: var(--forsic-font-secondary, 13px);}
+  .forsic-inspector-tabs b {display: none;}
+  .forsic-inspector {width: 100%;}
+  .forsic-inspector-header button {width: 44px; height: 44px;}
+  .forsic-inspector-scroll {padding: 14px;}
+}
+@media (prefers-reduced-motion: reduce) {
+  .forsic-workbench-presence[data-running=true], .forsic-inspector, .forsic-inspector-header button[data-loading=true] svg {animation: none;}
+  .forsic-disclosure, .forsic-inspector-tabs button {transition: none;}
+}
+
+.forsic-inspector[hidden], .forsic-inspector-scroll > [hidden] {display: none;}
+.forsic-inspector-tabs button[data-secondary=true] {font-size: var(--forsic-font-secondary, 13px); padding-inline: 7px;}
+.forsic-monitor-report {padding: 16px; margin-bottom: 12px; border: 1px solid var(--forsic-border); border-radius: 12px; background: var(--forsic-inset);}
+.forsic-monitor-report header {display: flex; align-items: flex-start; gap: 10px;}
+.forsic-monitor-report header > svg {flex-shrink: 0; color: var(--forsic-accent); margin-top: 2px;}
+.forsic-monitor-report h3 {margin: 0 0 6px; font-size: var(--forsic-font-body, 15px); line-height: 1.6; overflow-wrap: anywhere;}
+.forsic-monitor-report time {font-size: var(--forsic-font-meta, 12px); color: var(--forsic-muted); overflow-wrap: anywhere;}
+.forsic-monitor-report-files {display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px;}
+.forsic-monitor-report-files a {display: inline-flex; align-items: center; gap: 8px; padding: 9px 11px; color: var(--forsic-accent); border: 1px solid var(--forsic-border); border-radius: 7px; font-size: var(--forsic-font-secondary, 13px); text-decoration: none; overflow-wrap: anywhere;}
+.forsic-monitor-report-files a:hover {background: var(--forsic-accent-soft);}
+.forsic-monitor-report-files a:focus-visible {outline: 2px solid var(--forsic-focus); outline-offset: 2px;}
+
+.forsic-workbench-status strong,.forsic-inspector-title strong {font-size:var(--forsic-font-heading,18px);}
+.forsic-capability-body {font-size:var(--forsic-font-body,15px);}
+.forsic-monitor-report h3 {font-size:var(--forsic-font-heading,18px);}
+.forsic-workbench-toolbar {flex-wrap:wrap;}
+.forsic-inspector-tabs {flex-wrap:wrap;max-width:100%;}
+
+.forsic-capability-heading {display: flex; flex-direction: column; gap: 5px; padding: 15px 1px 8px;}
+.forsic-capability-heading strong {font-size: var(--forsic-font-control, 14px); font-weight: 600; line-height: 1.5; color: var(--forsic-text); overflow-wrap: anywhere;}

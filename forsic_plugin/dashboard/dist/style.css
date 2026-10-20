@@ -1,0 +1,463 @@
+/* Evidence context, case views, and conversations share one navigation hierarchy. */
+.forsic-conversation-label{display:flex;flex-direction:column;gap:3px;min-width:0}
+.forsic-session-usage{font-variant-numeric:tabular-nums;color:var(--forsic-muted);font-size:var(--forsic-font-secondary, 13px);line-height:1.5}
+.forsic-session-usage summary{cursor:pointer}.forsic-session-usage p{margin:8px 0;overflow-wrap:anywhere}
+.forsic-sidebar{box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;gap:20px;min-height:100%;width:100%;padding:16px;color:var(--forsic-text);font-size:var(--forsic-font-body, 15px);line-height:1.5}
+.forsic-sidebar :is(a,button){font-family:inherit}
+.forsic-global-nav{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-bottom:4px}
+.forsic-global-nav>a:first-child{flex:1;min-width:0}
+.forsic-global-nav .forsic-nav-item{flex-direction:row;align-items:center}
+.forsic-context-card{min-width:0;padding:12px;border:1px solid var(--forsic-border);border-radius:var(--forsic-card-radius);background:var(--forsic-inset)}
+.forsic-context-card>label,.forsic-context-card>small{display:block;margin-bottom:6px;color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px)}
+.forsic-context-card>strong{display:block;overflow-wrap:anywhere;font-size:var(--forsic-font-body, 15px);font-weight:600;line-height:1.6}
+.forsic-context-card p{margin:6px 0 0;color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px);line-height:1.6}
+.forsic-context-card details{margin-top:8px}
+.forsic-context-card summary{display:list-item;min-height:28px;padding:4px 0;color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px);cursor:pointer}
+.forsic-context-card details[open] summary{color:var(--forsic-text)}
+.forsic-context-card code{display:block;overflow-wrap:anywhere;white-space:pre-wrap;font:var(--forsic-font-control, 14px)/1.7 var(--theme-font-mono,ui-monospace,monospace);color:var(--forsic-muted)}
+.forsic-context-card ul{margin:8px 0 0;padding-left:16px;font-size:var(--forsic-font-control, 14px);overflow-wrap:anywhere;color:var(--forsic-muted)}
+.forsic-case-heading{min-width:0;padding:0 4px}
+.forsic-case-heading small{display:block;margin-bottom:4px;color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px)}
+.forsic-case-heading h2{margin:0;font-size:var(--forsic-font-heading, 18px);font-weight:600;line-height:1.5;overflow-wrap:anywhere}
+.forsic-case-heading p{margin:6px 0 0;color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px)}
+.forsic-section-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;padding-left:4px}
+.forsic-section-heading h3{margin:0;font-size:var(--forsic-font-body, 15px);font-weight:600;line-height:1.5}
+.forsic-section-heading .forsic-action-primary{padding:6px 10px;font-size:var(--forsic-font-control, 14px)}
+.forsic-conversations{display:flex;flex-direction:column;gap:4px;min-width:0}
+.forsic-conversations>p{margin:0;padding:12px 4px;color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px);line-height:1.7}
+.forsic-nav-item{box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;gap:3px;min-width:0;min-height:38px;padding:9px 10px;border:1px solid transparent;border-radius:var(--forsic-control-radius);background:transparent;color:var(--forsic-muted);font-size:var(--forsic-font-body, 15px);line-height:1.45;text-align:left;text-decoration:none;cursor:pointer;transition:background-color .15s,border-color .15s}
+.forsic-nav-item:hover{background:var(--forsic-surface);color:var(--forsic-text)}
+.forsic-nav-item[aria-current=page]{background:var(--forsic-accent-soft);color:var(--forsic-text);border-color:var(--forsic-border);box-shadow:none}
+.forsic-nav-item strong{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--forsic-font-body, 15px);font-weight:500}
+.forsic-nav-item small{display:block;color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px);font-weight:400}
+.forsic-case-views{display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--forsic-border);padding-top:12px}
+.forsic-case-views .forsic-nav-item{flex-direction:row;justify-content:flex-start;align-items:center;gap:8px}
+.forsic-sidebar-footer{display:flex;flex-direction:column;gap:8px;margin-top:auto;padding-top:12px;border-top:1px solid var(--forsic-border)}
+.forsic-sidebar-footer>details>summary{padding:8px 4px;min-height:36px;box-sizing:border-box;color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px);cursor:pointer}
+.forsic-sidebar-footer>details[open]>summary{color:var(--forsic-text)}
+.forsic-sidebar-footer h2{margin:0;font-size:var(--forsic-font-heading, 18px)}
+.forsic-sidebar-footer .forsic-settings-open{width:100%;min-height:36px;padding:8px 10px;border:1px solid transparent;border-radius:var(--forsic-control-radius);background:transparent;color:var(--forsic-muted);text-align:left;cursor:pointer}
+.forsic-sidebar-footer .forsic-settings-open:hover{background:var(--forsic-surface);color:var(--forsic-text)}
+.forsic-sidebar-footer .forsic-settings-open small{display:none}
+#forsic-model-target:empty{display:none}
+#forsic-model-target>aside{height:auto;overflow:visible;padding:0;gap:8px}
+#forsic-model-target :is(button,[role=combobox]){border-radius:var(--forsic-control-radius);box-shadow:none;filter:none;font-family:inherit}
+#forsic-model-target .font-compressed{font-family:inherit;letter-spacing:normal;font-size:var(--forsic-font-control, 14px)}
+#forsic-model-target .font-courier{font-family:inherit}
+#forsic-model-target .arc-border{display:none}
+.forsic-wordmark{letter-spacing:.12em;font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted)}
+.forsic-brand{letter-spacing:.12em;margin-right:12px}
+.forsic-bubble{width:100%;box-sizing:border-box;border:1px solid var(--forsic-border);border-radius:var(--forsic-card-radius);padding:14px;background:var(--forsic-surface);line-height:1.65;font-size:var(--forsic-font-body, 15px)}
+.forsic-bubble strong{font-size:var(--forsic-font-body, 15px)}
+.forsic-bubble p{margin:8px 0}
+.forsic-path{overflow-wrap:anywhere;color:var(--forsic-muted)}
+.forsic-bubble small,.forsic-caption{font-size:var(--forsic-font-control, 14px);color:#a3a4ae}
+.forsic-case-label{font-size:var(--forsic-font-body, 15px)}
+.forsic-directory{margin:0 0 32px;padding:24px;border:1px solid var(--forsic-border);border-radius:var(--forsic-card-radius)}
+.forsic-directory-heading{display:flex;justify-content:space-between;gap:16px;align-items:center}
+.forsic-directory h2{margin:0}.forsic-directory p{font-size:var(--forsic-font-body, 15px);opacity:.8;margin:6px 0}
+.forsic-directory-filters{display:flex;gap:8px;margin:18px 0;flex-wrap:wrap}
+.forsic-directory-filters input{flex:1;min-width:140px;padding:8px;border:1px solid #7776;border-radius:var(--forsic-control-radius);background:transparent;color:inherit}
+.forsic-directory button,.forsic-directory a{padding:7px 10px;border:1px solid #7776;border-radius:var(--forsic-control-radius);font-size:var(--forsic-font-control, 14px);text-decoration:none;color:inherit;background:transparent}
+.forsic-directory [aria-pressed=true]{background:#7773;border-color:#aaa}
+.forsic-investigation{display:flex;align-items:stretch;border-top:1px solid var(--forsic-border);gap:8px;padding:0}
+.forsic-investigation small{display:block;font-size:var(--forsic-font-control, 14px);opacity:.6;margin-top:5px}.forsic-investigation strong{overflow-wrap:anywhere}
+.forsic-investigation-status span{font-size:var(--forsic-font-control, 14px)}.forsic-investigation [data-status=investigating]{color:var(--forsic-text)}
+.forsic-investigation-actions{display:flex;gap:6px;flex-wrap:wrap}
+
+/* One lens, independent optical/face layers. Expressions never rotate with the barrel. */
+.forsic-companion{--lens-light:#fffdfa;display:flex;flex-direction:column;align-items:center;gap:1px;width:100%;isolation:isolate}
+.forsic-stage{position:relative;width:176px;height:174px;flex-shrink:0}
+.forsic-activity-ring{position:absolute;inset:8px 11px 12px;border:2px solid color-mix(in srgb,var(--forsic-brand,#fe2e36) 14%,transparent);border-radius:50%;opacity:0;pointer-events:none}
+.forsic-activity-ring:after{content:'';position:absolute;inset:-2px;border:2px solid transparent;border-top-color:var(--forsic-brand,#fe2e36);border-right-color:color-mix(in srgb,var(--forsic-brand,#fe2e36) 36%,transparent);border-radius:50%}
+[data-working=true] .forsic-activity-ring{opacity:1}
+[data-working=true] .forsic-activity-ring:after{animation:forsic-rotate 1.9s linear infinite}
+.forsic-lens{position:absolute;inset:16px 19px 20px;border-radius:50%;border:1px solid #d0ccc5;background:linear-gradient(145deg,#fffefa 0%,#e6e3de 18%,#c3bfb8 55%,#eeebe5 89%,#fffefa);box-shadow:0 12px 24px #51483d26,inset 0 0 0 3px #ffffff80,inset 0 0 0 5px #b3ada4;animation:forsic-breathe 7s ease-in-out infinite}
+.forsic-rotor{position:absolute;inset:5px;border-radius:50%;background:repeating-conic-gradient(from 3deg,#fffefa99 0deg 1deg,transparent 1deg 12deg);border:1px solid #aaa49b;box-shadow:inset 0 0 0 3px #d9d4cc}
+.forsic-rotor:after{content:'';position:absolute;inset:-1px;border-radius:50%;border:1px solid transparent;border-top-color:var(--lens-light);opacity:.6;transform:rotate(-35deg)}
+.forsic-rotor:before{content:'';position:absolute;width:3px;height:6px;top:2px;left:calc(50% - 1.5px);border-radius:2px;background:var(--forsic-brand,#fe2e36)}
+.forsic-inner-ring{position:absolute;inset:13px;border:1px solid #f8f6efb3;border-radius:50%;background:#d4cec4;box-shadow:inset 0 0 0 2px #b7b0a5}
+.forsic-glass{position:absolute;inset:17px;overflow:hidden;border-radius:50%;background:radial-gradient(ellipse at 30% 20%,#fffdf6 0%,#eeeae0 24%,#d9d4c9 55%,#bbb5a9 85%,#a29b8e);box-shadow:inset 0 2px 3px #ffffff99,inset -4px -7px 12px #6d625233;border:1px solid #fffdf580}
+.forsic-reflection{position:absolute;inset:0;border-radius:50%;background:linear-gradient(125deg,transparent 18%,#ffffff66 29%,transparent 41%);pointer-events:none}
+.forsic-face{position:absolute;inset:0;width:100%;height:100%;color:#4b453d;overflow:visible;transition:transform .55s ease}
+.forsic-eye{transform-box:fill-box;transform-origin:center;animation:forsic-blink 6.7s infinite}
+.forsic-brow{transform-box:fill-box;transform-origin:center;transition:transform .4s ease}
+.forsic-brows{opacity:.6}
+.forsic-mouth{transition:opacity .25s ease}
+.forsic-mouth.ponder,.forsic-mouth.concern,.forsic-happy-eyes{opacity:0}
+.forsic-ground{position:absolute;bottom:7px;left:37px;width:102px;height:8px;border-radius:50%;background:radial-gradient(ellipse,#51483d33,transparent 70%);animation:forsic-ground 7s ease-in-out infinite}
+.forsic-scan{position:absolute;inset:0;opacity:0;background:linear-gradient(transparent 46%,#fffdf699 49%,#fffdf61a 53%,transparent 57%);transform:translateY(-40%);pointer-events:none}
+.forsic-focus{position:absolute;inset:13px;opacity:0;pointer-events:none}
+.forsic-focus i{position:absolute;width:12px;height:12px;border:1px solid var(--forsic-brand,#fe2e36);filter:drop-shadow(0 0 2px #fe2e3633)}
+.forsic-focus .tl{top:0;left:0;border-right:0;border-bottom:0}.forsic-focus .tr{top:0;right:0;border-left:0;border-bottom:0}.forsic-focus .bl{bottom:0;left:0;border-right:0;border-top:0}.forsic-focus .br{bottom:0;right:0;border-left:0;border-top:0}
+.forsic-mood-label{display:flex;gap:7px;align-items:center;font-size:var(--forsic-font-meta, 12px);color:var(--forsic-muted);letter-spacing:.05em;min-height:18px}
+.forsic-mood-label i{width:4px;height:4px;border-radius:50%;background:var(--forsic-brand,#fe2e36);opacity:.65}
+.forsic-workmark{position:absolute;right:12px;bottom:18px;width:28px;height:28px;border:1px solid #d8d1c6;background:#faf7f0f2;box-shadow:0 3px 9px #51483d1f;border-radius:var(--forsic-control-radius);color:var(--forsic-brand,#fe2e36);opacity:0;transform:translateY(4px);transition:opacity .35s,transform .35s}
+.forsic-workmark svg{width:18px;height:18px;margin:4px}
+.forsic-workmark path{display:none}
+.forsic-sparks,.forsic-orbit-dots{position:absolute;inset:0;pointer-events:none;opacity:0}
+.forsic-sparks i{position:absolute;right:12px;top:22px;width:9px;height:9px;background:var(--forsic-brand,#fe2e36);clip-path:polygon(50% 0,62% 38%,100% 50%,62% 62%,50% 100%,38% 62%,0 50%,38% 38%)}
+.forsic-sparks i:nth-child(2){right:29px;top:6px;width:5px;height:5px}.forsic-sparks i:nth-child(3){right:4px;top:46px;width:4px;height:4px}
+.forsic-orbit-dots{inset:auto 9px 34px auto;display:flex;gap:3px}
+.forsic-orbit-dots i{width:4px;height:4px;border-radius:50%;background:var(--forsic-brand,#fe2e36)}
+/* Search: the focus barrel turns; the face watches the search, not a spinning head. */
+[data-mood=searching] .forsic-rotor{animation:forsic-rotate 3.6s linear infinite}
+[data-mood=searching] .forsic-face{animation:forsic-look 4s ease-in-out infinite}
+[data-mood=searching] .forsic-brow.right{transform:translateY(-2px) rotate(-8deg)}
+[data-mood=searching] .forsic-workmark,[data-mood=reading] .forsic-workmark,[data-mood=verifying] .forsic-workmark,[data-mood=writing] .forsic-workmark{opacity:1;transform:translateY(0)}
+[data-mood=searching] .forsic-mark-search,[data-mood=reading] .forsic-mark-read,[data-mood=verifying] .forsic-mark-verify,[data-mood=writing] .forsic-mark-write{display:block}
+/* Reading and checksum work have distinct scan rhythms, not the discovery reaction. */
+[data-mood=reading] .forsic-scan{opacity:.5;animation:forsic-read-scan 3.2s ease-in-out infinite}
+[data-mood=reading] .forsic-face{animation:forsic-read-eyes 3.2s ease-in-out infinite}
+[data-mood=reading] .forsic-brows{transform:translateY(2px)}
+[data-mood=verifying] .forsic-rotor{animation:forsic-rotate 8s steps(24,end) infinite}
+[data-mood=verifying] .forsic-focus{opacity:.3;animation:forsic-measure 2.4s ease-in-out infinite}
+[data-mood=verifying] .forsic-mouth.smile,[data-mood=thinking] .forsic-mouth.smile,[data-mood=uncertain] .forsic-mouth.smile,[data-mood=offline] .forsic-mouth.smile{opacity:0}
+[data-mood=verifying] .forsic-mouth.ponder,[data-mood=thinking] .forsic-mouth.ponder{opacity:1}
+/* Thinking: a small tilt, asymmetrical brows and a quiet three-dot cadence. */
+[data-mood=thinking] .forsic-lens{animation:forsic-consider 5.4s ease-in-out infinite}
+[data-mood=thinking] .forsic-face{transform:translate(3px,-2px)}
+[data-mood=thinking] .forsic-brow.left{transform:translateY(-3px) rotate(-9deg)}
+[data-mood=thinking] .forsic-brow.right{transform:translateY(1px) rotate(9deg)}
+[data-mood=thinking] .forsic-orbit-dots{opacity:.85}
+[data-mood=thinking] .forsic-orbit-dots i{animation:forsic-dot 1.6s ease-in-out infinite}
+[data-mood=thinking] .forsic-orbit-dots i:nth-child(2){animation-delay:.18s}[data-mood=thinking] .forsic-orbit-dots i:nth-child(3){animation-delay:.36s}
+[data-mood=writing] .forsic-lens{animation:forsic-write 2.8s ease-in-out infinite}
+[data-mood=writing] .forsic-workmark svg{animation:forsic-pen 1.4s ease-in-out infinite}
+[data-mood=writing] .forsic-brow.right{transform:translateY(-2px)}
+/* Fresh matches: one focus-lock and restrained glint, not a looping celebration. */
+[data-mood=found] .forsic-lens{animation:forsic-found 1.8s cubic-bezier(.2,.7,.3,1) both}
+[data-mood=found] .forsic-focus{animation:forsic-focus-lock 1.8s ease-out both}
+[data-mood=found] .forsic-sparks{animation:forsic-glint 1.8s ease-out both}
+[data-mood=found] .forsic-brows{transform:translateY(-3px)}
+[data-mood=found] .forsic-eyes,[data-mood=complete] .forsic-eyes{opacity:0}
+[data-mood=found] .forsic-happy-eyes,[data-mood=complete] .forsic-happy-eyes{opacity:1}
+[data-mood=complete] .forsic-lens{animation:forsic-nod 1.8s ease-in-out both}
+[data-mood=uncertain] .forsic-lens{animation:forsic-hesitate 2s ease-in-out both}
+[data-mood=uncertain] .forsic-brow.left,[data-mood=offline] .forsic-brow.left{transform:rotate(-18deg) translateY(-1px)}
+[data-mood=uncertain] .forsic-brow.right,[data-mood=offline] .forsic-brow.right{transform:rotate(18deg) translateY(-1px)}
+[data-mood=uncertain] .forsic-mouth.concern,[data-mood=offline] .forsic-mouth.concern{opacity:1}
+[data-mood=offline] .forsic-lens{animation:none;filter:saturate(.35)}
+[data-mood=offline] .forsic-mood-label{color:var(--forsic-muted)}
+@keyframes forsic-breathe{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+@keyframes forsic-ground{0%,100%{transform:scaleX(1);opacity:.8}50%{transform:scaleX(.9);opacity:.55}}
+@keyframes forsic-blink{0%,43%,47%,100%{transform:scaleY(1)}45%{transform:scaleY(.12)}}
+@keyframes forsic-rotate{to{transform:rotate(360deg)}}
+@keyframes forsic-look{0%,100%{transform:translate(0,0)}22%,38%{transform:translate(4px,-1px)}64%,80%{transform:translate(-3px,1px)}}
+@keyframes forsic-read-scan{0%,100%{transform:translateY(-40%);opacity:0}15%{opacity:.5}80%{transform:translateY(40%);opacity:.5}95%{opacity:0}}
+@keyframes forsic-read-eyes{0%,100%{transform:translate(-2px,0)}35%{transform:translate(2px,0)}55%{transform:translate(-2px,2px)}85%{transform:translate(2px,3px)}}
+@keyframes forsic-measure{0%,100%{transform:scale(1);opacity:.25}50%{transform:scale(.93);opacity:.6}}
+@keyframes forsic-consider{0%,100%{transform:rotate(0) translateY(0)}35%,65%{transform:rotate(-5deg) translateY(-2px)}}
+@keyframes forsic-dot{0%,70%,100%{transform:translateY(0);opacity:.3}35%{transform:translateY(-4px);opacity:1}}
+@keyframes forsic-write{0%,100%{transform:translateY(0) rotate(0)}25%,70%{transform:translateY(2px) rotate(2deg)}45%{transform:translateY(0) rotate(1deg)}}
+@keyframes forsic-pen{0%,100%{transform:translate(0,0)}35%{transform:translate(1px,-1px)}65%{transform:translate(-1px,1px)}}
+@keyframes forsic-found{0%{transform:translateY(0) scale(1)}24%{transform:translateY(-5px) scale(1.035)}52%{transform:translateY(1px) scale(.99)}78%,100%{transform:translateY(0) scale(1)}}
+@keyframes forsic-focus-lock{0%{opacity:0;transform:scale(1.22)}30%{opacity:.85;transform:scale(.93)}55%{opacity:.7;transform:scale(1)}100%{opacity:0;transform:scale(1)}}
+@keyframes forsic-glint{0%{opacity:0;transform:translate(-4px,5px) scale(.6)}35%{opacity:.9;transform:translate(0,0) scale(1)}100%{opacity:0;transform:translate(2px,-3px) scale(.8)}}
+@keyframes forsic-nod{0%,100%{transform:translateY(0)}25%{transform:translateY(3px) rotate(3deg)}55%{transform:translateY(-2px) rotate(-1deg)}}
+@keyframes forsic-hesitate{0%,100%{transform:rotate(0)}25%{transform:rotate(-5deg) translateY(2px)}55%{transform:rotate(2deg) translateY(1px)}}
+@media(prefers-reduced-motion:reduce){.forsic-companion *{animation:none!important;transition:none!important}[data-mood=found] .forsic-focus{opacity:.5}[data-mood=found] .forsic-sparks{opacity:.5}}
+.forsic-records{box-sizing:border-box;width:100%;max-width:1240px;margin:0 auto;padding:32px}
+.forsic-records h1{font-size:24px;line-height:1.4;margin-bottom:12px}
+.forsic-records h2{font-size:var(--forsic-font-heading, 18px);line-height:1.5;margin:24px 0 12px}
+.forsic-records details{border:1px solid #474951;border-radius:var(--forsic-card-radius);margin:10px 0;padding:14px}
+.forsic-records summary{cursor:pointer}
+.forsic-records pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;font-size:var(--forsic-font-body, 15px);margin-top:12px}
+.forsic-records a{display:block;padding:8px}
+.forsic-modal{position:fixed;z-index:1000;inset:10%;background:#24262e;color:#eef0f4;border:1px solid #818695;border-radius:var(--forsic-card-radius);padding:24px;overflow:auto;box-shadow:0 0 0 100vmax #0009}
+.forsic-modal button{float:right}
+.forsic-records button{padding:7px 12px;border:1px solid #777;border-radius:var(--forsic-control-radius)}
+
+.forsic-workspace-heading{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:20px}.forsic-workspace-heading h1{margin:6px 0;font-size:24px;line-height:1.4}.forsic-workspace-heading small{color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px)}.forsic-workspace-heading a{font-size:var(--forsic-font-body, 15px);white-space:nowrap}.forsic-workspace-heading p{margin:8px 0;color:var(--forsic-muted)}
+.forsic-view-tabs{display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid var(--forsic-border);padding-bottom:12px;margin-bottom:24px}
+.forsic-view-tabs a{padding:9px 14px;border:1px solid transparent;border-radius:var(--forsic-control-radius);font-size:var(--forsic-font-body, 15px);text-decoration:none;color:var(--forsic-muted)}
+.forsic-view-tabs a[aria-current=page]{background:var(--forsic-surface);border-color:var(--forsic-border);color:var(--forsic-text)}
+.forsic-view-tabs a:hover{background:var(--forsic-hover)}
+
+.forsic-modal{left:max(240px,10%);right:5%}
+.forsic-modal button{float:none;font-size:var(--forsic-font-control, 14px);margin:0 4px;display:inline-block}
+.forsic-modal>button:first-child{float:right;font-size:var(--forsic-font-body, 15px)}
+.forsic-modal pre{max-height:none}
+@media(max-width:767px){.forsic-modal{left:4%;right:4%}
+}
+.forsic-library{border:1px solid #454c59;border-radius:var(--forsic-card-radius);background:#242830;padding:22px;margin:22px 0;scroll-margin-top:24px;color:#e5e7eb;color-scheme:dark}
+.forsic-intake-greeting{flex-shrink:0;margin:0 20px 12px;padding:14px 18px;border:1px solid #4a4d57;border-radius:var(--forsic-card-radius);background:#292b33;color:#e5e7ed;font-size:var(--forsic-font-body, 15px);line-height:1.6}.forsic-intake-greeting small{display:block;color:#acb3c0;margin-top:4px;font-size:var(--forsic-font-control, 14px)}
+.forsic-library .forsic-modal{background:#242830;color:#e5e7eb}
+.forsic-library-heading{display:flex;justify-content:space-between;gap:16px;align-items:start}.forsic-library-heading h2{margin:0}.forsic-library-heading p{margin:8px 0 18px;color:#aab6c7}.forsic-library small{display:block;color:#aab6c7}
+.forsic-library-search{display:flex;gap:8px;margin-bottom:12px}.forsic-library input,.forsic-library select{border:1px solid #526073;border-radius:var(--forsic-control-radius);background:#1d2027;color:#e5e7eb;padding:10px 12px;font:inherit;min-width:0}.forsic-library-search input{flex:1}.forsic-library button{border:1px solid #526073;border-radius:var(--forsic-control-radius);background:#303744;color:#e5e7eb;padding:9px 12px;cursor:pointer}.forsic-library button:hover{background:#3b4758}.forsic-library button:disabled{opacity:.5;cursor:wait}
+.forsic-library-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:14px;margin:12px 0}.forsic-archive-card{padding:18px!important;margin:0!important;border:1px solid #454c59;border-radius:var(--forsic-card-radius);background:#292f39}.forsic-archive-card h3{margin:8px 0}.forsic-archive-card p{white-space:pre-wrap;line-height:1.6}.forsic-archive-meta{font-size:var(--forsic-font-control, 14px);color:#aab6c7}.forsic-archive-card small{margin:8px 0}.forsic-library .forsic-archive-changed{color:#d7bb91}.forsic-library-save{margin:12px 0}.forsic-library-save input{margin-right:8px}.forsic-archive-comparison{display:grid;grid-template-columns:1fr 1fr;gap:20px;background:#1d2027;padding:16px;margin:18px 0;border-radius:var(--forsic-card-radius)}.forsic-archive-detail small{margin:6px 0}.forsic-archive-detail article{border-bottom:1px solid #454c59;padding:16px 0}.forsic-archive-detail pre{max-height:45vh;overflow:auto;background:#1d2027;padding:16px}.forsic-library [role=alert]{color:#e4aaaa}
+@media(max-width:700px){.forsic-library-heading{display:block}.forsic-archive-comparison{grid-template-columns:1fr}.forsic-library{padding:16px}}
+.forsic-connection-tabs{display:flex;gap:6px;padding:5px;border:1px solid #434852;border-radius:var(--forsic-control-radius);background:#1d2027}.forsic-connection-tabs button{flex:1;border:0!important;background:transparent!important;color:#abb4c2!important}.forsic-connection-tabs button[aria-pressed=true]{background:#3d4654!important;color:#f0f3f8!important}.forsic-connections section[hidden]{display:none}.forsic-connections{color-scheme:dark}
+.forsic-connections{position:fixed;inset:0;margin:auto;width:min(610px,calc(100vw - 32px));max-height:88vh;overflow:auto;box-sizing:border-box;border:1px solid #555861;border-radius:var(--forsic-card-radius);background:#24262d;color:#e8e9ed;padding:26px;font:var(--forsic-font-body, 15px)/1.5 system-ui,sans-serif;box-shadow:0 24px 90px #0008}
+.forsic-connections::backdrop{background:#090b11b3;backdrop-filter:blur(4px)}
+.forsic-connections header,.forsic-connections footer{display:flex;align-items:center;justify-content:space-between;gap:16px}.forsic-connections header small{letter-spacing:.15em;color:#969ca7}.forsic-connections h2{margin:4px 0 0;font-size:23px}.forsic-connections h3{margin:0 0 14px;font-size:var(--forsic-font-heading, 18px)}.forsic-connection-intro{color:#b5bac4;margin:16px 0 22px}.forsic-connections section{padding:18px;border:1px solid #42464e;border-radius:var(--forsic-card-radius);margin:14px 0;background:#2a2d35}.forsic-connections section small{display:block;font-size:var(--forsic-font-control, 14px);color:#adb3bf;margin-top:8px;overflow-wrap:anywhere}
+.forsic-connection-badge{display:inline-block;vertical-align:middle;margin-left:5px;padding:2px 8px;border-radius:var(--forsic-card-radius);font-size:var(--forsic-font-control, 14px);font-weight:500;color:#d5dfef;background:#3c4555}.forsic-connection-badge.muted{color:#afb2ba;background:#3b3d43}.forsic-connection-field{display:flex;flex-direction:column;gap:6px;margin:13px 0}.forsic-connection-field span{font-size:var(--forsic-font-control, 14px);color:#bfc5ce}.forsic-connection-field input{width:100%;box-sizing:border-box;border:1px solid #535966;border-radius:var(--forsic-control-radius);background:#1e2027;color:#f0f1f4;font:var(--forsic-font-body, 15px) ui-monospace,monospace;padding:11px 12px}.forsic-connection-field input:read-only{color:#a1a8b4}.forsic-connections input:focus-visible,.forsic-connections button:focus-visible{outline:2px solid var(--forsic-focus);outline-offset:3px}.forsic-connection-check{display:flex;gap:8px;align-items:flex-start;margin:12px 0;font-size:var(--forsic-font-body, 15px)}.forsic-connection-check input{margin-top:4px;accent-color:var(--forsic-accent)}.forsic-connection-hint{font-size:var(--forsic-font-control, 14px);color:#b2b8c5;margin:12px 0;line-height:1.65}.forsic-connections button{font:inherit;cursor:pointer;border:1px solid #616976;border-radius:var(--forsic-control-radius);background:#333a47;color:#edf0f6;padding:8px 13px}.forsic-connections button:disabled{opacity:.45;cursor:default}.forsic-connections footer{margin-top:20px}.forsic-connections a{color:#b9c2d4;font-size:var(--forsic-font-control, 14px)}.forsic-connections .forsic-connection-save{background:var(--forsic-primary);color:var(--forsic-primary-text);border-color:var(--forsic-primary);font-weight:650}.forsic-connection-message{padding:12px;border-radius:var(--forsic-control-radius);background:var(--forsic-accent-soft);color:var(--forsic-text)}.forsic-connection-error{padding:12px;border-radius:var(--forsic-control-radius);background:#463536;color:#f4c2c2}
+@media(max-width:520px){.forsic-connections{padding:18px;max-height:92vh}.forsic-connections section{padding:14px}}
+.forsic-connections{padding:22px}.forsic-connection-intro{margin:12px 0 16px;font-size:var(--forsic-font-body, 15px)}.forsic-connections section{padding:15px}.forsic-connection-field{margin:10px 0}.forsic-connection-field input{padding:9px 11px}.forsic-connection-check{margin:8px 0}.forsic-connection-address{font-size:var(--forsic-font-control, 14px);color:#a7afbc;overflow-wrap:anywhere;margin:12px 0}.forsic-connection-address code{font:var(--forsic-font-secondary, 13px) ui-monospace,monospace}.forsic-connections footer{margin-top:14px}
+
+/* Shared primitives. Lens geometry and semantic warning/error colors stay independent. */
+.forsic-shell{--component-card-background:var(--forsic-surface);--component-card-border-image:none;--component-card-box-shadow:none;--component-card-clip-path:none;--theme-radius:var(--forsic-control-radius)}
+.forsic-shell :is(.forsic-directory,.forsic-library,.forsic-archive-card,.forsic-records details,.forsic-intake-greeting,.forsic-connections section){border:1px solid var(--forsic-border);border-radius:var(--forsic-card-radius);background:var(--forsic-surface);color:var(--forsic-text)}
+.forsic-shell :is(.forsic-modal,.forsic-connections){border:1px solid var(--forsic-border);border-radius:var(--forsic-dialog-radius);background:var(--forsic-canvas);color:var(--forsic-text)}
+.forsic-shell :is(.forsic-modal,.forsic-connections) h2{font-size:20px;line-height:1.4}
+.forsic-shell :is(.forsic-directory,.forsic-library,.forsic-records,.forsic-connections) :is(button,select,input:not([type=checkbox])){border:1px solid var(--forsic-border);border-radius:var(--forsic-control-radius);color:var(--forsic-text);box-shadow:none}
+.forsic-shell :is(.forsic-directory,.forsic-library,.forsic-records,.forsic-connections) :is(button,select){background:var(--forsic-surface)}
+.forsic-shell :is(.forsic-directory,.forsic-library,.forsic-records,.forsic-connections) :is(input:not([type=checkbox]),pre){background:var(--forsic-inset)}
+.forsic-shell :is(.forsic-directory,.forsic-library,.forsic-records,.forsic-connections) button:enabled:hover{background:var(--forsic-hover)}
+.forsic-shell .forsic-connection-tabs{border-color:var(--forsic-border);border-radius:var(--forsic-card-radius);background:var(--forsic-inset)}
+.forsic-shell .forsic-connection-tabs button{min-height:36px}
+.forsic-shell .forsic-connection-tabs button[aria-pressed=true]{background:var(--forsic-hover)!important;color:var(--forsic-text)!important}
+.forsic-shell .forsic-connection-badge{border-radius:0;background:var(--forsic-hover);color:var(--forsic-muted)}
+.forsic-shell .forsic-connections .forsic-connection-save{background:var(--forsic-primary);color:var(--forsic-primary-text);border-color:var(--forsic-primary)}
+.forsic-shell .forsic-connections .forsic-connection-save:enabled:hover{background:var(--forsic-primary-hover);border-color:var(--forsic-accent)}
+.forsic-shell :is(.forsic-connection-message,.forsic-connection-error,.forsic-archive-comparison){border-radius:var(--forsic-control-radius)}
+.forsic-shell :is(.forsic-sidebar,.forsic-directory,.forsic-library,.forsic-records,.forsic-connections) :is(button,a,input,select):focus-visible{outline:2px solid var(--forsic-focus);outline-offset:3px}
+.forsic-shell :is(.forsic-sidebar,.forsic-directory,.forsic-library,.forsic-records,.forsic-connections) :is(button,a){transition:background-color .15s,border-color .15s}
+.forsic-shell main .rounded-lg{border-radius:var(--forsic-card-radius)}
+@media(prefers-reduced-motion:reduce){.forsic-shell :is(button,a){transition:none}}
+
+.forsic-board{margin:24px 0 32px}
+.forsic-board-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:20px}
+.forsic-board-heading h2{margin:0 0 6px}.forsic-board-heading p{margin:0;color:var(--forsic-muted);font-size:var(--forsic-font-body, 15px)}
+.forsic-board-counts{display:flex;gap:8px;flex-wrap:wrap}.forsic-board-counts span{padding:6px 10px;border:1px solid var(--forsic-border);border-radius:var(--forsic-control-radius);font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted);white-space:nowrap}
+.forsic-board-columns{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:24px}
+.forsic-board h3{font-size:var(--forsic-font-body, 15px);margin:0 0 12px;color:var(--forsic-muted)}
+.forsic-finding-card{border:1px solid var(--forsic-border);border-radius:var(--forsic-card-radius);padding:18px;background:var(--forsic-surface);margin-bottom:14px}
+.forsic-finding-card h4{font-size:var(--forsic-font-heading, 18px);line-height:1.5;margin:10px 0}
+.forsic-finding-meta{display:flex;justify-content:space-between;align-items:center;gap:8px;color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px)}
+.forsic-finding-meta span{padding:3px 7px;background:var(--forsic-inset);border-radius:0}
+.forsic-finding-meta small{font-size:var(--forsic-font-control, 14px)}.forsic-answer{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--forsic-font-body, 15px);line-height:1.8}
+.forsic-board .forsic-source-links{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}.forsic-board .forsic-source-links button{font-size:var(--forsic-font-control, 14px);padding:5px 8px;color:var(--forsic-muted);background:var(--forsic-inset)}
+.forsic-board .forsic-correction{font-size:var(--forsic-font-control, 14px);color:#d2c3a9}.forsic-board ul{list-style:disc;padding-left:20px;font-size:var(--forsic-font-body, 15px);color:var(--forsic-muted);line-height:1.7}
+.forsic-board details{padding:10px 0 0;border:0;border-top:1px solid var(--forsic-border);border-radius:0;margin:14px 0 0}.forsic-board summary{font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted)}
+.forsic-open-checks{margin-top:16px;padding-top:12px;border-top:1px solid var(--forsic-border)}.forsic-open-checks strong{font-size:var(--forsic-font-control, 14px);color:#d2c3a9}
+.forsic-timeline ol{list-style:none;margin:0 0 16px 6px;padding:0 0 0 20px;border-left:1px solid var(--forsic-border)}
+.forsic-timeline li{position:relative;margin-bottom:12px;padding:14px;border:1px solid var(--forsic-border);border-radius:var(--forsic-card-radius);background:var(--forsic-surface)}
+.forsic-timeline li:before{content:'';position:absolute;left:-25px;top:20px;width:7px;height:7px;border-radius:50%;background:var(--forsic-muted);box-shadow:0 0 0 4px var(--forsic-canvas)}
+.forsic-timeline time{display:block;font:var(--forsic-font-control, 14px) var(--theme-font-mono)}.forsic-timeline small{display:block;margin-top:5px;font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted)}
+.forsic-time-group h4{font-size:var(--forsic-font-control, 14px);font-weight:500;color:var(--forsic-muted);margin:18px 0 12px}.forsic-time-group:first-of-type h4{margin-top:0}
+.forsic-time-group[aria-label="시간대 미확인 · 원문 날짜순"] ol{border-left-style:dashed}
+.forsic-timeline p{font-size:var(--forsic-font-body, 15px);line-height:1.7;margin:10px 0}
+.forsic-source-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px;margin:14px 0}
+.forsic-board .forsic-source-card{display:flex;flex-direction:column;gap:8px;min-width:0;text-align:left;padding:14px;border-radius:var(--forsic-card-radius);overflow-wrap:anywhere}
+.forsic-source-card strong{font-size:var(--forsic-font-body, 15px);font-weight:500}.forsic-source-card code{font-size:var(--forsic-font-control, 14px);background:transparent;color:var(--forsic-muted)}.forsic-source-card small{font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted);line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.forsic-source-card span{font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted)}
+.forsic-empty{padding:20px;border:1px dashed var(--forsic-border);border-radius:var(--forsic-card-radius);font-size:var(--forsic-font-body, 15px);color:var(--forsic-muted);line-height:1.7}
+@media(max-width:900px){.forsic-board-columns{grid-template-columns:1fr}.forsic-board-heading{align-items:start;flex-direction:column}}
+.forsic-board-tabs{display:flex;gap:8px;margin:16px 0;flex-wrap:wrap}
+.forsic-board-tabs button[aria-pressed="true"]{background:var(--forsic-surface);border-color:var(--forsic-muted)}
+.forsic-indicator-filters{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
+.forsic-indicator-filters input{flex:1;min-width:180px}.forsic-indicator-filters select{min-width:130px}
+.forsic-indicator-filters :is(input,select){padding:9px 12px;font:inherit}
+.forsic-board .forsic-source-links a{font-size:var(--forsic-font-control, 14px);padding:8px 11px;border:1px solid var(--forsic-border);border-radius:var(--forsic-control-radius);color:var(--forsic-text);background:var(--forsic-surface);text-decoration:none}
+.forsic-board .forsic-source-links a:hover{background:var(--forsic-hover)}
+.forsic-indicator-value{display:block;overflow-wrap:anywhere;white-space:pre-wrap;font:var(--forsic-font-body, 15px) var(--theme-font-mono);padding:8px 0}
+
+.forsic-chat-status{align-self:stretch;font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted)}
+.forsic-chat-status summary{cursor:pointer;padding:8px 0}
+.forsic-chat-status[open]{padding-bottom:12px}
+
+
+/* Navigation stays the same hierarchy in the mobile drawer. */
+@media(max-width:1023px){
+  .forsic-sidebar{gap:20px;padding:16px}
+  .forsic-nav-item,.forsic-sidebar-footer .forsic-settings-open,.forsic-sidebar-footer>details>summary,.forsic-context-card summary{min-height:44px}
+  .forsic-records{padding:24px 16px}
+  .forsic-workspace-heading{align-items:flex-start;flex-direction:column;gap:8px}
+}
+@media(max-width:520px){
+  .forsic-directory{padding:16px}
+  .forsic-directory-heading{align-items:flex-start;flex-direction:column}
+  .forsic-investigation{grid-template-columns:minmax(0,1fr)}
+  .forsic-library-search{flex-wrap:wrap}
+}
+@media(prefers-reduced-motion:reduce){.forsic-nav-item{transition:none}}
+
+.forsic-new-case{max-width:840px;margin:0 auto;width:100%}
+.forsic-new-case form{display:flex;flex-direction:column;gap:12px;padding:24px;border:1px solid var(--forsic-border);border-radius:var(--forsic-card-radius);background:var(--forsic-surface)}
+.forsic-new-case label{font-weight:600;font-size:var(--forsic-font-body, 15px)}
+.forsic-new-case input{width:100%;min-height:44px;padding:12px;border:1px solid var(--forsic-border);border-radius:var(--forsic-control-radius);background:var(--forsic-canvas);color:var(--forsic-text);font:var(--forsic-font-body, 15px) var(--theme-font-mono,monospace)}
+.forsic-new-case form p,.forsic-intake-explanation p{font-size:var(--forsic-font-body, 15px);color:var(--forsic-muted);line-height:1.7}
+.forsic-new-case form button{align-self:flex-start}
+.forsic-intake-explanation{padding:8px 24px}
+
+.forsic-case-heading code{display:block;margin-top:6px;background:transparent;color:var(--forsic-muted);font:var(--forsic-font-secondary, 13px)/1.5 var(--theme-font-mono,monospace)}
+.forsic-case-heading h2{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.forsic-app-content [role=banner] h1{font:600 var(--forsic-font-body, 15px)/1.5 var(--theme-font-sans,system-ui,sans-serif);letter-spacing:normal}
+.forsic-global-nav .forsic-action-secondary[aria-current=page]{background:var(--forsic-selected);color:var(--forsic-text);border-color:var(--forsic-accent)}
+
+.forsic-directory-path{display:block;color:var(--forsic-muted);background:transparent;font-size:var(--forsic-font-secondary, 13px);overflow-wrap:anywhere;margin-top:8px}
+.forsic-report-bundle{border:1px solid var(--forsic-border);border-radius:var(--forsic-card-radius);background:var(--forsic-surface);padding:20px;margin:16px 0}
+.forsic-report-bundle h3{font-size:var(--forsic-font-heading, 18px);margin:0 0 8px}.forsic-report-bundle p{font-size:var(--forsic-font-body, 15px);color:var(--forsic-muted)}
+.forsic-report-downloads{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}
+.forsic-records .forsic-report-downloads a{display:inline-flex;padding:10px 14px}
+.forsic-report-manifest{font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted)}
+
+/* Persistent companion; its optical shape is illustration, not a UI container. */
+.forsic-identity{display:flex;align-items:center;gap:10px;min-width:0;width:100%;letter-spacing:normal;}
+.forsic-identity-character{width:104px;height:104px;flex:0 0 104px;position:relative;}
+.forsic-character-layer{position:absolute;inset:0;pointer-events:none;transition:opacity .36s ease,transform .48s cubic-bezier(.22,.8,.26,1);transform-origin:50% 65%;}
+.forsic-character-original{opacity:1;transform:translateY(0) scale(1) rotate(0);}
+.forsic-character-ren{opacity:0;transform:translateY(10px) scale(.82) rotate(8deg);}
+.forsic-character-ren img{display:block;width:100%;height:100%;object-fit:contain;}
+.forsic-identity[data-character=ren] .forsic-character-original{opacity:0;transform:translateY(-10px) scale(.82) rotate(-8deg);}
+.forsic-identity[data-character=ren] .forsic-character-ren{opacity:1;transform:translateY(0) scale(1) rotate(0);}
+.forsic-identity-copy{animation:forsic-identity-enter .32s ease both;}
+@keyframes forsic-identity-enter{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.forsic-character-layer{transition:none;transform:none!important}.forsic-identity-copy{animation:none}}
+.forsic-identity .forsic-companion{position:absolute;left:0;top:0;width:176px;transform:scale(.598);transform-origin:top left;filter:grayscale(1);}
+.forsic-identity .forsic-mood-label{display:none;}
+.forsic-identity-copy{display:flex;flex-direction:column;gap:5px;min-width:0;}
+.forsic-identity-copy strong{font-size:20px;font-weight:650;line-height:1.2;color:var(--forsic-text);}
+.forsic-identity-copy small{font-size:var(--forsic-font-control, 14px);line-height:1.4;color:var(--forsic-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.forsic-directory .forsic-investigation-link{flex:1;min-width:0;display:grid;grid-template-columns:minmax(0,1fr) 130px;align-items:center;gap:20px;padding:20px 12px;border:0;background:transparent;font-size:var(--forsic-font-body, 15px);}
+.forsic-directory .forsic-investigation-link:hover{background:var(--forsic-hover);}
+.forsic-directory .forsic-archive-action{align-self:center;flex:0 0 44px;width:44px;height:44px;display:grid;place-items:center;padding:0;background:transparent;border-color:transparent;color:var(--forsic-muted);}
+.forsic-directory .forsic-archive-action:hover{background:var(--forsic-hover);border-color:var(--forsic-border);color:var(--forsic-text);}
+.forsic-directory-path{background:transparent!important;color:var(--forsic-muted)!important;}
+.forsic-shell .forsic-view-tabs a[aria-current=page]{background:var(--forsic-accent-soft);border-color:var(--forsic-border);box-shadow:none;}
+@media(max-width:640px){.forsic-directory .forsic-investigation-link{grid-template-columns:1fr;gap:10px;padding:16px 4px;}.forsic-investigation-status{display:flex;gap:12px;align-items:center;}.forsic-investigation-status small{margin:0;}}
+
+@media(max-width:1023px){.forsic-identity-character{width:80px;height:80px;flex-basis:80px;}.forsic-identity .forsic-companion{transform:scale(.46);}.forsic-identity-copy strong{font-size:18px;}}
+
+/* Question relations are derived from the ledger; the shipped JS/CSS are authored directly. */
+.forsic-relations{--relation-line:var(--forsic-border)}
+.forsic-relation-select{display:flex;flex-direction:column;gap:8px;font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted);margin:20px 0}
+.forsic-relation-select select{width:100%;padding:12px;color:var(--forsic-text);background:var(--forsic-surface);border:1px solid var(--relation-line);border-radius:0;font:inherit;font-size:var(--forsic-font-body, 15px)}
+.forsic-relation-answer{border:1px solid var(--relation-line);padding:24px;background:var(--forsic-surface)}
+.forsic-relation-answer h3{font-size:20px;margin:14px 0;line-height:1.5}
+.forsic-relation-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted)}
+.forsic-relation-meta span{border:1px solid var(--relation-line);padding:4px 8px}
+.forsic-relation-meta small{margin-left:auto;align-self:center}
+.forsic-relation-scope,.forsic-relation-caption{font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted);line-height:1.7}
+.forsic-relation-judgment{padding-top:14px;border-top:1px solid var(--relation-line);margin-top:16px}
+.forsic-relation-detail h4{font-size:var(--forsic-font-body, 15px);margin:12px 0 6px;line-height:1.6}
+.forsic-relation-detail p,.forsic-relation-detail li{font-size:var(--forsic-font-body, 15px);line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap}
+.forsic-relation-detail .forsic-answer{font-size:var(--forsic-font-body, 15px)}
+.forsic-relation-caption{margin:0;padding:20px 0 20px 20px;border-left:1px solid var(--relation-line)}
+.forsic-relation-lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;border-top:1px solid var(--relation-line)}
+.forsic-relation-lanes>section{min-width:0;padding-top:16px;position:relative}
+.forsic-relation-lanes>section:before{content:'';position:absolute;top:0;left:20px;height:12px;border-left:1px solid var(--relation-line)}
+.forsic-relation-lanes h3{font-size:var(--forsic-font-body, 15px);font-weight:500;margin:8px 0 16px;color:var(--forsic-muted)}
+.forsic-relation-node{border:1px solid var(--relation-line);padding:16px;margin-bottom:12px;min-width:0;background:var(--forsic-canvas)}
+.forsic-relation-node small,.forsic-relation-node code{font-size:var(--forsic-font-secondary, 13px);color:var(--forsic-muted);overflow-wrap:anywhere}
+.forsic-relation-node blockquote{margin:0;padding:12px 0;font:var(--forsic-font-body, 15px)/1.8 var(--theme-font-mono,monospace);white-space:pre-wrap;overflow-wrap:anywhere}
+.forsic-relation-assessment{border-top:1px solid var(--relation-line);padding-top:12px;margin-top:12px}
+.forsic-relation-assessment strong{font-size:var(--forsic-font-control, 14px)}
+.forsic-relation-history{margin-top:24px;padding:16px;border:1px solid var(--relation-line);color:var(--forsic-muted)}
+.forsic-relation-history article{margin-top:16px;padding-top:12px;border-top:1px dashed var(--relation-line)}
+.forsic-relation-source{margin-top:24px;padding:20px;border:1px solid var(--relation-line);overflow-wrap:anywhere}
+.forsic-relation-source pre{max-height:420px;overflow:auto;white-space:pre-wrap;font-size:var(--forsic-font-control, 14px)}
+.forsic-relations button{border-radius:0;max-width:100%;overflow-wrap:anywhere}
+.forsic-relations :is(button,select,summary):focus-visible{outline:2px solid var(--forsic-text);outline-offset:3px}
+@media(max-width:1000px){.forsic-relation-lanes{grid-template-columns:1fr}.forsic-relation-answer{padding:16px}}
+
+/* Quiet workspace chrome: clear destinations, soft surfaces and generous reading space. */
+.forsic-sidebar{gap:24px;padding:20px 16px 16px}
+.forsic-global-nav{display:grid;grid-template-columns:1fr;gap:8px}
+.forsic-global-nav .forsic-action-secondary{justify-content:flex-start;padding-left:14px;background:var(--forsic-primary);border-color:var(--forsic-primary);color:var(--forsic-primary-text);min-height:42px;font-weight:600}
+.forsic-global-nav .forsic-action-secondary:hover{background:var(--forsic-primary-hover);color:var(--forsic-primary-text)}
+.forsic-shell .forsic-action-secondary:disabled{opacity:.52;cursor:not-allowed;background:var(--forsic-inset);border-color:var(--forsic-border);color:var(--forsic-muted)}
+.forsic-admission-notice{padding:10px 12px;margin:8px 0 14px;border:1px solid var(--forsic-border);border-radius:10px;background:var(--forsic-inset);color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px);line-height:1.65}
+.forsic-admission-notice p{margin:0!important;font-size:inherit!important}
+.forsic-admission-notice a{display:inline-flex;margin-top:7px;color:var(--forsic-accent)!important;font-weight:600;text-decoration:none;border:0!important;padding:0!important}
+.forsic-global-nav .forsic-action-secondary[aria-current=page]{background:var(--forsic-primary);color:var(--forsic-primary-text);border-color:var(--forsic-primary)}
+.forsic-nav-icon{flex:0 0 18px;opacity:.85}
+.forsic-nav-item{min-height:40px;padding:10px 12px;gap:10px;font-weight:500;transition:background-color .16s,color .16s,border-color .16s}
+.forsic-nav-item[aria-current=page]{color:var(--forsic-accent);border-color:transparent;font-weight:650}
+.forsic-global-nav .forsic-nav-item,.forsic-sidebar-footer>.forsic-nav-item{flex-direction:row;align-items:center;justify-content:flex-start}
+.forsic-context-card{padding:14px;background:var(--forsic-canvas);border-color:var(--forsic-border);border-radius:12px}
+.forsic-context-card>small,.forsic-case-heading>small{font-size:var(--forsic-font-secondary, 13px);font-weight:600;letter-spacing:.04em}
+.forsic-context-card summary{min-height:28px;font-size:var(--forsic-font-secondary, 13px)}
+.forsic-current-case{display:flex;flex-direction:column;gap:20px;min-width:0}
+.forsic-case-heading h2{font-size:var(--forsic-font-body, 15px);line-height:1.65}
+.forsic-case-heading code{font-size:var(--forsic-font-meta, 12px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.forsic-section-heading h3{font-size:var(--forsic-font-secondary, 13px);color:var(--forsic-muted);letter-spacing:.04em}
+.forsic-section-heading .forsic-action-primary{background:transparent;color:var(--forsic-accent);border-color:transparent;padding:4px 7px;min-height:28px}
+.forsic-section-heading .forsic-action-primary:hover{background:var(--forsic-accent-soft)}
+.forsic-conversations .forsic-nav-item{position:relative;flex-direction:row;justify-content:space-between;align-items:center;padding:10px 12px;gap:8px}
+.forsic-conversation-label{gap:4px}.forsic-conversation-label>span{font-size:var(--forsic-font-body, 15px)}
+.forsic-conversations .forsic-nav-item small{font-size:var(--forsic-font-meta, 12px)}.forsic-conversations .forsic-session-usage{opacity:.8}
+.forsic-case-views{padding-top:16px;gap:4px}
+.forsic-sidebar>.forsic-empty{padding:16px;margin:0;background:var(--forsic-canvas);border:0;font-size:var(--forsic-font-control, 14px);line-height:1.85}
+.forsic-sidebar-footer{gap:4px;padding-top:16px}
+.forsic-identity .forsic-companion{filter:none}
+.forsic-identity-copy strong{font-size:21px;letter-spacing:-.04em}.forsic-identity-copy small{font-size:var(--forsic-font-secondary, 13px)}
+.forsic-records{max-width:1200px;padding:44px 40px;line-height:1.65}
+.forsic-workspace-heading{margin-bottom:28px}
+.forsic-workspace-heading small{color:var(--forsic-accent);font-size:var(--forsic-font-control, 14px);font-weight:600;letter-spacing:.03em}
+.forsic-workspace-heading h1{margin:7px 0 10px;font-size:28px;font-weight:700;letter-spacing:-.045em}
+.forsic-workspace-heading p{font-size:var(--forsic-font-body, 15px);color:var(--forsic-muted);margin:0;line-height:1.8}
+.forsic-view-tabs{gap:6px;margin-bottom:28px;padding-bottom:14px}
+.forsic-view-tabs .forsic-action-secondary{margin-left:auto}
+.forsic-shell .forsic-view-tabs a[aria-current=page]{color:var(--forsic-accent);border-color:transparent;font-weight:600}
+.forsic-directory{padding:26px;margin-bottom:0;box-shadow:0 3px 14px #51483d04}
+.forsic-directory h2{font-size:var(--forsic-font-heading, 18px);letter-spacing:-.025em;margin:0}
+.forsic-directory p{opacity:1;color:var(--forsic-muted);line-height:1.75}
+.forsic-directory-heading>a{min-height:36px;display:inline-flex;align-items:center}
+.forsic-directory-filters{padding:0 0 20px;margin:22px 0 0;align-items:center;gap:6px}
+.forsic-directory-filters button{min-height:36px;border-color:transparent!important;padding:8px 12px;font-size:var(--forsic-font-control, 14px);color:var(--forsic-muted)}
+.forsic-directory-filters button[aria-pressed=true]{background:var(--forsic-accent-soft);color:var(--forsic-accent);font-weight:600}
+.forsic-directory-filters input{margin-left:12px;min-height:40px;padding:10px 13px;font:inherit;font-size:var(--forsic-font-control, 14px)}
+.forsic-directory input::placeholder{color:var(--forsic-muted);opacity:.8}
+.forsic-investigation{padding:6px 0;gap:10px}
+.forsic-directory .forsic-investigation-link{padding:18px 14px;border-radius:12px;gap:24px}
+.forsic-investigation strong{font-size:var(--forsic-font-body, 15px);font-weight:650;letter-spacing:-.015em}
+.forsic-investigation small{opacity:1;color:var(--forsic-muted);font-size:var(--forsic-font-secondary, 13px)}
+.forsic-investigation-status span{display:inline-flex;align-items:center;gap:6px;font-size:var(--forsic-font-secondary, 13px);font-weight:500;padding:4px 9px;background:var(--forsic-inset);color:var(--forsic-muted);border-radius:6px}
+.forsic-investigation-status [data-status=investigating]{color:var(--forsic-accent);background:var(--forsic-accent-soft)}
+.forsic-investigation-status [data-status=investigating]:before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor}
+.forsic-directory-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:52px 20px 48px;border-top:1px solid var(--forsic-border)}
+.forsic-directory-empty>.forsic-nav-icon{width:30px;height:30px;flex-basis:30px;color:var(--forsic-accent);margin-bottom:8px}
+.forsic-directory-empty h3{font-size:var(--forsic-font-heading, 18px);margin:0;letter-spacing:-.025em}.forsic-directory-empty p{margin:0 0 12px;max-width:320px}
+.forsic-shell .forsic-directory-empty>.forsic-action-primary{background:var(--forsic-primary);border-color:var(--forsic-primary);color:var(--forsic-primary-text);padding:10px 16px;font-weight:600}
+.forsic-shell .forsic-directory-empty>.forsic-action-primary:hover{background:var(--forsic-primary-hover)}
+.forsic-shell .forsic-connections{color-scheme:inherit}
+.forsic-shell .forsic-connections :is(.forsic-connection-intro,.forsic-connection-hint,.forsic-connection-field span,.forsic-connection-address,section small){color:var(--forsic-muted)}
+.forsic-shell .forsic-connections input{background:var(--forsic-inset);color:var(--forsic-text)}
+.forsic-shell .forsic-connection-tabs button{color:var(--forsic-muted)!important}
+.forsic-shell .forsic-connections input:read-only{color:var(--forsic-muted)}
+.forsic-shell .forsic-connection-badge{border-radius:6px}
+@keyframes forsic-workspace-enter{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.forsic-history,.forsic-new-case{animation:forsic-workspace-enter .24s ease-out}
+@media(max-width:1023px){.forsic-sidebar{padding:20px 16px}.forsic-records{padding:28px 24px}.forsic-nav-item{min-height:44px}.forsic-section-heading .forsic-action-primary{min-height:36px}}
+@media(max-width:520px){.forsic-records{padding:26px 16px}.forsic-workspace-heading h1{font-size:25px}.forsic-workspace-heading{margin-bottom:22px}.forsic-directory{padding:18px 14px}.forsic-view-tabs a{padding:9px 10px;font-size:var(--forsic-font-control, 14px)}.forsic-view-tabs .forsic-action-secondary{margin-left:0}.forsic-directory-filters input{flex-basis:100%;margin:8px 0 0}.forsic-directory .forsic-investigation-link{padding:14px 8px;gap:12px}.forsic-investigation-status{flex-wrap:wrap;gap:8px}.forsic-directory-empty{padding:36px 10px}.forsic-directory-empty p{font-size:var(--forsic-font-control, 14px)}.forsic-directory-heading{align-items:flex-start;flex-direction:row}.forsic-directory-heading>a{white-space:nowrap}.forsic-identity-copy strong{font-size:18px}}
+@media(prefers-reduced-motion:reduce){.forsic-history,.forsic-new-case{animation:none}.forsic-shell .forsic-nav-item{transition:none}}
+/* Secondary reading surfaces follow the same theme as the workspace. */
+.forsic-shell .forsic-library{color-scheme:inherit}
+.forsic-shell .forsic-library :is(.forsic-library-heading p,small,.forsic-archive-meta){color:var(--forsic-muted)}
+.forsic-shell .forsic-library :is(input,select){background:var(--forsic-inset);color:var(--forsic-text)}
+.forsic-shell .forsic-library :is(.forsic-archive-comparison,pre){background:var(--forsic-inset);color:var(--forsic-text)}
+.forsic-shell .forsic-library .forsic-modal{background:var(--forsic-surface);color:var(--forsic-text)}
+.forsic-shell .forsic-library .forsic-archive-changed,.forsic-shell :is(.forsic-correction,.forsic-open-checks strong){color:var(--forsic-warning)}
+.forsic-shell .forsic-library [role=alert],.forsic-shell .forsic-connection-error{color:var(--forsic-error)}
+.forsic-shell .forsic-connection-error{background:var(--forsic-inset);border:1px solid var(--forsic-error)}
+.forsic-shell .forsic-connection-message{background:var(--forsic-accent-soft);color:var(--forsic-text)}
+.forsic-shell .forsic-connections :is(a,header small){color:var(--forsic-muted)}
+.forsic-library-heading p{max-width:560px;line-height:1.8}
+.forsic-library-search{gap:10px;margin:8px 0 20px}.forsic-library-search input{min-height:42px}
+.forsic-archive-card h3{font-size:var(--forsic-font-heading, 18px);line-height:1.6}.forsic-archive-card button{margin-top:12px}
+@media(max-width:520px){.forsic-library-heading{flex-direction:column;gap:0}.forsic-library{padding:18px 14px}.forsic-library-search input{flex-basis:100%;width:100%}}
+
+.forsic-context-control{margin:18px 0;padding:14px 0;border-top:1px solid var(--forsic-border)}
+.forsic-context-heading,.forsic-context-scale{display:flex;justify-content:space-between;gap:12px;align-items:center}
+.forsic-context-heading label{font-size:var(--forsic-font-body, 15px);font-weight:600}.forsic-context-heading output{font-size:var(--forsic-font-body, 15px);font-variant-numeric:tabular-nums;color:var(--forsic-text)}
+.forsic-context-control .forsic-context-default{margin:10px 0;font-size:var(--forsic-font-control, 14px)}.forsic-context-control .forsic-context-default[aria-pressed=true]{border-color:var(--forsic-primary);color:var(--forsic-accent);background:var(--forsic-accent-soft)}
+.forsic-shell .forsic-connections .forsic-context-control input[type=range]{display:block;width:100%;min-height:32px;margin:4px 0;padding:0;border:0;background:transparent;accent-color:var(--forsic-primary);cursor:pointer}
+.forsic-context-scale{font-size:var(--forsic-font-secondary, 13px);color:var(--forsic-muted);font-variant-numeric:tabular-nums}
+
+/* The shared reading scale also applies to plugin-owned pages and navigation. */
+.forsic-sidebar,.forsic-records,.forsic-connections {font-size:var(--forsic-font-body,15px);}
+.forsic-section-heading h3 {font-size:var(--forsic-font-control,14px);}
+.forsic-case-heading h2,.forsic-directory h2,.forsic-report-bundle h3,.forsic-archive-card h3 {font-size:var(--forsic-font-heading,18px);}
+.forsic-workspace-heading h1 {font-size:var(--forsic-font-title,28px);}
+.forsic-app-content [role=banner] h1 {font-size:var(--forsic-font-heading,18px);}
+.forsic-connections :is(input,textarea,select) {font-size:var(--forsic-font-body,15px);}
+.forsic-identity-copy strong {font-size:21px;}
+.forsic-identity-copy small {font-size:12px;}
+@media(max-width:520px){.forsic-workspace-heading h1{font-size:25px}.forsic-identity-copy strong{font-size:18px}}
+
+.forsic-setup-link{display:block;padding:14px 18px;margin:12px 0 18px;background:#fff5f5;border:1px solid #e9c9cd;border-radius:8px;color:#a82732;text-decoration:none;font-size:13px;font-weight:600}.forsic-setup-link:focus-visible{outline:3px solid #b6405080;outline-offset:3px}.forsic-connection-readonly{padding:12px 2px;line-height:1.8;color:#62534e}.forsic-connection-readonly h3{color:#322a28}
+
+.forsic-close-investigation{margin-top:8px}
+.forsic-close-investigation p{margin-top:8px!important;color:var(--forsic-muted);font-size:var(--forsic-font-control,14px);line-height:1.65}
+.forsic-close-investigation button:disabled{opacity:.5;cursor:wait}

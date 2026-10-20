@@ -1,0 +1,13 @@
+# Static inspection by format
+
+Limit inspection to needed files/members/rows. Check ZIP compressed/uncompressed sizes, member counts, and read-byte bounds; read only selected members. Do not use indiscriminate extractall or nested decompression. Distinguish encryption, truncation, and unsupported formats from empty results.
+
+- CSV/TSV: Specify Python csv delimiter/encoding. Distinguish headers from values and logical records from physical lines. Do not extrapolate sample duplicates, personal data, or row counts to the whole file. Read cells starting with =, +, -, @ as data, without formula execution. For repeated CSV/JSONL aggregation/cross-queries, forsic_skill(name="query-structured-logs") preserves row/byte coordinates.
+- DOCX/PPTX: List members with zipfile; read selected XML text/relationships with xml.etree.ElementTree. Record actual paragraph/table/slide/note members as sources. ZIP text does not guarantee display order, visibility, or tracked-change state. _rels TargetMode="External" declares a reference, not evidence of connection or transmission.
+- XLSX: Read selected worksheet XML, sharedStrings, relationships, and needed cells. Distinguish cell coordinates, type, formula (f), and cached value (v). Do not calculate formulas or refresh external connections. Cached values may be stale; do not claim all hidden sheets/rows/columns were automatically reviewed.
+- Legacy XLS/DOC/PPT binaries and macros: Do not interpret as OOXML. vbaProject.bin suggests macro capability, not execution or maliciousness. If the runtime lacks a supported static parser, record the gap.
+- PDF: Header/size/simple byte-string checks differ from rendering, text extraction, and OCR. Do not promise specialist extraction without checking an installed parser. If available, record pages, modes, errors, and extraction scope. Search misses do not establish absence in image text, attachments, revision history, or the whole document.
+
+Generate investigation reports through existing report.render. Dockerfile.analysis declares forsic_shell's python-docx 1.2.0, lxml 6.1.3, headless LibreOffice Writer 26.2.6.3, Noto CJK fonts, and pdftotext/pdftoppm. Deployed images may be older: check actual tool versions/returns. Do not repeatedly try pip/apt in the network-blocked shell or bypass it through host execution. Write needed derived DOCX files in /work; limit PDF conversion to derived copies. Example:
+libreoffice -env:UserInstallation=file:///tmp/forsic-writer-profile --headless --convert-to pdf --outdir /work /work/derived.docx
+Check output files/pages and Korean extraction/display. Conversion success does not mean all original content/macros/display states were reviewed. Keep original DOCX/PDF inspection within the limited static procedures above.

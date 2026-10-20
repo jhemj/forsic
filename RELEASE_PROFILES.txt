@@ -1,0 +1,100 @@
+Forsic source release profiles and cleanup decisions (2026-10-20)
+================================================================
+
+Usage and reproducibility
+-------------------------
+  python3 deploy_forsic.py export /new/absolute/directory --profile development
+  python3 deploy_forsic.py export /new/absolute/slim-directory --profile slim
+  python3 deploy_forsic.py bundle /new/absolute/forsic-slim.tar.gz --profile slim
+
+Without --profile, the existing manifest profile is preserved; an original pinned
+checkout defaults to the existing full source profile. Both profiles are SOURCE,
+not an installed runtime. Dependencies, OS provisioning and frontend builds remain
+necessary. Setup, doctor, frontend-preflight and launch use the same runtime files.
+The full development source remains the reference for regressions and reproduction.
+
+Slim removes only root test_* and HARNESS_* files, DESIGN.txt,
+docs/ARCHITECTURE.md and docs/TOOLS_AND_SKILLS.md from the export. It leaves source
+files on disk intact. The manifest retains schema forsic.source-release.v2 and adds
+profile= forsic-linux-web-source-slim and profile_omitted (path, reason, original
+SHA256 and mode). Upstream deltas, changed upstream regression tests, build inputs,
+fixtures, component notices and all runtime/plugin files stay included.
+
+An exported full manifest is validated in its entirety BEFORE slim filtering:
+editing even a test that would be excluded still fails. No directory rescan becomes
+an implicit baseline. A slim export reproduces itself without upstream Git and
+cannot reconstruct a development source. Use the full source to return to that
+profile. Approved clean-export edits still require a reviewed explicit allowlist,
+verified pre-edit baseline and manifest refresh; profile selection grants no waiver.
+Neither export nor bundle starts a service or modifies state. Runtime rollback uses
+the prior source/runtime and preserves state, sensitive artifacts and case records.
+
+Measured candidate accounting
+-----------------------------
+Before A-D manifest regeneration, the existing manifest listed 4,125 source files.
+The explicit new slim filter selects 137 of those paths: 127 root regression files
+(1,669,908 bytes), seven HARNESS files (77,838 bytes), three design references
+(24,823 bytes), totaling 1,772,569 uncompressed bytes. Measurements use those actual
+paths, not excluded upstream inventories. Existing upstream_omitted has 13,275
+entries; none counts as a new saving. New A-D files and their test sizes must be
+included in the final export measurements after manifest refresh. Compressed archive
+size, install/build/startup time and LLM speed are not inferred from byte counts.
+
+Candidate decisions and evidence
+--------------------------------
+C01 generic skills/optional-skills: existing distribution exclusion; no new deletion.
+  upstream_omission preserves notices and changed inputs; launcher uses the empty
+  bundled-skills seed and registers the curated plugin skills. Deployment tests
+  exercise both the seed and registration; 24 canonical skills remain verified.
+C02 website assets: existing exclusion; website/static/api/model-catalog.json and
+  notices remain. No additional measured saving.
+C03 standalone apps: existing exclusion; apps/shared and all app package.json files
+  remain. web/package.json references file:../apps/shared. No additional removal.
+C04 root tests/HARNESS/design documents: new slim export exclusion only. initialize
+  required inputs are run.py, plugin.yaml, pm/lock.json, config files and three
+  cases/smoke/evidence files; those all remain. Runtime/PM scripts do not consume the
+  excluded root tests/HARNESS/design documents. Development profile preserves them.
+C05 JEV UI: remove the legacy plugin connection tab and URL field, plus success text
+  claiming a JEV setting was saved. Whole Forsic/native UI search found no executing
+  JEV client: connections.public returns enabled=False, save validates/stores only
+  jev_base_url. Keep that key's read/save parsing and settingsBody roundtrip so existing
+  saved values survive unrelated connection changes. GTI/Telegram settings retained.
+C06 legacy executive/practitioner writer: retain pending further isolation. The
+  integrated compiler still calls _appendix_views and consumes its executive and
+  practitioner pages as appendices. Names alone do not identify dead code. Old HTML,
+  Word and selected-evidence ZIP downloads/readers remain accepted by artifact().
+C07 un-routed native admin pages: additional investigation, no deletion. App.tsx uses
+  lazy ChatPage/ForsicEntry and PluginPage/PluginSlot; auth and dynamic plugin paths
+  require component-by-component reachability evidence before removal.
+C08 plugin dashboard/dist/index.js: retain active plugin SDK registration and screens.
+  Hand-maintained plugin source; not disposable compiled output. No separate skill
+  catalogue rendering exists here; the native workbench consumes the common locale.
+C09 agent/hermes_cli/pm: retain; run.py starts the native dashboard through PM.
+  Do not replace loop, goal, cancellation, auth or native session implementations.
+C10 ui-tui/apps/shared: retain; frontend_preflight checks both native TUI and web
+  products. Shared RPC/npm sources and workspace manifests are build dependencies.
+C11 licenses/notices/upstream attribution: retain; no blanket document exclusion.
+C12 smoke evidence fixtures: retain; initialize explicitly requires all three files.
+C13 source manifest: preserve strict baseline validation; add profile filtering only
+  after verification, deterministic reproduction tests and explicit profile metadata.
+C14 state/.sensitive-artifacts/old reports/ZIP: never delete; excluded from source by
+  existing checked_source boundary. No live cleanup or operation was performed.
+C15 telegram/GTI: retain all optional integration code. Disabled configuration is not
+  proof that supported functionality is unused.
+
+Verification evidence and limits
+-------------------------------
+  Python: test_connections + test_release_profiles + test_dashboard_skill_locale +
+  test_deployment: 54 tests passed (offline synthetic, 2026-10-20).
+  Node: test_dashboard.cjs passed, including preserved JEV values/GTI opt-in and
+  plugin view checks. English catalogue + every SKILL.md + locale hashes remain
+  byte-identical after verifier --write. Invalid coverage, duplicate JSON keys,
+  stale English-description SHA256, non-Korean copy and bad search terms fail.
+  Profiles: synthetic pinned-checkout inventory exercises the original source path;
+  full export, slim export, slim init, strict tamper rejection and deterministic
+  bundle re-export run in temporary directories without a service/model call.
+
+A real fresh dependency install, frontend build/start, real pinned upstream checkout
+export and final integrated clean-export measurements require separate execution;
+these synthetic tests are not claimed as that evidence. No real model/E2E, external
+transmission, active service restart, state cleanup or source deletion was performed.

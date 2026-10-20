@@ -1,0 +1,11 @@
+# CPython 3.12 Linux wheels; installed only while building the analysis image.
+duckdb==1.5.6 \
+    --hash=sha256:bc9619ed7d4ffa117b5155d84b44794366bb6635178d78ed5e13a6024845c757 \
+    --hash=sha256:ce89a1025a5317ebe9c520876c48032b5247ac574865486648b1a004f6009875
+python-docx==1.2.0 \
+    --hash=sha256:3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7
+lxml==6.1.3 \
+    --hash=sha256:379f8a75cf6eb7eef0af074b55f49ab73b868388a98de14646abcdfa4564bb11 \
+    --hash=sha256:909f4e927bb051f7740d6367285fc60cdcfdaf0258c2dba4ff5ba7eadadc250c
+typing-extensions==4.15.0 \
+    --hash=sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548

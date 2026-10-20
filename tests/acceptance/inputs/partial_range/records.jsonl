@@ -1,0 +1,3 @@
+{"time":"2026-03-10T09:00:00Z","kind":"request","run":"P-9","job":"archive"}
+CORRUPTED {"kind":"process_exit",
+{"time":"2026-03-10T09:00:07Z","kind":"process_exit","run":"P-9","exit_code":0}

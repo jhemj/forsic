@@ -1,0 +1,49 @@
+.fc-tool-call {border: 1px solid var(--forsic-border); border-radius: 12px; background: var(--forsic-surface); overflow: hidden; font-size: var(--forsic-font-control, 14px); color: var(--forsic-text);}
+.fc-tool-call > summary {display: flex; align-items: flex-start; gap: 10px; padding: 14px; cursor: pointer; list-style: none; transition: background-color .15s;}
+.fc-tool-call > summary:hover {background: var(--forsic-hover);}
+.fc-tool-call summary::-webkit-details-marker {display: none;}
+.fc-tool-symbol {display: flex; align-items: center; justify-content: center; width: 25px; height: 25px; flex: none; border-radius: 8px; background: var(--forsic-inset); color: var(--forsic-muted);}
+.fc-tool-heading {display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 5px; line-height: 1.6;}
+.fc-tool-heading strong {font-size: var(--forsic-font-control, 14px); font-weight: 650;}
+.fc-tool-purpose {display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; color: var(--forsic-text);}
+.fc-tool-kind {font-size: var(--forsic-font-secondary, 13px); color: var(--forsic-muted);}
+.fc-tool-target {font: var(--forsic-font-secondary, 13px)/1.65 ui-monospace,monospace; overflow-wrap: anywhere; color: var(--forsic-text);}
+.fc-tool-target[data-command=true] {white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--forsic-muted);}
+.fc-tool-summary {font-size: var(--forsic-font-secondary, 13px); color: var(--forsic-muted); overflow-wrap: anywhere;}
+.fc-tool-meta {display: flex; flex: none; flex-direction: column; align-items: flex-end; gap: 6px; font-size: var(--forsic-font-meta, 12px); white-space: nowrap; padding-top: 2px;}
+.fc-tool-meta small {font-variant-numeric: tabular-nums; color: var(--forsic-muted);}
+.fc-tool-badge {border-radius: 5px; padding: 2px 7px; background: var(--forsic-inset); color: var(--forsic-muted); font-weight: 600;}
+.fc-tool-call[data-status=completed] .fc-tool-badge, .fc-tool-call[data-status=completed] .fc-tool-symbol {background: #16825d12; color: #277657;}
+.fc-tool-call[data-status=error] {border-color: color-mix(in srgb, var(--forsic-error) 30%, var(--forsic-border));}
+.fc-tool-call[data-status=error] :is(.fc-tool-badge,.fc-tool-symbol) {background: var(--forsic-accent-soft); color: var(--forsic-error);}
+.fc-tool-call[data-status=error] .fc-tool-summary {color: var(--forsic-error);}
+.fc-tool-call[data-command-outcome] {border-color: var(--forsic-border);}
+.fc-tool-call[data-command-outcome] :is(.fc-tool-badge,.fc-tool-symbol) {background: var(--forsic-inset); color: var(--forsic-muted);}
+.fc-tool-call[data-command-outcome] .fc-tool-summary {color: var(--forsic-muted);}
+.fc-tool-call[data-outcome-tone=warning] :is(.fc-tool-badge,.fc-tool-symbol) {background: var(--forsic-inset); color: var(--forsic-warning);}
+.fc-tool-call[data-outcome-tone=error] {border-color: color-mix(in srgb, var(--forsic-error) 30%, var(--forsic-border));}
+.fc-tool-call[data-outcome-tone=error] :is(.fc-tool-badge,.fc-tool-symbol) {background: var(--forsic-accent-soft); color: var(--forsic-error);}
+.fc-tool-call[data-outcome-tone=error] .fc-tool-summary {color: var(--forsic-error);}
+.fc-tool-call[data-pending=true] .fc-tool-symbol {color: var(--forsic-accent); background: var(--forsic-accent-soft);}
+.fc-tool-call[data-pending=true] .fc-tool-symbol svg {animation: fc-tool-spin 1.6s linear infinite;}
+.fc-tool-chevron {margin-top: 6px; flex: none; color: var(--forsic-muted); transition: transform .15s;}
+.fc-tool-call[open] > summary .fc-tool-chevron {transform: rotate(180deg);}
+.fc-tool-body {padding: 0 14px 14px; border-top: 1px solid var(--forsic-border);}
+.fc-tool-body p {font-size: var(--forsic-font-secondary, 13px); line-height: 1.8; color: var(--forsic-muted); margin: 12px 0;}
+.fc-tool-body dl {margin: 14px 0; display: grid; gap: 9px;}
+.fc-tool-body dl > div {display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 10px; font-size: var(--forsic-font-secondary, 13px); line-height: 1.7;}
+.fc-tool-body dt {color: var(--forsic-muted);}
+.fc-tool-body dd {margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;}
+.fc-tool-raw > summary {cursor: pointer; display: list-item; list-style: disclosure-closed inside; padding: 9px 0; color: var(--forsic-muted); font-size: var(--forsic-font-secondary, 13px);}
+.fc-tool-raw[open] > summary {list-style-type: disclosure-open;}
+.fc-tool-body h4 {margin: 14px 0 6px; font-size: var(--forsic-font-secondary, 13px); font-weight: 600;}
+.fc-tool-body pre {background: var(--forsic-inset); border: 1px solid var(--forsic-border); border-radius: 7px; padding: 12px; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--forsic-font-secondary, 13px)/1.75 ui-monospace,monospace; color: var(--forsic-text);}
+.fc-tool-call summary:focus-visible {outline: 2px solid var(--forsic-focus); outline-offset: -3px;}
+@keyframes fc-tool-spin {to {transform: rotate(360deg);}}
+@media (max-width: 520px) {.fc-tool-call > summary {padding: 12px 10px; gap: 8px;}.fc-tool-body dl > div {grid-template-columns: 70px minmax(0,1fr);}}
+@media (prefers-reduced-motion: reduce) {.fc-tool-call[data-pending=true] .fc-tool-symbol svg {animation: none;}.fc-tool-call * {transition: none!important;}}
+
+.fc-tool-heading strong {font-size:var(--forsic-font-body,15px);}
+.fc-tool-meta small {font-size:inherit;}
+.fc-tool-call > summary {flex-wrap:wrap;}
+.fc-tool-heading {flex-basis:160px;}

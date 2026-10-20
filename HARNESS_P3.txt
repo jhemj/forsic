@@ -1,0 +1,51 @@
+Forsic P3: retained scope, exact recovery and web chat readiness
+============================================================
+
+Context reduction must keep enough information to recover a result without
+turning an uncertain execution into a success. Bounded tool summaries retain
+completion/commit/delivery uncertainty, termination confirmation, and the exact
+existing execution lookup. Source summaries and compaction use the same observed
+scope projection, including byte-preview versus decoded-record status. Compacted
+session scope follows only the verified native compression lineage.
+
+Current question navigation retains counterevidence references/counts and a stable
+question-ID lookup. Report context exposes how much current question scope its
+selected report covers; it does not declare the whole investigation complete.
+The existing event ledger, current-judgment projection, correction/withdrawal
+semantics and native completion judge remain authoritative. No cache, secondary
+ledger, compressor or agent loop is introduced.
+
+An explicit source lookup now reads only that retained source event, checks the
+same eligible tool and exact version, and uses the existing paging/span contract.
+It does not replay unrelated case events. Execution lookup likewise precedes a
+full case projection. Full projections still replay the existing ledger. Synthetic
+lookup measurements are local CPU observations, not proof of model speed/token
+improvement or of successful forensic investigation.
+
+Web chat startup previously let frontend-build subprocess failures escape after
+accepting the WebSocket, yielding an abnormal 1006 close. The existing failure
+path now reports a bounded startup error and closes with 1011; cancellation is
+still propagated. Retry counters survive short accepted-but-failed sockets and
+reset only after a connection held for ten seconds or an explicit manual retry.
+The automatic ladder remains limited to five attempts.
+
+Deployment must verify native TUI and web compiler receipts against the source
+and built outputs. File existence alone is not readiness. Dashboard startup
+fails early with an actionable build requirement when either product is stale;
+it neither installs packages nor builds from a browser request. Build with the
+existing native tooling before restarting. See DEPLOYMENT.txt. A real browser
+check remains necessary after deployment; offline tests do not prove availability.
+
+Regression scope: exact lookup/version equivalence; unrelated-event rejection;
+uncertain execution summaries; verified-lineage scope; current counterevidence;
+existing correction/withdrawal/report projection; startup exception/cancellation;
+accepted-then-failed reconnect exhaustion, manual retry and stable-connection
+recovery. Preserve native ownership, evidence integrity, authorization and source
+versions. This phase does not certify semantic model quality or all Pro scenarios.
+
+Local endpoint discovery revalidates the last successful server dialect before
+trying others after cache expiry. A stale cache entry only changes probe order;
+the existing HTTP status/body checks still decide the result. A changed server
+falls back to normal discovery. No generation request or new context-limit cache
+is added. This reduces unnecessary LM Studio catalog 404s on known Ollama servers;
+it does not establish the cause of separately reported chat HTTP 500 responses.

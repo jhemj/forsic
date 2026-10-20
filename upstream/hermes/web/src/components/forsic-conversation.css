@@ -1,0 +1,148 @@
+.forsic-conversation {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--forsic-canvas, #faf9f7);
+  color: var(--forsic-text, #2e2b2b);
+  font-family: inherit;
+}
+.fc-viewport {flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--forsic-border) transparent;}
+.fc-thread {width: 100%; max-width: 840px; box-sizing: border-box; margin: auto; padding: 38px 32px 36px; display: flex; flex-direction: column; gap: 30px;}
+.fc-message {display: flex; flex-direction: column; align-items: flex-start; min-width: 0; gap: 10px;}
+.fc-author {display: flex; align-items: center; gap: 9px; font-size: var(--forsic-font-control, 14px); font-weight: 650; color: var(--forsic-text); margin-left: 2px;}
+.fc-assistant .fc-author::before {content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--forsic-accent);}
+.fc-message-kind {font-size: var(--forsic-font-meta, 12px); font-weight: 500; color: var(--forsic-muted);}
+.fc-user {align-items: flex-end; padding-left: 14%;}
+.fc-user .fc-author {color: var(--forsic-muted); margin-right: 4px;}
+.fc-bubble {max-width: 100%; min-width: 0; line-height: 1.85; font-size: var(--forsic-font-body, 15px); overflow-wrap: anywhere;}
+.fc-assistant .fc-bubble {width: 100%; padding: 0 2px;}
+/* Markdown's generic dashboard foreground must inherit the Forsic palette. */
+.fc-bubble > div {color: inherit; font-size: inherit; line-height: inherit;}
+.fc-user .fc-bubble {background: var(--forsic-accent-soft); border: 1px solid var(--forsic-border); color: var(--forsic-text); border-radius: 18px 5px 18px 18px; padding: 13px 18px; box-shadow: 0 3px 8px #39242010;}
+.fc-user-text {white-space: pre-wrap; margin: 0;}
+.fc-bubble p {line-height: 1.85;}
+.fc-bubble p:first-child {margin-top: 0;}
+.fc-bubble p:last-child {margin-bottom: 0;}
+.fc-bubble pre {max-width: 100%; border: 1px solid var(--forsic-border); border-radius: 10px; background: var(--forsic-inset); color: var(--forsic-text); white-space: pre; overflow-x: auto;}
+.fc-bubble :not(pre) > code {background: var(--forsic-accent-soft); color: var(--forsic-text); border-radius: 4px;}
+.fc-bubble h1, .fc-bubble h2, .fc-bubble h3, .fc-bubble h4 {margin: 24px 0 10px; letter-spacing: -.025em; line-height: 1.5;}
+.fc-bubble a {color: var(--forsic-accent); text-underline-offset: 3px;}
+.fc-bubble hr {border-color: var(--forsic-border); margin: 22px 0;}
+.fc-notice .fc-bubble {color: var(--forsic-muted); font-size: var(--forsic-font-body, 15px);}
+.fc-progress {display: flex; align-items: center; gap: 9px; min-height: 32px; color: var(--forsic-muted); font-size: var(--forsic-font-control, 14px); margin-top: 8px;}
+.fc-reply-activity {width: 24px; height: 24px; flex: none; color: var(--forsic-accent);}
+.fc-reply-activity circle {fill: currentColor; animation: fc-dot 1.5s ease-in-out infinite;}
+@keyframes fc-dot {0%,70%,100% {opacity: .3; transform: translateY(0);} 35% {opacity: 1; transform: translateY(-2px);}}
+.fc-tools {min-width: 0; margin-right: 5%;}
+.fc-tool-group-heading {display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 2px 9px; color: var(--forsic-muted); font-size: var(--forsic-font-meta, 12px); font-variant-numeric: tabular-nums;}
+.fc-tool-group-failures {color: var(--forsic-error);}
+.fc-tool-list {display: grid; gap: 8px;}
+.fc-compose-wrap {position: relative; width: 100%; max-width: 840px; box-sizing: border-box; align-self: center; padding: 12px 28px 20px;}
+.fc-composer {background: var(--forsic-surface); border: 1px solid var(--forsic-border); border-radius: 16px; box-shadow: 0 4px 18px #39242009; overflow: hidden; transition: border-color .15s, box-shadow .15s;}
+.fc-composer:focus-within {border-color: var(--forsic-focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--forsic-focus) 12%, transparent), 0 4px 18px #39242009;}
+.fc-composer textarea {display: block; resize: vertical; width: 100%; min-height: 76px; max-height: 230px; background: transparent; color: var(--forsic-text); border: 0; padding: 16px 18px 6px; font: inherit; font-size: var(--forsic-font-body, 15px); line-height: 1.7; outline: none; box-sizing: border-box;}
+.fc-composer textarea::placeholder {color: var(--forsic-muted); opacity: .85;}
+.fc-composer textarea:disabled {opacity: .65;}
+.fc-compose-actions {display: flex; align-items: center; justify-content: space-between; padding: 6px 11px 10px; gap: 8px;}
+.fc-compose-actions > div {display: flex; align-items: center; gap: 7px;}
+.fc-connection {font-size: var(--forsic-font-meta, 12px); line-height: 1.65; color: var(--forsic-muted); padding-left: 6px;}
+.fc-compose-actions button {cursor: pointer; border: 1px solid transparent; display: inline-flex; align-items: center; justify-content: center; gap: 5px; font: inherit; transition: background-color .15s, color .15s, transform .15s;}
+.fc-compose-actions button:disabled, .fc-starters button:disabled {opacity: .4; cursor: default;}
+.fc-send {width: 36px; height: 36px; border-radius: 11px; background: var(--forsic-primary); color: var(--forsic-primary-text);}
+.fc-send:not(:disabled):hover {background: var(--forsic-primary-hover); transform: translateY(-1px);}
+.fc-send svg {height: 20px; width: 20px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round;}
+.fc-control {font-size: var(--forsic-font-secondary, 13px)!important; background: var(--forsic-inset); color: var(--forsic-text); border-radius: 8px; min-height: 32px; padding: 7px 9px; white-space: nowrap;}
+.fc-control:not(:disabled):hover {background: var(--forsic-hover);}
+.fc-control svg {width: 12px; height: 12px; fill: currentColor;}
+.fc-earlier, .fc-latest {align-self: center; background: var(--forsic-surface); color: var(--forsic-muted); border: 1px solid var(--forsic-border); border-radius: 20px; padding: 9px 15px; font: inherit; font-size: var(--forsic-font-secondary, 13px); cursor: pointer;}
+.fc-earlier:hover, .fc-latest:hover {color: var(--forsic-text); background: var(--forsic-hover);}
+.fc-latest {position: absolute; top: -36px; left: 50%; transform: translateX(-50%); box-shadow: 0 3px 12px #39242010; display: flex; align-items: center; gap: 8px; white-space: nowrap;}
+.fc-empty, .fc-error {font-size: var(--forsic-font-control, 14px); line-height: 1.7; color: var(--forsic-muted);}
+.fc-error {color: var(--forsic-error); padding: 10px 12px; border-left: 2px solid var(--forsic-error);}
+.fc-welcome {padding: clamp(24px,7vh,84px) 0 32px; max-width: 520px;}
+.fc-welcome h2 {font-size: 24px; line-height: 1.5; font-weight: 600; letter-spacing: -.03em; margin: 0 0 14px; color: var(--forsic-text);}
+.fc-starters {display: flex; flex-direction: column; align-items: flex-start; gap: 9px; margin-top: 28px;}
+.fc-starters button {display: flex; align-items: center; gap: 20px; padding: 11px 13px; background: var(--forsic-surface); border: 1px solid var(--forsic-border); border-radius: 9px; color: var(--forsic-muted); font: inherit; font-size: var(--forsic-font-control, 14px); line-height: 1.6; text-align: left; cursor: pointer; transition: background-color .15s, border-color .15s;}
+.fc-starters button > span {color: var(--forsic-accent); margin-left: auto;}
+.fc-starters button:not(:disabled):hover {background: var(--forsic-hover); color: var(--forsic-text); border-color: var(--forsic-focus);}
+.forsic-conversation :is(button, summary):focus-visible {outline: 2px solid var(--forsic-focus); outline-offset: 3px;}
+.fc-sr-only {position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;}
+@media (max-width: 600px) {
+  .fc-thread {padding: 24px 18px 28px; gap: 25px;}
+  .fc-compose-wrap {padding: 9px 12px max(12px, env(safe-area-inset-bottom));}
+  .fc-connection {display: none;}
+  .fc-compose-actions {justify-content: flex-end;}
+  .fc-compose-actions button {min-height: 40px;}
+  .fc-send {width: 40px;}
+  .fc-user {padding-left: 8%;}
+  .fc-user .fc-bubble {padding: 11px 14px;}
+  .fc-tools {margin-right: 0;}
+  .fc-bubble {font-size: var(--forsic-font-body, 15px);}
+  .fc-welcome {padding-top: 30px;}
+  .fc-starters {align-items: stretch;}
+}
+@media (prefers-reduced-motion: reduce) {
+  .fc-reply-activity circle {animation: none; opacity: .7;}
+  .forsic-conversation * {transition: none!important;}
+}
+
+.fc-compose-actions > .fc-compose-meta {align-items: flex-start; flex-direction: column; gap: 2px; min-width: 0;}
+.fc-context {display: flex; align-items: center; gap: 6px; color: var(--forsic-muted); font-size: var(--forsic-font-meta, 12px); font-variant-numeric: tabular-nums; padding-left: 5px;}
+.fc-context svg {width: 20px; height: 20px; flex: none; fill: none; stroke-width: 2; transform: rotate(-90deg);}
+.fc-context circle:first-child {stroke: var(--forsic-border);}
+.fc-context circle:last-child {stroke: var(--forsic-accent); stroke-linecap: round; transition: stroke-dasharray .3s ease;}
+.fc-context[data-stale=true] circle:last-child {stroke: var(--forsic-muted);}
+.fc-context small {font-size: inherit;}
+@media (max-width: 600px) {.fc-compose-actions {justify-content: space-between;}}
+
+/* Conversation prose and input share the primary reading size. */
+.fc-bubble,.fc-composer textarea {font-size:var(--forsic-font-chat,16px);}
+.fc-bubble :is(h1,h2) {font-size:24px;}
+.fc-bubble h3 {font-size:20px;}
+.fc-bubble h4 {font-size:var(--forsic-font-heading,18px);}
+.fc-bubble pre,.fc-bubble code {font-size:var(--forsic-font-secondary,13px);}
+.fc-author {font-size:var(--forsic-font-control,14px);}
+.fc-compose-actions {flex-wrap:wrap;}
+
+.forsic-connection-state {display:inline-flex; align-items:center; gap:6px; color:var(--forsic-muted); font-size:var(--forsic-font-meta,12px);}
+.forsic-connection-state i {width:6px; height:6px; border-radius:50%; background:#ad9062;}
+.forsic-connection-state[data-connected="true"] i {background:#759482;}
+
+.fc-tool-group-heading time {font-size: var(--forsic-font-meta, 12px); font-weight: 400; color: var(--forsic-muted);}
+
+.fc-lookup-history {min-width: 0; border: 1px solid var(--forsic-border); border-radius: 10px; background: var(--forsic-inset);}
+.fc-lookup-history > summary {display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; cursor: pointer; padding: 10px 12px; color: var(--forsic-muted); font-size: var(--forsic-font-meta, 12px);}
+.fc-lookup-hint {margin-left: auto;}
+.fc-lookup-history > .fc-tool-list {padding: 0 10px 10px;}
+
+/* Receipt cards use text labels and borders as well as color. */
+.fc-review { border-inline-start: 2px solid var(--forsic-border); padding-inline-start: 12px; }
+.fc-review .fc-bubble { max-width: 100%; }
+.fc-review-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.fc-review-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: .75rem; opacity: .75; margin-block: 8px; }
+.fc-review details { font-size: .85rem; }
+.fc-review summary { cursor: pointer; }
+.fc-review-exchange {display: flex; flex-direction: column; gap: 18px; min-width: 0;}
+.fc-review .fc-bubble {background: var(--forsic-inset); border: 1px solid var(--forsic-border); border-radius: 5px 16px 16px; padding: 14px 17px;}
+.fc-review-answer {margin-inline-start: 24px;}
+.fc-review-answer .fc-bubble {box-sizing: border-box; border: 1px solid var(--forsic-border); border-radius: 5px 16px 16px; background: var(--forsic-surface); padding: 14px 17px;}
+.fc-review-answer details {font-size: var(--forsic-font-secondary, 13px); color: var(--forsic-muted);}
+.fc-review-answer summary {cursor: pointer;}
+.fc-review-exchange[data-historical=true] .fc-message-kind {font-style: italic;}
+.fc-review-waiting {font-size: var(--forsic-font-secondary, 13px); color: var(--forsic-muted); border-top: 1px solid var(--forsic-border); padding-top: 10px;}
+.fc-reply-quote {display: block; width: 100%; min-width: 0; box-sizing: border-box; margin: 0 0 14px; padding: 9px 12px; text-align: left; font: inherit; color: var(--forsic-text); background: var(--forsic-inset); border: 0; border-inline-start: 3px solid var(--forsic-border); border-radius: 4px 8px 8px 4px;}
+button.fc-reply-quote {cursor: pointer;}
+button.fc-reply-quote:hover {background: var(--forsic-hover);}
+.fc-reply-quote > span {display: block; font-size: var(--forsic-font-meta, 12px); color: var(--forsic-muted); margin-bottom: 3px;}
+.fc-reply-quote > p {margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--forsic-font-secondary, 13px); max-height: 7em; overflow-y: auto;}
+.fc-question-highlight .fc-bubble {outline: 2px solid var(--forsic-focus); outline-offset: 4px;}
+@media (max-width: 600px) {.fc-review-answer {margin-inline-start: 12px;}}
+
+.fc-ren-avatar {width: 24px; height: 24px; flex: none; object-fit: contain;}
+.fc-pending-identity {animation: fc-identity-enter .22s ease-out;}
+.fc-pending .fc-ren-avatar {width: 28px; height: 28px;}
+.fc-review-elapsed {font: inherit; color: var(--forsic-muted);}
+@keyframes fc-identity-enter {from {opacity: 0; transform: translateY(4px);} to {opacity: 1; transform: translateY(0);}}
+@media (prefers-reduced-motion: reduce) {.fc-pending-identity {animation: none;}}

@@ -1,0 +1,244 @@
+Forsic upstream attribution and maintained changes
+=================================================
+
+Hermes Agent
+------------
+Project: Nous Research / Hermes Agent
+Source: https://github.com/NousResearch/hermes-agent
+Pinned commit: bafb42b431fca313471958fdf77f9c30e455f86b
+Location: upstream/hermes
+License: MIT; copyright (c) 2025 Nous Research
+Authoritative license text: upstream/hermes/LICENSE
+
+Forsic reuses the Hermes runtime rather than implementing a second agent loop.
+This is a maintained, locally adapted source distribution, not an unmodified
+upstream release and not an independently authored agent engine. Preserve original
+copyright/license notices when redistributing source or substantial portions.
+Product branding does not change attribution or internal technical provenance.
+Forsic-specific additions are MIT-licensed in the root LICENSE. Third-party
+copyrights and license terms remain applicable; see THIRD_PARTY_NOTICES.txt.
+
+Maintained integration areas
+----------------------------
+- Web PTY startup reports build/subprocess failures through its existing 1011
+  failure path without leaking subprocess arguments. Native cancellation remains
+  distinct. Web reconnect limits survive short successful handshakes followed by
+  startup failure; only a stable connection or manual retry resets the counter.
+  Deployment uses native source-product receipts for TUI/web readiness.
+- An active goal's iteration limit hands a deterministic runtime checkpoint to
+  the existing controller instead of an additional tool-less model synthesis.
+  The agent's own session DB supplies goal identity; recorded history, pending
+  verification answers, interruption/failure handling and non-goal summaries
+  remain intact. This removes one unsupported synthesis boundary, not model
+  reasoning errors; the existing judge still owns continuation and completion.
+  Checkpoint and summary notices use the profile's display language and name
+  the model-request budget, without changing the limit or continuation decision.
+  The public repeated-tool halt reply is localized too; machine-readable guard
+  decisions and the pause/stop policy are unchanged.
+  Lifecycle and automatic goal-pause notices use the same display catalog.
+  Halt explanations distinguish accumulated tool failures from repeated inputs
+  or unchanged results; a failure count does not certify absence of all progress.
+- Native goals persist one runtime allowance across turns and restarts. Explicit
+  pause freezes active time; existing lease timers and hard interruption enforce
+  the deadline during main and auxiliary work. Controls use exact-value CAS and
+  expiry callbacks revalidate owning goals so stale writes do not undo a pause.
+  Budget exhaustion preserves partial work and never certifies completion.
+- Native goal evaluation receives the typed per-turn iteration-limit outcome
+  across CLI, messaging and TUI delivery. It still uses the existing judge,
+  completion checks, turn budget and pause/CAS fences; no verdict is overridden.
+- Tool registration optionally supplies a pure bounded result_summary(args,
+  content) for native pruning. The profile-scoped registry owns its lifetime.
+  Invalid/oversized summaries fall back to native behavior; valid projections
+  that would grow a short result preserve the original and do not count as a
+  prune. Read and mutation errors retain their actual outcome and bounded error
+  text, including failures without an evidence source. Mutation acknowledgements
+  use returned records, not requested outcomes, and their execution record IDs
+  are not offered as body-source lookups. No ledger mutation,
+  tool execution or extra model call is performed. Forsic retains lookup IDs
+  and observed scope, not a fabricated conclusion or complete-file claim.
+- Plugin tools can opt into configuration-sensitive pins: restored sessions use
+  their current allowed schema instead of resurrecting a disabled menu entry.
+  Unchanged schemas retain their order and bytes; other tools keep native pin
+  behavior. Dynamic schema callbacks and skill availability checks use the
+  existing profile-scoped registry and reader. An explicit plugin-setting
+  replacement option clears removed overrides through the native atomic writer;
+  existing callers keep merge semantics. User capability updates reserve the
+  native idle admission boundary and verify live schemas and persisted pins.
+  These controls neither start a model nor add an executor.
+- The Forsic-skinned TUI uses a compact analysis status, a lens emoji, context
+  usage and runtime-reported token speed. Secondary voice/cache/session chrome
+  is hidden; other skins and native execution are unchanged.
+- The native plugin supplies read-only evidence tools, case intake, notes,
+  report-driven investigation skills, reader-specific reports and case-library UI.
+- Existing TUI message/session components support distinct user/assistant
+  alignment and an optional generated greeting only for a fresh conversation.
+- Existing skin, theme, locale and plugin slots provide Forsic presentation in
+  browser and CLI. Authentication and diagnostic engine identity are retained.
+- Transcript projection hides native automatic goal scaffolding without deleting
+  model context, changing goal execution, or deduplicating ordinary user messages.
+- Live transcript restoration binds an accepted in-flight prompt to its durable
+  user row. Resume and activation append it only when that row is absent from the
+  returned history. Identical human messages with different row identities remain
+  distinct; older/unstored turns retain the existing display fallback. This changes
+  display replay only, not submission, model history, or native turn execution.
+- Web chat reuses the launch profile's in-process gateway for its explicit
+  aliases; other profiles remain isolated. Existing streaming/session behavior
+  supplies live updates rather than a second polling conversation store.
+- The web shell groups evidence path, current case and its conversations in one
+  left navigation, uses stable ordinal analysis titles, and removes the extra
+  right session rail. User text is blue; tool/compaction/goal progress is subdued.
+- The existing context compressor has an evidence-provenance instruction patch:
+  retain observation/interpretation distinctions, source references, uncertainty
+  and superseding corrections. This does not introduce a separate compressor,
+  and its forensic semantic accuracy is not established by packaging tests.
+- Two bounded, optional plugin hooks project current case workflow state into
+  native goal evaluation and the existing compaction boundary. They receive
+  explicit owning-session identity; they do not rerun turn hooks, start models,
+  execute missions, or introduce another scheduler. Unavailable/stale state is
+  not an empty or completed workload. Sessions without a provider keep native behavior.
+- Compaction replaces one derived-state block inside native summary framing,
+  including merged carriers, while preserving live content, message identity,
+  ordering, token growth checks and native cancellation/transaction rollback.
+  Goal evaluation keeps its native candidate decision and revision checks.
+- Forsic question mutations and mission plans bind actual native tool receipts
+  to explicit question, mission and source versions. Source-span checks enforce
+  provenance, not semantic approval; scope closure and reopening remain explicit
+  analytical decisions in the case-local record.
+- The native owner-pinned mailbox accepts approved same-case Telegram input at
+  idle turn boundaries. Lazy owner wakeup is demand-driven; queued delivery may
+  follow a verified replacement owner in the same conversation lineage. Claimed
+  or uncertain deliveries are not blindly replayed. No extra agent loop is added.
+
+Use the supplied pinned source and product tests together. An upstream update
+requires reviewing these integration points and rebuilding the native frontends;
+an arbitrary upstream self-update is not a validated Forsic release. Public source
+manifests describe the files actually packaged, not runtime dependencies or an
+assertion that every upstream feature is enabled. Operator state and development
+investigation history are intentionally outside the source release.
+
+Other components
+----------------
+Dissect Target: https://github.com/fox-it/dissect.target
+The parser container pins dissect.target 3.25.1 and dissect.xfs 3.13 on Python 3.12.
+The project uses python-docx, lxml and python-telegram-bot through Hermes PM plugin
+dependencies; exact versions are in forsic_plugin/plugin.yaml and
+requirements-forsic.txt. Other transitive components retain their own notices.
+
+This attribution document does not replace any component's license or grant a
+license to model weights, external APIs, evidence, or third-party case material.
+
+Maintained goal-judge prompt clarification: distinguish partial external dependencies
+from global blockage when useful authorized work remains. Forsic supplies bounded
+agent-declared work-state counts before projection clipping, not a new gate or executor.
+
+Maintained explicit tool-reload correction: the existing native reload RPC refreshes
+same-name schema changes as well as added/removed tools and re-pins the resulting
+tool array. A process restart alone retains a same-code session pin. No separate
+refresh loop or model request is added; reload keeps the native cache consent path.
+
+Maintained native compaction correction: a text-only active request that fits the
+protected-tail token budget may use the existing split-turn and verbatim replay
+path even when it exceeds the historical-task preview character cap. Atomic tool
+groups, indivisible/media requests, and explicit multi-user anchors remain protected.
+
+Maintained native summary prompt refinement: one existing checkpoint budget covers
+the structured sections and retrieval log. Repeated attempts are grouped while
+current judgments, corrections, counterevidence and unfinished checks remain explicit.
+No output hard cap, separate model, compression engine or persistence change is added.
+
+Maintained native request/response diagnostics: existing lifecycle hooks retain
+value-free field shapes before/after stream argument repair and the ordered tool
+schema fingerprint after extra_body merge. These are SDK-boundary observations,
+not raw provider or HTTP captures. No argument is inferred or modified.
+Response normalization preserves the stream's value-free pre-repair field shape
+so the existing post-response hook can compare both sides of argument repair.
+The native TUI goal continuation excludes controlled tool guardrail halts, so a
+halt cannot be judged as a successful turn and automatically restart its counters.
+The TUI/desktop/web native completion path also persists the exact active goal's
+pause on a controlled block/halt before any goal judge or compression retry.
+User-paused and absent goals remain unchanged; no separate supervisor loop is added.
+
+Maintained native loop comparison adapter: optional profile-scoped registered tool
+callback supplies pure argument/result comparison and read/poll policy. Defaults
+remain unchanged. Forsic excludes only known top-level receipt bookkeeping from
+comparison and retains full model-visible receipts and the immutable ledger.
+No model-returned metadata grants authority or disables native failure guards.
+Registered comparison callbacks may also name a failure_group so public aliases
+of one backend share the native same-tool failure budget. Native thresholds and
+default tool behavior are unchanged; model arguments/results cannot set this group.
+
+P2 native execution identity patch:
+model_tools._execute_tool passes the existing call/turn/request IDs to registry dispatch.
+Handlers still use the native signature filter; no Forsic tool names or domain logic enter upstream.
+Offline regression: tests/test_plugin_execution_identity.py. Operation/CAS identities stay domain-owned.
+
+Maintained local endpoint discovery preference: an expired successful server-type
+verdict is only a hint to revalidate that dialect first. This avoids a repeated
+LM Studio catalog probe on a known Ollama endpoint without trusting stale results,
+guessing from a port/model name, or changing context limits. Normal discovery
+still runs if the server changed or the response does not match. Regression uses
+HTTP mock transport only: tests/agent/test_local_endpoint_probe_preference.py.
+
+Maintained web model card: the Forsic workspace uses its existing connection
+settings for URL/model display and editing. The card reads the same disk-backed
+connection snapshot, keeps pending changes separate, and does not probe model
+availability. Native side-panel connectivity is labeled separately. The legacy
+provider picker is no longer mounted in the Forsic chat sidebar.
+
+Maintained failed-turn localization: native and gateway transcript boundaries
+resolve the existing profile language at delivery time. Korean notices distinguish
+an unprocessed request from a partial turn whose actions may already have run.
+Typed display rows, structured failure data, retry behavior and historical English
+row recognition are preserved. No stored conversation is rewritten.
+
+Maintained compression notice localization: CLI and TUI presentation sinks render
+native routine compaction notices through the existing profile language catalog.
+Canonical callbacks, progress classification, heartbeat and completion edges,
+numeric details and unknown/failure notices remain unchanged. The compression
+algorithm, prompt, transcript and gateway noise policy are not modified.
+
+Maintained native advisory handoff: the existing profile-scoped goal hook returns
+structured pending finding identities as well as text. Material pending advice
+returns to the same main loop before a final response or DONE judgment. A draft
+is retained as interim; exhausted local or shared iteration budgets yield an
+incomplete checkpoint. Goal pause/cancellation and exact native identity checks
+remain authoritative. No domain-specific engine loop or extra worker is added.
+The Forsic plugin owns staged review, source/quote validation and explicit
+question-note dispositions; native code does not interpret forensic conclusions.
+
+Maintained profile/session schema admission and management UI:
+The native registry accepts a generic session context for dynamic schema and
+dispatch callbacks. tools/tool_schema_context.py carries that identity through
+model tool loading, refresh and execution; schema cache reuse remains scoped to
+the owning native session. Plugin-defined tools therefore keep one admitted case
+revision across model exposure and dispatch, including versioned extension tools.
+No Forsic domain imports or additional agent loop are introduced upstream.
+A bounded native_agent_options plugin hook supplies allowlisted constructor
+options for the explicit repository-builder session. Existing provider creation,
+turns, steering and cancellation still belong to Hermes. The operator management
+UI has a separate route reached from the Forsic sidebar and uses its authenticated
+plugin API plus the existing profile-wide idle fence for case selection changes.
+New context/hook helpers and their maintained regression tests are explicit
+source-export additions; installed dependencies and operational data are excluded.
+
+Tenant memory integration retains native fresh profiles, MEMORY.md, MemoryStore,
+tool execution and pending-write approval. A profile-scoped native_memory_policy
+hook binds provenance/CAS and write-ahead recovery to the existing native writer;
+it does not create another memory fact store or agent loop. Personal USER memory
+and background memory learning remain off. Revision notices enter the next native
+turn while the startup prompt snapshot stays frozen. Native recall is disabled
+for managed tenants in this version; an opt-in session ownership guard rejects
+mixed-profile databases instead of exposing cross-profile rows. Unmanaged native
+profiles retain their prior behavior. Product-owned resolver tests cover native
+lineage, explicit DB paths, cases, archives, HTTP scope and legacy migration.
+Native MemoryStore freezes its owning home, accepts a generic owner-policy hook,
+and routes live and pending writes through that policy before using the existing
+file mutation path. Managed foreground sessions can expose only the memory
+toolset beside a product toolset; side/background sessions do not gain it.
+User-profile onboarding also honors the existing user_profile_enabled flag.
+The native live-session RPC boundary now rejects an explicit mismatched profile
+before history, prompt or configuration access. Strict owned resume cannot adopt
+an unowned default conversation or silently create an empty replacement. Native
+session import validates the complete owner set before any copy and retains the
+verified profile on imported rows. These inherited boundary defects are guarded
+only when profile ownership is enabled; unmanaged behavior is preserved.

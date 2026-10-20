@@ -1,0 +1,4 @@
+import {afterEach,it,expect} from 'vitest'
+import {setTenantRequestScope,tenantRequestUrl,tenantPath} from './forsic-tenant'
+afterEach(()=>setTenantRequestScope(null))
+it('binds requests to verified tenant/profile and preserves an already captured A request across B switch',()=>{setTenantRequestScope({tenant_id:'A',profile_name:'pa'});const old=tenantRequestUrl('/api/plugins/forsic/source-page?session_id=sa');setTenantRequestScope({tenant_id:'B',profile_name:'pb'});expect(tenantRequestUrl(old)).toBe(old);expect(tenantRequestUrl('/api/plugins/forsic/tenant-memory?profile=pa')).toContain('tenant_id=A');expect(tenantRequestUrl('/api/plugins/forsic/tenant-memory')).toContain('tenant_id=B');expect(tenantRequestUrl('/api/plugins/forsic/tenants')).toBe('/api/plugins/forsic/tenants');expect(tenantPath('/forsic?view=new',{tenant_id:'B',profile_name:'pb'})).toBe('/forsic?view=new&tenant_id=B&profile=pb')})

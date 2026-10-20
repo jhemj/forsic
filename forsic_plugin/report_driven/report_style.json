@@ -1,0 +1,13 @@
+{
+  "profile_id": "forsic-integrated-template",
+  "version": "2.1.0",
+  "source_kind": "retained_docx_template",
+  "template_file": "templates/integrated_report.docx",
+  "components": {"kicker": 0, "title": 1, "note": 2, "metadata": 3, "spacer": 4, "heading": 5, "callout": 6, "subheading": 8, "summary": 9, "flow": 12, "impact": 19, "evidence": 22, "timeline": 32, "paragraph": 38},
+  "paper": {"width_mm": 210.009, "height_mm": 297.004},
+  "margins_mm": {"top": 17.992, "bottom": 17.004, "left": 18.997, "right": 18.997},
+  "font": {"family": "Noto Sans CJK KR", "color": "292929"},
+  "text": {"body_pt": 9.5, "title_pt": 18.5, "section_title_pt": 18.5, "heading_pt": 12, "subheading_pt": 10, "note_pt": 8, "line_spacing": 1.229166667, "title_color": "2D2D2D", "rule_color": "7B7B7B", "muted_color": "6F6F6F"},
+  "table": {"width_mm": 172.015, "body_pt": 8, "header_pt": 8, "line_spacing": 1.108333333, "header_fill": "2D2D2D", "header_color": "FFFFFF", "stripe_fill": "F9F9F9", "callout_fill": "F2F2F2", "border_color": "D3D3D3", "repeat_header": true},
+  "pagination": {"main_target_pages": [3, 4], "appendices_may_expand": true, "physical_render_required": true, "page_numbers": true}
+}

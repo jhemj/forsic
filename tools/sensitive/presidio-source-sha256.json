@@ -1,0 +1,15 @@
+{
+  "presidio_analyzer/analysis_explanation.py": "1a2683027ec887dd03aa58728cff6222fd36d8af0f7aa8749e2695e8461cfe15",
+  "presidio_analyzer/recognizer_result.py": "2d18b9ba35c2da653e2ebbfd1549ad5509682d454afd44459193d7cc758ede14",
+  "presidio_analyzer/entity_recognizer.py": "61cbcf8264ae40d6a752ca5033d54cf9efdc5b5156f593b5fdcd49a0f722f89b",
+  "presidio_analyzer/local_recognizer.py": "3d36168ff6e09eb5a0cabb2fe65628704d7cdbd42cada16f3344761835d2e843",
+  "presidio_analyzer/pattern.py": "2a5880ff3ddfecc77b3106a244c13c1cd27db58c3616489e61b54d4550dd5b7c",
+  "presidio_analyzer/pattern_recognizer.py": "38dbbb9b2a8fa9e9427cb556240fc3561cbdfa2e033e464d4360782c391c5ca2",
+  "presidio_analyzer/score_thresholds.py": "b0c1249ceaa505981e5f25eabf6ee4ec581767a0ea7247533b41c8722b11d79c",
+  "presidio_analyzer/predefined_recognizers/country_specific/korea/kr_rrn_recognizer.py": "6edd38b849823b8a01ae46d748dd74cd08e9899b6019bf38c899803d9b2c77f4",
+  "presidio_analyzer/predefined_recognizers/country_specific/korea/kr_frn_recognizer.py": "5150882b794ba6b3af350ddbdb9c069244f0248da1f0277ce78540215a41250f",
+  "presidio_analyzer/predefined_recognizers/country_specific/korea/kr_passport_recognizer.py": "f71b68769e302f3af4903c2554e93b68b08401668b5da8e6e6e025c939a9b507",
+  "presidio_analyzer/predefined_recognizers/country_specific/korea/kr_driver_license_recognizer.py": "288230e8e683ed93897ac4b126a7780e57ca80e4f02798068db3ee96d6d3e990",
+  "presidio_analyzer/predefined_recognizers/country_specific/korea/kr_brn_recognizer.py": "00af73be03b39006004b3e28313500fbeefec2e55a53f5f58bb03300dc18d866",
+  "presidio_analyzer/predefined_recognizers/generic/credit_card_recognizer.py": "762612c51d56339e6bd39362402a330d46d48c0aabe4db100012cd03fcb0e562"
+}

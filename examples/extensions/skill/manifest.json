@@ -1,0 +1,32 @@
+{
+  "format_version": 1,
+  "id": "local.skill-example",
+  "version": "1.0.0",
+  "display_name": "Synthetic skill example",
+  "description": "Small redistributable extension example; no real evidence.",
+  "kind": "skill",
+  "source": {
+    "type": "local-authored"
+  },
+  "compatibility": {
+    "extension_api": 1,
+    "platforms": [
+      "linux/amd64"
+    ]
+  },
+  "dependencies": [],
+  "tools": [],
+  "skills": [
+    {
+      "name": "text-review",
+      "path": "skills/text-review/SKILL.md",
+      "requires_tools": [
+        "forsic_read"
+      ]
+    }
+  ],
+  "files": {
+    "skills/text-review/SKILL.md": "b398efd042890300a1402e7752a3947af18c0b9a3b5d6a6b7df6690f228d42c3",
+    "skills/text-review/references/scope.md": "3dabc40508d08791ad2866b1a379fd560176427b16f9e95e16b5727bf989564c"
+  }
+}

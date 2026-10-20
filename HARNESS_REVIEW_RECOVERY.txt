@@ -1,0 +1,87 @@
+Forsic review followthrough contract
+===================================
+
+Purpose
+An independent suggestion is useful only if the main investigation handles it.
+The previous checkpoint could deliver advice exclusively to the goal judge after
+the final report. A transport receipt was not evidence of main-agent correction.
+
+Observation and review
+- A read-only SQL inventory covers the current explicit conversation lineage,
+  including old observations outside the recent excerpt window. It distinguishes
+  listed, partial body, body read and read failure, with exact identity and receipt
+  coordinates. Export completeness never means investigation completeness.
+- Exploration review is blind to the investigator's answer. Final review sees
+  current owned questions and the candidate answer separately from source fields.
+- Review remains at most three calls per native goal on the configured model.
+  The final slot is reserved; unknown delivery is not automatically resent.
+- Each suggestion has a stable review/finding identity and exact presented quote.
+  Per-item quote failure does not erase other valid suggestions. Literal matching
+  proves occurrence at a coordinate, not the correctness of an interpretation.
+
+Main investigator ownership
+- The existing question writer accepts review_responses: investigated, refuted,
+  or scope_limited with reasons. Investigation/refutation requires actual C1/C2
+  evidence selections. Scope limitation requires an explicit retained limitation.
+- Source version and exact bytes are checked in the same note transaction. Old
+  notes preserve history. A disposition records handling of a specific concern,
+  independently from the latest verdict. Answer/grounding edits preserve it; changed
+  question propositions/scopes or stale cited bytes require explicit revalidation.
+  A retracted or ungrounded current verdict uses judgment_review_required without
+  erasing prior investigations or restarting completed executive question rounds.
+- Review freshness excludes response bookkeeping and note revision alone. Current
+  evidence and substantive answer changes still invalidate the review snapshot.
+- Legacy erased dispositions are available by a bounded exact-finding history
+  lookup. They are not silently restored or promoted to current acceptance.
+- Review-packet omissions are presentation omissions, not original evidence
+  coverage. JSON booleans preserve their types; exact quotes do not validate the
+  reviewer's premise or inference.
+- New evidence, elapsed time, an unrelated call, or a newer reviewer snapshot
+  does not silently dispose an earlier material finding.
+- Advice may be refuted. No component classifies natural-language conclusions
+  as true, demands all files be read, or supplies the case's expected answer.
+
+Delivery
+- Native final candidate/goal boundaries return pending material findings to the
+  existing main loop. A budget-expired checkpoint is incomplete, not success.
+- Reports disclose handled findings and limitations. Final selection binds the
+  immutable report snapshot to current review and disposition metadata. Drafts
+  remain available when final selection is blocked or requires regeneration.
+- Known review unavailability can be disclosed for scoped delivery; unreadable
+  review state cannot be treated as an empty pending set.
+
+Validation and limits
+Synthetic tests exercise changed filenames, harmless configuration, false quote,
+corrected evidence, old source windows, actual question writes, explicit scope
+limits, native cancellation/budget boundaries and report revision consistency.
+Passing tests establish these contracts only. Live omission detection, useful
+counterarguments, recovery and final analytical quality require observed E2E
+evidence. Reusing a case ledger is not an independent-case evaluation.
+
+2026-10-15 · 선택적 포렌식 작업대와 불확실한 시간
+
+조사·검토·보고의 기존 native 흐름을 유지한다. 새 실행기·모델·도구는 추가하지 않는다.
+1. 조기 독립 검토는 commit된 고정 입력을 native 문맥을 상속한 보조 스레드에서 처리한다.
+   주 조사는 계속하며, 다음 도구·목표 경계에서 결과를 회수한다. 목표별 기존 3회 한도,
+   마지막 검토 예약, 기존 600초 마감, 취소·알 수 없는 완료의 재전송 금지를 유지한다.
+   요청·응답은 완성된 파일로 원자 게시하며 응답은 요청의 SHA-256에 결속한다.
+2. 선택적 forensic.absence는 선언한 부재 범위와 실제 취득 범위를 나란히 보인다.
+   0건·부분·목록·파생 출력은 전역 부재 판정이 아니다. 모든 파일 읽기를 강제하지 않는다.
+3. 선택적 timeline.temporal은 원문 시각과 추정 구간·복수 후보·전후 관계를 분리한다.
+   정확한 시각 없이도 ctime 등 메타데이터와 독립 정황으로 사건 시점을 가정할 수 있다.
+   원문 숫자·연도·시간대는 바꾸지 않고 가정·판단 근거·한계를 명시한다. ctime의 의미는
+   파일시스템/도구에 따라 확인하며 생성·실행 시각으로 자동 승격하지 않는다.
+4. 선택된 출처의 원장 계보, 분석가가 선언한 계보, 실제 동일성 확인 수준을 구분한다.
+   같은 원문 가공본을 독립 정황으로 자동 합산하지 않는다. 셸 입력 계보 미상은 미상이다.
+5. forensic.checks는 선택한 연결·경쟁 설명·답을 바꿀 관측·다음 검사를 함께 보존한다.
+   검사의 가치와 처분은 분석가가 결정한다. 반론을 매번 추가하거나 조사 전에 등록할 필요 없다.
+6. 고정 근거·시간 관계·질문 정의가 바뀌면 선택된 의존 관계에만 변경 신호를 전달한다.
+   기준을 조용히 갱신하거나 답을 자동 변경하거나 관련 없는 질문을 재개하지 않는다.
+
+추가 필드는 선택 사항이다. 기존 읽기·질문 수정·근거 있는 범위 종결은 그대로 가능하다.
+같은 질문 writer의 원자적 저장·현재 revision·정확 좌표 검증을 공유한다.
+원시 출처 전문을 새로 복제하지 않는다. 선택 출처 메타데이터 조회와 화면/모델 문맥은
+상한을 두며 생략 건수를 표시한다. 전체 추적·의미 승인·조사 성공으로 표현하지 않는다.
+시간축은 두 종류의 HTML/Word 보고서와 UI에 같은 관측/추정 구분으로 전달된다.
+검증은 오프라인 실제 writer, 취소/중복 실행, 근거 버전, 선택 범위, 보고서 출력과
+native 경계에서 수행한다. 실제 조사 누락 감소·답의 유용성은 별도 E2E에서 평가한다.

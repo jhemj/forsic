@@ -1,0 +1,17 @@
+# Example only: replace this reserved hostname with your owned DNS name.
+# First configure Forsic Online mode with exactly https://forsic.example.com,
+# a native username/password and a shared evidence directory; restart at idle.
+# Run Caddy on the same host. Keep Forsic bound only to 127.0.0.1:8860.
+# This example serves the root hostname; URL path prefixes are not covered.
+# Validate with: caddy validate --config deployment/Caddyfile.example --adapter caddyfile
+# Install/start the reviewed config through your host's normal administration.
+# Docs: https://caddyserver.com/docs/caddyfile/directives/reverse_proxy
+forsic.example.com {
+    reverse_proxy 127.0.0.1:8860 {
+        # Do not propagate client-supplied alternate authority/prefix declarations.
+        header_up -Forwarded
+        header_up -X-Forwarded-Prefix
+        # Stream progress promptly. Caddy handles WebSocket upgrades natively.
+        flush_interval -1
+    }
+}

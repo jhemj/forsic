@@ -1,0 +1,112 @@
+통합 보고와 보고 중 추가 조사 계약
+================================
+
+구현 범위
+---------
+새 보고는 integrated.html·integrated.docx 하나의 내용/스냅샷을 두 형식으로 표시한다.
+본문은 3개 논리 페이지이며 실제 인쇄 쪽수는 내용에 따라 늘어난다. 중요한 가정·한계를
+삭제해 쪽수를 맞추지 않는다. 상세 질문·인용·실행 범위·반론·시각·정정은 같은 문서 부록이다.
+templates/integrated_report.docx가 실제 생성의 기반이다. 제공된 양식의 표제, 정보표,
+종합 판단 상자, 진한 표 머리글, 사건 전개표와 부록 A–G 구성을 유지하고 색을 회색으로 바꿨다.
+원래 문단·표·페이지·머리말·꼬리말을 불러와 내용을 채우며 일반 문서를 새로 만들지 않는다.
+실제 템플릿·report_style.json·렌더러의 해시를 생성 묶음에 보존한다. HTML도 같은 배치를 따른다.
+A4, 본문 9.5pt·주요 표 8pt·제목 18.5pt의 제공 양식을 따른다. 특정 조직의 승인 양식은 아니다.
+
+기존 인터페이스 forsic_reporting(action=render)를 유지한다. 새로운 도구 이름·독자 실행기·
+판단 데이터베이스·자동 재개·보고 전용 스케줄러는 없다. PDF는 기본 배포 형식에 추가하지 않는다.
+
+데이터 흐름
+-----------
+보존 반환 + 현재 질문/채택 주장
+  -> 같은 질문의 선택적 report_slots
+  -> 읽기 전용 7축 투영 + 기존 공백 조회
+  -> 에이전트의 필요한 추가 조사 선택
+  -> 기존 native 도구/영수증 -> 같은 질문 revision 갱신
+  -> 스냅샷 고정 -> 통합 HTML/Word + 선택 증거 ZIP
+
+질문 writer 입력
+---------------
+report_slots는 질문 입력의 선택 필드다. 생략하면 보존, []이면 제거, 배열을 주면 그 질문의
+보고 선언만 교체한다. slot/state/brief(700자 이하), claim_indices(현재 또는 함께 교체하는
+채택 주장 배열의 0부터 시작한 위치), basis, limitations를 받는다. 프로그램이 사건·질문 소유권,
+revision과 operation_id를 검증하고 같은 트랜잭션에서 주장·출처·정확한 버전을 연결한다.
+모델은 좌표·해시·내부 근거 ID를 조립하지 않는다. 문체만 바꾸는 갱신은 기존 판단·검토 처분을
+다시 만들지 않는다. 답·범위·근거가 달라지면 옛 선언은 이력으로 남고 현재 유효성 재검토를 표시한다.
+
+7축: compromise_time, entry_route, attacker_actions, personal_data_presence,
+external_disclosure, decisive_evidence, incident_timeline.
+상태: confirmed, inferred, not_confirmed, unavailable, not_applicable.
+앞의 세 상태는 현재 채택 주장 선택을 요구하고, 뒤의 두 상태는 이유를 요구한다. 이는 의미적
+진실을 승인하지 않는다. 각 상태의 의미와 질문 절차는 기존 보고 스킬에 통합했다. 슬롯 미작성은
+명시적으로 표시하며 자료 부재로 바꾸지 않는다. 모든 항목 확정·작성은 조사 종료의 관문이 아니다.
+
+보고에서 조사로 돌아가기
+-----------------------
+render 반환의 research_review_call은 /report_research 읽기 전용 조회로 연결한다. 같은 goal·
+session·선택 question_ids에 속한 기존 공백/중요도/처분, 질문 수정 위치, 원문·실행 조회를 제공한다.
+기본 상태에는 작은 조회 핸들만 붙이고 목록은 요청할 때 페이지로 읽는다. 없는 슬롯은 편집 과제이며
+새 증거 공백이나 미션을 자동 생성하지 않는다. 에이전트가 새 질문이 필요하면 기존 질문 writer로
+작성하고, 판별 가치 있는 검사를 허용된 native 도구로 수행한다. 의미 정정만 필요하면 재수집 없이
+같은 답을 정정한다. 외부 권한 필요·가치 부족·자료 미확보는 그 이유를 보존하고 범위 종결 가능하다.
+
+완료 반환 또는 완료 미상 실행과 정확히 같은 미션을 새 ID로 등록하려 하면 보존 영수증 조회를
+제공한다. 동일성은 질문 정의·범위·명제·정확 인자·선택 버전·판별 규칙으로 결정한다. 무관한 사건
+revision이나 문체 변경은 새 작업 조건이 아니다. 근거·입력·조건이 달라지면 새 검사를 허용한다.
+실패·부분 반환과 일반 미션 없는 읽기는 기존 복구 계약을 유지한다. 조회 자체는 언제나 실행 미승인이며
+자동 실행/재시도/재개를 하지 않는다. native 실행64·goal32·실패허용8과 조사 예산을 변경하지 않는다.
+
+내보내기와 호환
+--------------
+본문의 보고 항목/E/S 표기는 같은 문서 부록에서 작성 당시 선택 주장·정확 참조·범위로 이어진다.
+현재 선택 증거는 바이트·버전·사건·스냅샷을 검증한다. historical-bindings.json 및
+report-slot-declarations.json은 작성 당시 선언을 별도로 보존하고 파일 해시와 신원을 검증하며,
+그 옛 참조를 현재 유효한 증거라고 승인하지 않는다. 제외된 실행 입력은 이력 수집에도 포함하지 않는다.
+가림 보고에는 비가림 채증 ZIP과 조사 조회 핸들을 붙이지 않는다. 해시는 의미 정확성의 증명이 아니다.
+
+기존 executive/practitioner 4개 문서 묶음과 구형 선택 증거 ZIP은 읽기/검증 호환을 유지하며 덮어쓰지
+않는다. 구형/신형 문서를 섞은 묶음, 반만 있는 새 이력 메타데이터, 변조된 구성 파일은 거절한다.
+데이터 마이그레이션은 필요 없다. 빈 report_slots 기본값은 과거 보고 내용의 최신성을 바꾸지 않는다.
+
+검증 매핑
+---------
+다음은 합성 자료·오프라인 계약 검증이다. 실제 LLM이 잘못된 의미 추론을 반복하지 않는다는 증명과
+다르다. 원본 사건 조사와 모델 호출을 섞지 않는다. 수용 사례의 실제 조사 행동은 별도 관측 대상이다.
+
+T01: report_slots + integrated_report. 7축·상태·선택 주장·같은 문서 연결.
+T02: temporal_report. 기록/사건 시각 및 미상·범위 유지; 최초 시각을 침해 시각으로 생성하지 않음.
+T03~T08: claim_evidence_binding + report_slots + reader_report_projection. 독립된 주장/근거·한계와
+         개인정보 보유/반출 축 보존. 실패→성공·명령→목적 달성·해시→무침해의 의미 승격은
+         프로그램이 수행하지 않음. 그 의미를 에이전트가 올바르게 판단하는지는 실제 효과 미관측.
+T09~T10: temporal_report. ctime·관측값·추정 가정 분리, 잘못된 구간 결속의 원자적 거절.
+T11: reader_report_projection + evidence_export. 부분 검사·부재 해석 범위·반론·제외 범위 보존.
+T12: report_research.test_T12_real_native_handoff_and_question_writer. 보존 반환 조회와 같은 질문
+     writer 갱신/보고 경로. 실제 모델의 자율 질문 선택과 조사 수행은 미관측.
+T13: report_research 소유권/중단 검증 + 기존 사건 경계. 조회가 권한 확대·재개를 발생시키지 않음.
+T14: report_research. 같은 실제 작업의 중복 입장 거절·영수증 재사용, 새 판별 조건 허용.
+T15: terminal_recovery_contract + source_recovery_contract. 실패/부분/완료 미상과 성공 구분.
+T16: claim_evidence_binding + report_slots + temporal_report. 없는 참조/좌표/버전 및 잘못된 구간
+     결속을 거절하고 기존 사실 유지. 자유 문장의 모든 숫자·시각·인과 환각 탐지기는 아님.
+T17: report_slot_traceability + report_reference. 정정 후 옛 자료 불변·재검토 표시·새 스냅샷 연결.
+T18: reader_report_projection + 보고서 실제 렌더 QA. 장문은 부록, 중요한 한계는 본문에 유지.
+T19: integrated_report + report_reference. 동일 투영·스냅샷·렌더러/스타일/파일 해시, 혼입 거절.
+T20: report_research + 기존 native 복구 검사. 기존 도구 인터페이스·일시정지 보존, 자동 재개 없음.
+
+오프라인 실행 예
+---------------
+저장소 및 upstream/hermes를 Python 경로로 제공하고 임시 HERMES_HOME에서:
+python -m unittest test_report_slots test_report_research test_integrated_report \
+  test_report_slot_traceability test_report_reference test_reader_report_projection \
+  test_claim_evidence_binding test_temporal_report test_report_evidence_export
+
+원문/모델의 의미 행동 평가와 새 E2E는 별도 승인을 따르고 사용자 중단을 자동 해제하지 않는다.
+보고 생성 성공은 조사 완료·의미 검토 완료·기관 배포 승인이 아니다. 원격 게시·외부 전송도 별도다.
+
+민감정보 후보 별첨
+------------------
+선택·채택한 보고 근거의 구조화 민감정보 탐지 결과는 기존 7축에 맥락 판단으로 연결한다.
+후보 발견·실제성·보유·접근·반출은 별개이며 후보/동일값 수를 사람 수·유출량으로 바꾸지 않는다.
+안전한 판단 snapshot을 먼저 보존한 뒤 같은 통합 HTML·Word의 기술 별첨 D에 제한된 원문을
+수록한다. finding/input/source ID·버전·원래 위치·인코딩·발췌 및 일치 바이트 범위와
+생략 후보/바이트 수를 명시한다. 본문·도구 반환·판단·검토 입력에는 원문을 추가하지 않는다.
+원문 별첨을 포함한 묶음은 local_only로 표시하여 Telegram 자동 문서 전송에서 제외한다.
+로컬 브라우저 수동 다운로드는 가능하다. 미지원·실패·부분 검사와 무검출을 구별한다.

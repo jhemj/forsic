@@ -1,0 +1,31 @@
+# Build Dockerfile.tools first; evidence parsing keeps that small image unchanged.
+FROM forsic-dissect:3.25.1 AS parser
+COPY requirements-analysis.txt /tmp/requirements-analysis.txt
+RUN pip install --no-cache-dir --only-binary=:all: --require-hashes -r /tmp/requirements-analysis.txt
+
+# Official Plaso image, Linux amd64. Its /usr/bin Python stays separate.
+FROM log2timeline/plaso@sha256:a8d42e64dcd3af2dffed8ddb25d34f34def69b672eec97ea9af62885c9332950
+USER root
+# Headless derived-document rendering; install only while building, never in a case.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       libreoffice-writer-nogui=4:26.2.6.3-0ubuntu0.26.04.2 \
+       fonts-noto-cjk=1:20240730+repack1-1build1 \
+       poppler-utils=26.01.0-2ubuntu0.2 \
+       sleuthkit=4.12.1+dfsg-3build1 \
+       testdisk=7.2-0.1build1 \
+       ewf-tools=20140816-2build1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=parser /usr/local /usr/local
+RUN ldconfig
+# Prepared by tools/install_forensic_tools.py from checksummed release assets.
+COPY forensic-tools /opt/forensic-tools
+# Selected Presidio/regex wheel payloads are already hash-verified and installed
+# offline by the tool installer; importing the full NLP package is unsupported.
+RUN python -c "import importlib.util; p='/opt/forensic-tools/sensitive/presidio_local.py'; s=importlib.util.spec_from_file_location('forsic_presidio_local', p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); assert len(m.load_recognizers()) == 8" \
+    && /opt/forensic-tools/bin/gitleaks version
+ENV PATH="/opt/forensic-tools/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    PYTHONDONTWRITEBYTECODE=1
+WORKDIR /work
+ENTRYPOINT []
+CMD ["python", "--version"]

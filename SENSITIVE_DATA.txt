@@ -1,0 +1,106 @@
+Selected secrets and personal-data candidates
+
+The existing forsic_shell(action="sensitive_scan") runs selected local detectors
+inside the native container, cancellation, execution-receipt and case boundaries.
+It adds no model, scheduler, remote verifier, person database or top-level tool.
+The scan-sensitive-data skill is registered and loaded on demand.
+
+Engines
+  Gitleaks 8.30.1: fixed rules, stdin input, trusted ignore configuration,
+  no git traversal, archive recursion or credential validation.
+  Presidio 2.2.364: selected unmodified Korean identifier/card recognizers and
+  two explicit local email/phone patterns. The dedicated minimal loader uses
+  regex 2026.9.29; it does not initialize AnalyzerEngine, NLP or remote models.
+  Pins, binary/wheel/config hashes and licenses are in the existing tool lock.
+  Gitleaks is feature complete with security maintenance; engine superiority
+  and field detection quality have not been established by the synthetic tests.
+
+Input
+  targets identify a retained source_handle or source_id/source_version and an
+  exact pointer. kind=retained_text scans one returned body scalar in UTF-8.
+  kind=evidence_file selects a returned regular-file path within case scope.
+  kind=workspace_export selects a complete, current-conversation image_access
+  export receipt; its hash-bound workspace bytes remain a declared derivative.
+  No caller-controlled command, Docker argument, output path, key or URL.
+  mode=triage and mode=scope_count both describe the explicitly selected scope.
+  Use only the required secrets/pii_kr profiles. Do not scan a directory or E01
+  as text; use an existing selected-file extraction first.
+
+Bounds and interpretation
+  At most 64 targets and 32 MiB of staged bytes per call; the helper reads at
+  most 16 MiB per file, 32 MiB per job and retains at most 2,000 findings.
+  Timeout is at most 300 seconds within the existing native execution budget.
+  Inputs, request and comparison key are mounted read-only. Only the private
+  output directory is writable; the general /work and evidence tree are absent.
+  Private artifacts have a 2 GiB / 10,000-entry case budget and a 256 MiB
+  reservation before each launch. This is not a quota for the entire workspace.
+  No automatic deletion or replay of unknown execution is performed.
+
+  Strict UTF-8, BOM-marked UTF-16 and explicit CP949 preserve source byte
+  coordinates. Auto means UTF-16 BOM or UTF-8; it does not guess other encodings.
+  A file prefix limit, unsupported engine, failed recognizer or unresolved
+  coordinate is visible as partial/failed scope, not a successful negative.
+  CSV/JSONL record numbers are validated, including quoted CSV newlines.
+  Cell/JSON-pointer mapping and JSON escape decoding are not implemented.
+  Whole-text detection and record-mapping completion are separate.
+  Free-text name/address recognition, OCR, legal sensitive-data classification
+  and actual person resolution are outside this profile.
+  Korean literal-label proximity is a bounded, versioned lexical signal.
+  It does not increase a score, bind a field or prove actual personal data.
+  Occurrences, exact-value groups, affected files and mapped records are
+  separate units. Person count stays unknown. Email local parts and tokens
+  retain case; phone formatting variants are not silently normalized.
+  Detection does not establish credential validity, use, access or exfiltration.
+
+Storage and reports
+  Native events, ordinary source reads, context, review material and default
+  selected-evidence exports contain only the derived safe result. Whole values
+  become opaque markers. Hashes of short sensitive values and the case HMAC key
+  stay in owner-only private artifacts outside /work and evidence mounts.
+  The host rebuilds the safe result from known fields, rule identifiers and
+  context signals. Exceptions, scanner stderr, arbitrary labels and raw/base64
+  diagnostics cannot fall back into the ordinary result.
+  Adopt candidates through the existing question writer and exact safe C1/C2
+  references. The agent still chooses relevance, interpretation and next steps.
+  Large candidate lists and input inventories are paged; totals remain visible.
+
+  The local integrated HTML/Word appendix includes original excerpts from
+  selected/adopted scan sources. It checks retained input bytes and private
+  artifact hashes before rendering, and records encoding, original location,
+  exact match/excerpt ranges, omissions and unverifiable entries. The default
+  report budget is 40 entries and 32 KiB of UTF-8 excerpts, not complete files.
+  Overlapping excerpt byte counts are not a unique original-file size.
+  If scan limits prevent a total, unretained-candidate count is unknown.
+  Original excerpts never enter the saved judgment projection or model return.
+  Reports containing these originals are local-only and excluded at discovery
+  and upload time from automatic Telegram delivery. Local downloads remain.
+  This is not global DLP: ordinary authorized evidence readers and arbitrary
+  terminal scripts retain their existing ability to read original evidence.
+
+Reuse, recovery and release
+  Exact retained targets, profiles, mode, input hashes, helper/lock/image and
+  comparison-key identities define reuse. New prose or a note revision does
+  not trigger execution. A changed identity cannot reuse an old resume_ref.
+  Native cancellation and completion_unknown stay distinct from not_started.
+  Even an artifact-write or presentation failure preserves the observed
+  execution state and never automatically reruns a possibly live command.
+  Key loss/change blocks comparison rather than silently changing group IDs.
+  Retention/removal is an explicit operator task. Preserve the key and manifests
+  with retained findings; reports containing raw excerpts have their own life.
+  Rollback does not delete case artifacts or reinterpret failed/partial scans.
+
+  Build a distinct candidate analysis image using Dockerfile.analysis and the
+  cache-only installer. Do not replace an active image during an investigation.
+  The host mounts the reviewed helper read-only; preserve its hash with the
+  candidate dependency image ID. Development tests do not deploy that image.
+
+Synthetic verification
+  FORSIC_SENSITIVE_IMAGE=<candidate-image> python3 -m unittest \
+    test_sensitive_install test_sensitive_scan test_sensitive_integration \
+    test_sensitive_reporting test_forensic_tool_packages
+  The optional container tests require an explicitly selected isolated image.
+  They use synthetic evidence, no model calls or real case files. Supply-chain
+  tests kill on network syscalls; the native test follows the registered tool,
+  source citation, question, template-rendered report and delivery boundaries.
+  Actual model choice, real incident accuracy and production effect require
+  separately authorized observations; they are not established by these tests.

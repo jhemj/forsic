@@ -1,0 +1,61 @@
+Read-only review chat and case evidence collection
+================================================
+
+The native conversation remains the execution/history authority. Review cards
+are display projections of immutable request/response receipts. "렌" identifies
+validated public questions from the existing independent reviewer; the main
+investigator remains "포식이". The reviewer uses the approved model route in a
+separate context and has no evidence-tool or conclusion-adoption authority.
+
+GET /api/plugins/forsic/review-chat requires the real native session and profile.
+Only that conversation's verified compression lineage is eligible. Older goals
+are marked as history, missing times stay unknown/request-recorded, and delivery
+failure is not "no concerns". Stored dispositions are shown as records, never
+fabricated native messages. Public questions/reasons are plain escaped text;
+raw provider messages and reasoning are not exposed. Requests are bounded,
+version cached, cancelled on navigation/hidden tabs, and use existing HTTP auth.
+The latest 24 owned receipts are displayed within a bounded scan; omitted or
+unreadable history is disclosed. No review/model call is caused by displaying it.
+
+GET /api/plugins/forsic/evidence-collection requires case, native session and
+profile. It derives adopted observations and time-basis excerpts from the case
+ledger, with exact counts, version-bound cursors, current/history and conversation
+filters. Merely discovering a filename or issuing a command is not counted as
+adopted evidence. Unsupported/capacity failures are reported, not empty results.
+The current listing limits are 50 rows/page and a bounded retained projection.
+No evidence image scan, source recollection, model call or private hydration
+occurs on list display.
+
+POST /evidence-collection/exports freezes selected ID/version pairs, or all
+currently eligible case items irrespective of display filters. It accepts no
+filesystem path. An idempotency key refers to one immutable request; uncertain
+completion must be checked with that same request. GET /exports/{id} and
+/exports/{id}/download revalidate explicit ownership and artifact bytes.
+Limits: 250 items, 8 MiB uncompressed content, 9 MiB ZIP and 10-second build.
+Artifacts live under the case output's private .evidence-collection directory;
+retention/removal is an explicit operator task, not an automatic cleanup.
+
+The collection ZIP uses forsic-evidence-collection-1. It includes selected exact
+UTF-8 excerpts, provenance, selected execution receipts, a CSV display index,
+hash manifest and offline verifier. Original image coordinates are separate
+from retained-result UTF-8 coordinates. Whole scalars/raw results/original images
+are not implicitly exported. The verifier validates packaged bytes and declared
+reference bindings, not original authenticity, semantic truth or a complete
+source hash. Existing report ZIP formats retain their separate meaning/readers.
+
+Sensitive scans use their existing safe retained result in the default ZIP.
+Local-admin opt-in can include only the selected verified sensitive matches
+(maximum 40 and 32 KiB), never scanner diagnostics, HMAC keys or whole private
+storage. Missing/changed inputs fail closed rather than silently degrading the
+request to a masked ZIP. All collection ZIPs are local-only and are not added to
+Telegram delivery. Ordinary excerpts may contain undetected sensitive values;
+this feature does not claim global DLP/anonymization.
+
+GET /api/plugins/forsic/skills-ui-copy serves the single Korean display catalogue.
+verify_dashboard_skills.py enforces all registered Forsic translations while
+retaining the exact English registry/SKILL sources. Translation is never model
+input. Foreign namespaces do not inherit a similarly named Forsic translation.
+
+These are display and packaging features. Successful contract tests are distinct
+from actual investigative completeness, accurate interpretation and review
+followthrough by the running model.

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 176 176" fill="none">
+  <defs>
+    <linearGradient id="ren-shell" x1="36" y1="26" x2="130" y2="145" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#404751"/><stop offset=".28" stop-color="#181e27"/>
+      <stop offset=".7" stop-color="#070a10"/><stop offset="1" stop-color="#293341"/>
+    </linearGradient>
+    <radialGradient id="ren-glass" cx="0" cy="0" r="1" gradientTransform="translate(67 52) rotate(57) scale(100 91)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#243344"/><stop offset=".48" stop-color="#101a28"/><stop offset="1" stop-color="#050a12"/>
+    </radialGradient>
+    <linearGradient id="ren-rim" x1="43" y1="35" x2="130" y2="131" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#778592"/><stop offset=".38" stop-color="#303b49"/>
+      <stop offset=".7" stop-color="#111a25"/><stop offset="1" stop-color="#53677b"/>
+    </linearGradient>
+    <linearGradient id="ren-blue" x1="61" y1="63" x2="113" y2="101" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9ae8ff"/><stop offset=".5" stop-color="#56c7ff"/><stop offset="1" stop-color="#378cf0"/>
+    </linearGradient>
+    <radialGradient id="ren-shadow">
+      <stop stop-color="#111b2b" stop-opacity=".22"/><stop offset="1" stop-color="#111b2b" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="ren-face-clip"><circle cx="88" cy="82" r="48"/></clipPath>
+    <linearGradient id="ren-scan-light" x2="1">
+      <stop stop-color="#69d5ff" stop-opacity="0"/><stop offset=".5" stop-color="#69d5ff" stop-opacity=".24"/>
+      <stop offset="1" stop-color="#69d5ff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <style>
+    .ren-float {animation:ren-float 5.8s ease-in-out infinite;}
+    .ren-eyes {transform-box:fill-box;transform-origin:center;animation:ren-blink 6.8s ease-in-out infinite;}
+    .ren-scan {opacity:0;animation:ren-scan 5.8s ease-in-out infinite;}
+    .ren-signal {animation:ren-signal 3.4s ease-in-out infinite;}
+    @keyframes ren-float {0%,100%{transform:translateY(1px)}50%{transform:translateY(-3px)}}
+    @keyframes ren-blink {0%,42%,46%,100%{transform:scaleY(1)}44%{transform:scaleY(.12)}}
+    @keyframes ren-scan {0%,18%{opacity:0;transform:translateY(-25px)}28%{opacity:1}62%{opacity:0;transform:translateY(68px)}100%{opacity:0;transform:translateY(68px)}}
+    @keyframes ren-signal {0%,100%{opacity:.6}50%{opacity:1}}
+    @media (prefers-reduced-motion:reduce) {*{animation:none!important;transition:none!important;}}
+  </style>
+  <ellipse cx="88" cy="157" rx="53" ry="9" fill="url(#ren-shadow)"/>
+  <g class="ren-float">
+    <path d="M30 48a70 70 0 0 1 112 1M149 108a70 70 0 0 1-18 26" stroke="#418fbf" stroke-opacity=".22" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="88" cy="82" r="65" fill="url(#ren-shell)" stroke="#111823" stroke-width="1.5"/>
+    <circle cx="88" cy="82" r="61.5" stroke="url(#ren-rim)" stroke-width="2"/>
+    <circle cx="88" cy="82" r="56.5" stroke="#354454" stroke-width="1.5" stroke-dasharray="1 6"/>
+    <path d="M88 23v5" stroke="#5dc9ff" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M38 110a57 57 0 0 0 30 25" stroke="#7a8da0" stroke-opacity=".32" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="88" cy="82" r="50" fill="#060b12" stroke="#253746" stroke-width="2"/>
+    <circle cx="88" cy="82" r="48" fill="url(#ren-glass)"/>
+    <path d="M52 63a40 40 0 0 1 39-21" stroke="#b7dcf5" stroke-opacity=".16" stroke-width="2.5" stroke-linecap="round"/>
+    <g clip-path="url(#ren-face-clip)">
+      <rect class="ren-scan" x="39" y="47" width="98" height="2" rx="1" fill="url(#ren-scan-light)"/>
+    </g>
+    <path d="M65 67q6-1 12 2m22 0q6-3 12-2" stroke="#70cafa" stroke-opacity=".65" stroke-width="2.5" stroke-linecap="round"/>
+    <g class="ren-eyes" fill="url(#ren-blue)">
+      <path d="M64 77Q71 82 78 79C76 91 66 90 64 77Z"/>
+      <path d="M98 79Q105 82 112 77C110 90 100 91 98 79Z"/>
+    </g>
+    <path d="M82 103q6 3 13-1" stroke="#6fc9f5" stroke-width="2.7" stroke-linecap="round"/>
+    <path d="M49 78v8m78-8v8" stroke="#4b95bd" stroke-opacity=".28" stroke-width="2" stroke-linecap="round"/>
+    <g transform="translate(137 126)">
+      <circle r="17" fill="#111a26" stroke="#50677d" stroke-width="1.5"/>
+      <path d="M-4-8h-4v4m12-4h4v4M-8 4v4h4m12-4v4H4" stroke="#6dccff" stroke-width="2" stroke-linecap="round"/>
+      <circle class="ren-signal" r="3" fill="#62caff"/>
+    </g>
+    <circle class="ren-signal" cx="140" cy="40" r="3" fill="#56bfff"/>
+  </g>
+</svg>

@@ -1,0 +1,19 @@
+.forsic-management-page {flex:1;min-height:0;overflow:auto;padding:28px clamp(20px,4vw,64px);color:var(--forsic-text);scrollbar-width:thin}
+.forsic-management-page>header {display:flex;align-items:start;justify-content:space-between;gap:24px;margin:0 auto 28px;max-width:1200px}
+.forsic-management-page h1 {margin:0 0 10px;font-size:22px;font-weight:650;line-height:1.5}
+.forsic-management-page>header p {font-size:14px;color:var(--forsic-muted);line-height:1.7;margin:0}
+.forsic-management-page>header a {font-size:13px;white-space:nowrap;color:inherit;border:1px solid var(--forsic-border);padding:9px 12px;border-radius:7px;text-decoration:none}
+.forsic-management-page .forsic-management {max-width:1200px;margin:auto;font-size:14px;gap:18px}
+.forsic-management-page .forsic-management h3 {font-size:16px}.forsic-management-page .forsic-management h4 {font-size:14px}
+.forsic-management-page .forsic-management button,.forsic-management-page .forsic-management input,.forsic-management-page .forsic-management select,.forsic-management-page .forsic-management textarea {padding:10px 12px}
+.forsic-management-page .forsic-management code {font-size:12px}.forsic-management-page .forsic-management pre {font-size:12px;line-height:1.65;max-height:320px}
+.forsic-management-page .forsic-management legend {font-size:15px;font-weight:600;padding-inline:5px}
+.forsic-management-page .forsic-management small {font-size:12px}
+.forsic-management-page .forsic-management article,.forsic-management-page .forsic-management fieldset {padding:18px;gap:12px}
+.forsic-environment-plan {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;min-width:0}
+.forsic-environment-plan>details,.forsic-environment-plan>p {grid-column:1/-1}
+.forsic-management .forsic-update-candidate {padding:12px;background:var(--forsic-inset);gap:7px}
+.forsic-update-candidate label {display:flex;flex-direction:row;align-items:center;gap:9px}
+.forsic-update-candidate p {font-size:13px}.forsic-update-candidate input[type=checkbox] {width:17px;height:17px}
+.forsic-management dd {display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+@media(max-width:1000px){.forsic-environment-plan{grid-template-columns:1fr}.forsic-management-page>header{flex-direction:column}.forsic-management-page{padding:20px}}

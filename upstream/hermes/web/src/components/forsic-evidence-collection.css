@@ -1,0 +1,52 @@
+.fec {display:flex;flex-direction:column;gap:14px;color:var(--forsic-text);font-size:var(--forsic-font-control,14px)}
+.fec button,.fec select,.fec input[type=search] {font:inherit}
+.fec button {display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--forsic-border);border-radius:8px;padding:7px 10px;background:var(--forsic-surface);color:inherit;cursor:pointer}
+.fec button:not(:disabled):hover {background:var(--forsic-hover)}
+.fec button:disabled {background:var(--forsic-inset);color:var(--forsic-muted);cursor:default}
+.fec input[type=checkbox] {accent-color:#888;width:16px;height:16px;flex-shrink:0}
+.fec-summary {display:flex;align-items:center;gap:12px}
+.fec-summary>div {flex:1}.fec-summary strong {font-size:var(--forsic-font-heading,18px)}
+.fec-summary p,.fec-meta {font-size:var(--forsic-font-secondary,13px);line-height:1.65;color:var(--forsic-muted);margin:4px 0}
+.fec-filters {display:flex;flex-wrap:wrap;gap:7px}
+.fec-filters select,.fec-filters label {border:1px solid var(--forsic-border);border-radius:8px;background:var(--forsic-inset);color:inherit;min-width:0;padding:7px}
+.fec-filters label {display:flex;align-items:center;gap:6px;flex:1;min-width:140px}
+.fec-filters input {border:0;outline:none;background:transparent;color:inherit;width:100%;font:inherit}
+.fec-filters input::placeholder {color:var(--forsic-muted)}
+.fec-filters label:focus-within,.fec-filters select:focus-visible {outline:2px solid var(--forsic-focus);outline-offset:2px}
+.fec-actions {display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:var(--forsic-font-secondary,13px)}
+.fec-actions label,.fec-raw {display:flex;align-items:center;gap:6px}
+.fec-item {border:1px solid var(--forsic-border);border-radius:12px;padding:14px;margin-bottom:10px;animation:fec-enter .18s ease-out}
+.fec-item-heading {display:flex;align-items:flex-start;gap:10px}
+.fec-item strong {font-size:var(--forsic-font-body,15px);overflow-wrap:anywhere}
+.fec-badges {display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.fec-badges span {padding:2px 7px;background:var(--forsic-inset);border-radius:5px;font-size:var(--forsic-font-meta,12px);color:var(--forsic-muted)}
+.fec-links {font-size:var(--forsic-font-secondary,13px);margin:10px 0;line-height:1.6}
+.fec details {font-size:var(--forsic-font-secondary,13px);margin-top:10px}.fec summary {cursor:pointer}
+.fec pre {white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;background:var(--forsic-inset);padding:10px;border-radius:6px;font-size:var(--forsic-font-secondary,13px)}
+.fec dl {display:grid;grid-template-columns:90px 1fr;gap:7px;line-height:1.55}
+.fec dt {color:var(--forsic-muted)}.fec dd {margin:0;overflow-wrap:anywhere}
+.fec-warning {border-left:3px solid var(--forsic-warning);padding:9px 12px;background:var(--forsic-inset);font-size:var(--forsic-font-secondary,13px);line-height:1.6}
+.fec-raw {flex-wrap:wrap;font-size:var(--forsic-font-secondary,13px)}.fec-raw small {width:100%;color:var(--forsic-muted);padding-left:22px}
+.fec-confirm {padding:14px;border:1px solid var(--forsic-warning);border-radius:10px;font-size:var(--forsic-font-secondary,13px);line-height:1.7}
+.fec-confirm button {margin-right:8px}
+.fec-export,.fec-pagination {display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:var(--forsic-font-secondary,13px)}
+.fec-empty {padding:28px 10px;text-align:center;font-size:var(--forsic-font-secondary,13px);color:var(--forsic-muted);line-height:1.7}
+@keyframes fec-enter {from {opacity:0;transform:translateY(3px)} to {opacity:1;transform:translateY(0)}}
+@media (prefers-reduced-motion:reduce) {.fec-item {animation:none}}
+
+.fec {font-size:14px;line-height:1.8;gap:18px;}
+.fec-item {padding:18px;background:var(--forsic-surface);}
+.fec-item-heading > div {min-width:0;}
+.fec-item-heading strong {font-size:16px;line-height:1.7;font-weight:600;}
+.fec-item-heading > input {margin-top:5px;}
+.fec-badges {gap:6px;margin-top:9px;}
+.fec-reading {margin:16px 0;}
+.fec-reading-label {font-size:12px;font-weight:600;color:var(--forsic-muted);}
+.fec-reading blockquote {margin:7px 0 0;padding:12px 14px;border-left:2px solid var(--forsic-border);border-radius:0 7px 7px 0;background:var(--forsic-inset);font-size:14px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;}
+.fec-links > strong {font-size:12px;font-weight:600;color:var(--forsic-muted);}
+.fec-links ul {margin:5px 0;padding-left:20px;line-height:1.8;font-size:14px;}
+.fec .fec-technical {border-top:1px solid var(--forsic-border);padding-top:12px;margin-top:14px;color:var(--forsic-muted);font-size:13px;}
+.fec .fec-technical dl {font-size:12px;grid-template-columns:90px minmax(0,1fr);}
+.fec button,.fec select {min-height:36px;}
+.fec summary {padding-block:4px;}
+.fec summary:focus-visible {outline:2px solid var(--forsic-focus);outline-offset:3px;}

@@ -1,0 +1,90 @@
+Forsic third-party notices
+=========================
+
+Forsic-specific code and documentation are provided under the root MIT LICENSE.
+That license does not replace copyright notices or licenses applying to included
+third-party material. Preserve those notices with redistributions.
+
+Hermes Agent
+------------
+Copyright (c) 2025 Nous Research
+Source: https://github.com/NousResearch/hermes-agent
+Pinned commit: bafb42b431fca313471958fdf77f9c30e455f86b
+Included source: upstream/hermes/
+License: MIT. The complete original license is retained, unchanged, in
+upstream/hermes/LICENSE. UPSTREAM.txt describes the maintained Forsic adaptations.
+Other notices embedded in upstream source files continue to apply.
+
+Separately installed dependencies
+--------------------------------
+The source release contains dependency declarations, not the installed runtime
+or parser image. Installation obtains components under their own terms, including:
+
+- python-docx 1.2.0, lxml 6.1.3 and python-telegram-bot 22.8, declared in
+  forsic_plugin/plugin.yaml and requirements-forsic.txt.
+- dissect.target 3.25.1 and dissect.xfs 3.13 in the Python 3.12-based parser image,
+  declared in Dockerfile.tools.
+- duckdb 1.5.6 (MIT), wheel hashes in requirements-analysis.txt.
+- python-docx 1.2.0, lxml 6.1.3 and typing-extensions 4.15.0, pinned wheel
+  hashes in requirements-analysis.txt; installed Python distribution notices
+  remain included. These also support derived documents inside the analysis image.
+- Headless LibreOffice Writer, Noto CJK fonts and Poppler utilities from the
+  signed Ubuntu repositories, exact direct package versions in Dockerfile.analysis.
+  Their upstream and bundled-component notices remain under /usr/share/doc/ in
+  the image; retain those notices when distributing the built runtime.
+- Sleuth Kit (Ubuntu sleuthkit 4.12.1+dfsg-3build1), TestDisk/PhotoRec
+  (testdisk 7.2-0.1build1) and libewf utilities (ewf-tools 20140816-2build1),
+  installed from signed Ubuntu repositories at the direct versions declared in
+  Dockerfile.analysis. Preserve their upstream and bundled-component copyright
+  and license files under /usr/share/doc/, including dependencies' notices.
+  Their licenses are independent of Forsic's; retain the package/source provenance
+  and applicable source-distribution obligations when distributing the runtime.
+  Upstream projects: https://www.sleuthkit.org/ ; https://www.cgsecurity.org/ ;
+  https://github.com/libyal/libewf .
+- Hayabusa 4.2.0 (AGPL-3.0-only), bundled rules (DRL-1.1 plus individual notices),
+  and YARA-X 1.21.0 (BSD-3-Clause), downloaded separately using the asset/license
+  hashes and source links in tools/forensic-tools.lock.json. The installed image
+  retains license files and per-rule/config hashes under /opt/forensic-tools/.
+- Gitleaks 8.30.1 CLI and its exact default rule snapshot (MIT), from
+  https://github.com/gitleaks/gitleaks/tree/v8.30.1 . Archive, extracted executable,
+  rules and original LICENSE hashes are pinned in tools/forensic-tools.lock.json.
+  The official README checked on 2026-10-20 states it is feature complete and
+  future releases will be security patches. No Betterleaks or online credential
+  verifier is included. Preserve the CLI's bundled Go dependency notices too.
+- Presidio analyzer 2.2.364 (MIT), originally Microsoft, now redirected upstream
+  https://github.com/data-privacy-stack/presidio/tree/2.2.364 , and regex
+  2026.9.29 (Apache-2.0 AND CNRI-Python). Exact CPython 3.12 Linux wheel hashes
+  appear in requirements-sensitive.txt and tools/forensic-tools.lock.json.
+  Original wheel license/distribution metadata and Presidio LICENSE are retained
+  under /opt/forensic-tools/sensitive/python and /opt/forensic-tools/licenses.
+  The dedicated helper loads only hash-checked, unmodified Presidio core and
+  selected Korean/card recognizer modules. Its minimal package initializer and
+  local email/Korean phone format patterns are Forsic adaptations, not upstream
+  recognizers or a supported full Presidio installation. The default analyzer,
+  NLP dependencies, language models, registry and remote recognizers are not
+  installed or initialized. No model quality or complete Korean PII coverage is
+  implied by this deliberately restricted installation.
+- Plaso 20260720 (Apache-2.0) and its native dependencies/base operating system,
+  from the official image digest in Dockerfile.analysis. Existing notices in
+  that image remain installed; their licenses are not replaced by Forsic's.
+- DFIQ (Apache-2.0), pinned question metadata and original license retained under
+  forsic_plugin/skills/investigation-recipes/references/. Local procedural
+  summaries are independently authored and are not official DFIQ approaches.
+- Hermes-managed Python/Node tools and transitive packages, identified by the
+  pinned PM, Python and frontend lockfiles under upstream/hermes/.
+- Host utilities such as libewf, Docker and their dependencies, installed by the
+  operator rather than included as Forsic binaries.
+
+Consult each installed distribution's license and notices, including those of
+bundled libraries and container base packages. When distributing a built runtime
+or image, retain the notices and satisfy any additional obligations for the actual
+components included; the Forsic MIT license is not a substitute for those terms.
+This summary is not a full software bill of materials or a license compatibility
+certification for every possible installation.
+
+Models, services and investigation material
+------------------------------------------
+Model weights are not included. Their licenses and any provider terms apply
+separately. Telegram, VT/GTI and other configured services retain their own terms.
+The software license does not grant rights to evidence, reports containing
+third-party material, personal information or other case content.

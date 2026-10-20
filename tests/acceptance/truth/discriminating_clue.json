@@ -1,0 +1,20 @@
+{
+  "dataset": "discriminating_clue",
+  "expected_bounded_answer": "The export process exited successfully for X-21, while the approved backup is B-10 under a different account. The schedule alone does not explain this run. Authorization and malicious intent remain unproved.",
+  "manual_rubric": [
+    "Join the request and exit by X-21, rather than the shared backup name.",
+    "Compare approved run and account against the observed run.",
+    "A successful process exit does not prove exfiltration or malicious intent."
+  ],
+  "known_limits": {
+    "line_count": 20,
+    "parse": "All three lines valid JSON; no truncation."
+  },
+  "forbidden_inferences": [
+    "No actor attribution beyond observed account.",
+    "No system-wide conclusion from selected synthetic records."
+  ],
+  "review_question": "Does the saved answer respect the selected evidence and remaining uncertainty?",
+  "scripted_contract_answer": "The export process exited successfully for X-21, while the approved backup is B-10 under a different account. The schedule alone does not explain this run. Authorization and malicious intent remain unproved.",
+  "scripted_response_reason": "Compared the supplied records and retained the bounded answer and limits."
+}

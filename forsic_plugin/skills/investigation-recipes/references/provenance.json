@@ -1,0 +1,39 @@
+{
+  "project": "https://github.com/google/dfiq",
+  "commit": "f07e5f2a5255afda7be9d9de13300d3df12d15f8",
+  "reviewed_on": "2026-10-19",
+  "license": "Apache-2.0",
+  "copyright": "Copyright 2024 Google LLC (upstream question metadata)",
+  "license_file": "DFIQ-LICENSE.txt",
+  "adaptation": "Own procedural summaries inspired by three upstream questions; these pinned YAML files have no approaches. No upstream YAML, queries, code, or linked third-party content is vendored. Local steps and caveats are Forsic-authored, not endorsed upstream.",
+  "runtime_network_required": false,
+  "recipes": [
+    {
+      "id": "Q1008",
+      "dfiq_version": "1.1.0",
+      "source_path": "dfiq/data/questions/Q1008.yaml",
+      "source_url": "https://github.com/google/dfiq/blob/f07e5f2a5255afda7be9d9de13300d3df12d15f8/dfiq/data/questions/Q1008.yaml",
+      "source_sha256": "ab6a3970eaa9089f71b651fc7acb3256ce78c29f2363386a1d38d22ae3368721",
+      "local_summary": "program-presence.md",
+      "summary_version": 1
+    },
+    {
+      "id": "Q1065",
+      "dfiq_version": "1.1.0",
+      "source_path": "dfiq/data/questions/Q1065.yaml",
+      "source_url": "https://github.com/google/dfiq/blob/f07e5f2a5255afda7be9d9de13300d3df12d15f8/dfiq/data/questions/Q1065.yaml",
+      "source_sha256": "45ca5ba9b0f67ba0f157dceb5d2d1e5771f753dc1d6d823cba9b19f20b8b3123",
+      "local_summary": "run-keys.md",
+      "summary_version": 1
+    },
+    {
+      "id": "Q1062",
+      "dfiq_version": "1.1.0",
+      "source_path": "dfiq/data/questions/Q1062.yaml",
+      "source_url": "https://github.com/google/dfiq/blob/f07e5f2a5255afda7be9d9de13300d3df12d15f8/dfiq/data/questions/Q1062.yaml",
+      "source_sha256": "7818f68f88347b260e7cd203fbfc612bef857c134b50b4fbc4cf39fdd89d5c99",
+      "local_summary": "cron.md",
+      "summary_version": 1
+    }
+  ]
+}

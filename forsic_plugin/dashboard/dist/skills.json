@@ -1,0 +1,98 @@
+[
+  {
+    "name": "forensic-investigation",
+    "description": "Set the scope and priorities of an investigation, moving from the current answer to the next check and scoped closure."
+  },
+  {
+    "name": "evidence-intake",
+    "description": "Check the investigation scope, image format, segments, and integrity of new evidence."
+  },
+  {
+    "name": "source-triage",
+    "description": "Find question-relevant logs, autorun settings, and file traces in Linux images and extracted evidence."
+  },
+  {
+    "name": "inspect-documents",
+    "description": "Statically inspect case Office/CSV documents and distinguish extraction limits for formats requiring specialist parsers, including PDF. Use existing reporting for report generation."
+  },
+  {
+    "name": "inspect-scripts",
+    "description": "Statically read evidence shell/Python/JavaScript scripts and execution settings, distinguishing possible behavior from actual execution traces."
+  },
+  {
+    "name": "test-hypothesis",
+    "description": "Compare explanations despite incomplete evidence and choose the next check that could change the judgment."
+  },
+  {
+    "name": "correlate-time",
+    "description": "Record raw times and temporal relationships separately from inferred event windows and their assumptions."
+  },
+  {
+    "name": "answer-question",
+    "description": "Answer the current question and store evidence, counterarguments, limits, corrections, and scoped closure in the same question record."
+  },
+  {
+    "name": "review-conclusions",
+    "description": "Check observation accuracy, inferential links, and competing explanations in important conclusions, correcting them within the same investigation."
+  },
+  {
+    "name": "forsic-report-driven",
+    "description": "Compose a readable Korean HTML report from shared investigation explanations and exact evidence. Export Word from the same saved version when requested."
+  },
+  {
+    "name": "threat-intelligence",
+    "description": "Query GTI/VirusTotal reputation for suspicious file hashes or allowed public IPs/domains and compare with current-case originals. Do not upload files or rescan URLs."
+  },
+  {
+    "name": "executive-followup",
+    "description": "Select important follow-up questions from the integrated investigation report or current answers, then reuse evidence, investigate, and update the report."
+  },
+  {
+    "name": "organize-indicators",
+    "description": "Collect and deduplicate observed case addresses, hashes, paths, and accounts with sources, separating case significance from external reputation."
+  },
+  {
+    "name": "personal-data-scope",
+    "description": "Investigate personal-data holdings, access, and external transfer as separate questions in selected evidence, reporting samples and unreviewed scope."
+  },
+  {
+    "name": "initial-access",
+    "description": "Compare authentication, service, and file records to investigate possible initial access routes, distinguishing first observation from actual intrusion time."
+  },
+  {
+    "name": "data-movement",
+    "description": "Distinguish attempted transfer, success, and content through file-copy, archive, and network records; investigate legitimate business transfers and verification limits."
+  },
+  {
+    "name": "inspect-artifacts",
+    "description": "Use installed Dissect and a verified selected-file helper to parse Windows Registry, Prefetch, Amcache, and Linux authentication/login traces, preserving source locations and interpretation limits."
+  },
+  {
+    "name": "investigation-recipes",
+    "description": "Select a few DFIQ-question-inspired approaches for the current question and connect existing tools, evidence, and question records. These are optional, not mandatory checklists."
+  },
+  {
+    "name": "query-structured-logs",
+    "description": "Aggregate and join /work CSV/JSONL logs with offline SQL, preserving source byte coordinates, input hashes, failure scope, and reproducibility records."
+  },
+  {
+    "name": "scan-windows-events",
+    "description": "Find investigative candidates in selected Windows EVTX with offline Hayabusa rules, then reread original events and rules."
+  },
+  {
+    "name": "scan-file-rules",
+    "description": "Scan selected files with local YARA-X rules and verify match locations/actual bytes, without external upload or declaring maliciousness."
+  },
+  {
+    "name": "import-timeline",
+    "description": "Parse selected files offline with Plaso, preserving raw times, provenance, and transformations; adopt only needed events into the existing question timeline."
+  },
+  {
+    "name": "consult-previous-cases",
+    "description": "Find and compare investigation methods, evidence, and counterarguments relevant to the current question in saved past cases."
+  },
+  {
+    "name": "scan-sensitive-data",
+    "description": "Find credential and Korean personal-data candidates in selected retained evidence through the offline structured scan, preserving scope and separating detection from incident conclusions."
+  }
+]

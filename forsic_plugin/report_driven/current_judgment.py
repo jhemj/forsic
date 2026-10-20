@@ -1,0 +1,101 @@
+"""Pure view of the existing note-owned answer and its selected claim records."""
+from copy import deepcopy
+
+
+def analysis_declaration(claim):
+    """Absence in old records is unknown; v2 omissions were never reviewed empty."""
+    fields = ('counter_citation_refs','inference_strength','assumptions','limitations')
+    declared = claim.get('declared_analysis_fields')
+    return {'declaration_status':'not_recorded' if declared is None else 'recorded',
+            'undeclared_analysis_fields':list(fields) if declared is None else [k for k in fields if k not in declared]}
+
+
+def current_judgment(state, question):
+    selected={r['id'] for r in question['claim_refs']}
+    claims=[c for c in state['claims'] if c['id'] in selected and c['status'] not in ('retracted','superseded')]
+    # An unadopted note answer still has limits. Losing claim_refs must not
+    # erase them from the goal/compaction view or imply an approved judgment.
+    if not selected:
+        claims=[c for c in state['claims'] if c['id']=='F-'+question['id'][2:] and c['status']=='candidate']
+    tests={t['id'] for t in state['tests'] if t['question_ref']['id']==question['id']}
+    # Local test reasoning is explicitly separate from the aggregate judgment.
+    local=[{'id':a['id'],'test_id':a['test_ref']['id'],'outcome':a['outcome'],
+            'reasoning_summary':a['reasoning_summary'],'limitations':a.get('limitations',[]),
+            'next_check':a.get('next_check','')} for a in state['assessments'] if a['test_ref']['id'] in tests]
+    return {'question_id':question['id'],'revision':question['revision'],
+            'definition_version':question['definition_version'],'target_proposition':question['target_proposition'],
+            'scope':question['scope'],'answer':question['answer'],'assessment':question['assessment'],
+            'review_required':question.get('judgment_review_required',False),
+            'claim_refs':deepcopy(question['claim_refs']),
+            'judgments':[{**{k:deepcopy(c.get(k,[] if k in ('assumptions','limitations','source_refs','counterevidence_refs') else 'unrated' if k=='inference_strength' else ''))
+                          for k in ('id','status','assertion_kind','inference_strength','assumptions','reasoning_summary','limitations','source_refs','counterevidence_refs')},
+                          **analysis_declaration(c)} for c in claims],
+            'remaining_gaps':[{'id':g['id'],'disposition':g['disposition'],'reason':g['reason'],
+                               'feasible_next_action':g['feasible_next_action']}
+                              for g in state['gaps'] if g['question_ref']['id']==question['id']
+                              and g['disposition'] not in ('resolved','not_applicable')],
+            'alternatives':deepcopy(question.get('alternatives',[])),
+            'next_checks':deepcopy(question.get('next_checks',[])),
+            'reopen_conditions':deepcopy(question.get('reopen_conditions',[])),
+            'forensic_context':deepcopy(question.get('forensic_context',{})),
+            'local_assessments':local,
+            'detail_pointer':'/questions/'+str(state['questions'].index(question))}
+
+
+def current_claims(state):
+    selected={r['id'] for q in state['questions'] for r in q['claim_refs']}
+    candidates={'F-'+q['id'][2:] for q in state['questions'] if not q['claim_refs'] and not q.get('judgment_review_required',False)}
+    return [c for c in state['claims'] if c['id'] in selected|candidates and c['status'] not in ('retracted','superseded')]
+
+
+def navigation_view(state, question):
+    """Bounded navigation; long judgment sentences are omitted, never half-asserted."""
+    full=current_judgment(state,question)
+    omitted=0
+    def text(value,limit=260):
+        nonlocal omitted
+        if len(str(value).encode())<=limit:return value
+        omitted+=1
+        return '[omitted; read detail_pointer/current claim]'
+    def items(values,limit=1):
+        nonlocal omitted
+        omitted+=max(0,len(values)-limit)
+        return [text(v,180) for v in values[:limit]]
+    claims=full['judgments'][:1]
+    omitted+=max(0,len(full['judgments'])-1)
+    def references(values):
+        nonlocal omitted
+        omitted+=max(0,len(values)-1)
+        return deepcopy(values[:1])
+    judgment=[{'id':c['id'],'status':c['status'],'assertion_kind':c['assertion_kind'],'inference_strength':c['inference_strength'],
+               'declaration_status':c['declaration_status'],'undeclared_analysis_fields':c['undeclared_analysis_fields'],
+               'assumptions':items(c['assumptions']),'limitations':items(c['limitations']),
+               'source_refs':references(c['source_refs']),'source_ref_count':len(c['source_refs']),
+               'counterevidence_refs':references(c['counterevidence_refs']),
+               'counterevidence_ref_count':len(c['counterevidence_refs']),
+               'reasoning_summary':text(c['reasoning_summary'])} for c in claims]
+    local=full['local_assessments'][-1:]
+    omitted+=max(0,len(full['local_assessments'])-1)
+    local=[{'id':a['id'],'outcome':a['outcome'],'reasoning_summary':text(a['reasoning_summary']),
+            'limitations':items(a['limitations']),'next_check':text(a['next_check'])} for a in local]
+    result={'id':question['id'],'revision':question['revision'],'definition_version':question['definition_version'],
+            'assessment':question['assessment'],'review_required':full['review_required'],
+            'scope':text(question['scope']), 'answer_is_model_assessment':text(full['answer']),
+            'judgments':judgment,'alternatives':items(full['alternatives']),
+            'next_checks':items(full['next_checks']), 'reopen':items(full['reopen_conditions']),
+            'latest_local_assessment_not_aggregate':local,'detail_pointer':full['detail_pointer'],
+            'details_call':{'tool':'forsic_reporting','arguments':{'action':'state','question_id':question['id']}}}
+    result['remaining_gap_count']=len(full['remaining_gaps'])
+    result['remaining_gap_examples']=[{**g,'reason':text(g['reason'],200)} for g in full['remaining_gaps'][:2]]
+    omitted+=max(0,len(full['remaining_gaps'])-2)
+    result['omitted_details']=omitted
+    context = full['forensic_context']
+    times = [t for t in state.get('timeline',[]) if t.get('question_id')==question['id']]
+    if context or times:
+        result['forensic']={'counts':context.get('counts',{}),
+            'temporal_events':len(times),
+            'temporal_recheck_count':sum(bool(t.get('temporal_context',{}).get('temporal_requires_recheck')) for t in times),
+            'selected_dependency_changes':context.get('counts',{}).get('change_impacts',0),
+            'meaning':'선택 근거·시간 관계의 변화입니다. 결론 유지·정정과 다음 검사 가치는 분석가가 판단합니다.',
+            'detail_call':result['details_call']}
+    return result

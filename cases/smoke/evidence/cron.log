@@ -1,0 +1,3 @@
+2026-09-01T01:00:00Z node-lab CRON user=svc_reports command=/opt/reports/export-daily
+2026-09-01T01:00:01Z node-lab PROCESS path=/opt/reports/export-daily pid=412 status=started
+2026-09-01T01:00:02Z node-lab PROCESS pid=412 exit=1 error=permission_denied output=not_created

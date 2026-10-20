@@ -1,0 +1,59 @@
+Forsic P2 실행 경계 — 구현 후보, 실제 운영 효과는 별도 검증
+
+대상
+P1 위에서 실제 parser wrapper와 기존 Case.invoke/원장/native callback 경계를 개선한다.
+새 에이전트 루프, 서비스, 실행 큐, 자동 재시도 또는 별도 실행 DB는 만들지 않는다.
+외부 하네스를 새로 조사하거나 새 모델을 호출하지 않았다.
+
+재현된 계약 결함
+- Docker 읽기 timeout은 subprocess.TimeoutExpired인데 기존 retry는 builtin TimeoutError만 보았다.
+- cleanup도 timeout이면 최초 읽기 오류가 정리 오류로 덮였다. rm -f의 성공 여부도 확인하지 않았다.
+- parser JSON error에는 실행 단계가 없었고, JSON array는 AttributeError로 adapter 밖까지 빠져나갔다.
+- native dispatch는 hook에는 call/turn/request ID를 주지만 plugin handler에는 전달하지 않았다.
+- 결과 저장에 실패한 비미션 읽기를 같은 범위로 다시 실행할 수 있었고 정확한 attempt 조회도 없었다.
+
+공통 경계
+capabilities.py는 현재 구현된 read/poll/effects와 실제 image action의 범위 기본값을 공유한다.
+모든 Case 호출은 원장에 기록하므로 evidence read-only와 case ledger write를 구분한다.
+이 설명은 권한 부여나 실제 실행의 증거가 아니다. 현재 handler와 OS 격리가 계속 강제한다.
+입력 schema는 기존 image_reader/literal_search의 공통 원천을 유지한다.
+
+native 연결
+유지 upstream 패치는 기존 signature-filtered dispatch에 tool_call_id/turn_id/api_request_id를
+전달하는 범용 변경뿐이다. Forsic은 이 신뢰된 kwargs를 작은 NativeExecution 값으로 보존한다.
+모델 args의 같은 이름은 실행 정체성이 되지 않는다. operation_id/CAS를 대신하거나 숨기지 않는다.
+취소는 native thread interrupt를 관측하며 이를 해제·재개하지 않는다.
+
+실행과 정리
+기존 foreground Docker reader의 RO mount/no network/비특권/자원 한도를 유지한다.
+Popen을 한 번 시작하여 같은 native 호출 안에서 결과/timeout/취소를 기다린다.
+취소 요청과 프로세스 종료 확인은 다르다. 정확한 생성 컨테이너의 rm -f 성공만 종료 확인으로
+인정한다. cleanup 실패와 client reap 실패를 원래 오류와 별도로 남긴다.
+종료를 확인하지 못하면 completion_unknown이다. 새 실행으로 이를 해결하려 하지 않는다.
+정상 JSON error, 비정상 exit, 잘못된 JSON/형식, 실행 전 취소, 진행 중 취소를 구분한다.
+잘못된 output bytes는 원장에 보존하지만 정상 증거 본문이나 C2로 채택하지 않는다.
+
+재시도와 조회
+기존 미션 read/read_bytes의 한 번짜리 명시적 retry만 유지한다. 실제 timeout과 종료 확인이
+모두 저장된 경우만 허용한다. 일반 Python TimeoutError나 parser가 적은 error_type만으로
+재시도를 허용하지 않는다. 오래된 종료 미확인 retry 기록도 자동 실행 권한이 아니다.
+같은 대화의 동일 image target/range가 결과 미저장 또는 completion_unknown이면 alias를
+바꿔도 새로운 backend를 시작하지 않는다. reason/무관 입력/기본값 표현으로 우회하지 않는다.
+다른 실제 범위는 자동 차단하지 않는다. 기존 미션의 owner/version/정확 입력 계약도 유지한다.
+reporting(execution, started_id)는 기존 events만 읽어 반환/저장 여부와 source lookup을 제공한다.
+현재 프로세스 생존이나 모델 전달 성공을 조회했다고 주장하지 않는다. 새 status worker도 없다.
+결과 commit 예외는 정확한 started_id와 execution_call을 반환한다. commit 후 응답 유실도
+보존 결과를 찾아 해결하며, 결과 조회가 원래 실행의 성공 반환인 것처럼 결속되지 않는다.
+
+비교와 보고
+비교용 projection에서는 새 container ID만 제거하고 종료 상태/cleanup/error/본문을 보존한다.
+이 정규화는 실제 원장·C1/C2·관측 내용을 변경하지 않는다. execution 조회는 반복 가능한 poll이다.
+status/receipt/파일 생성은 조사 성공이 아니다. 미상 상태를 running 또는 terminated로 추정하지 않는다.
+
+검증과 한계
+합성 wrapper fixture는 실제 invoke/원장/registry와 timeout·cleanup·JSON·취소·commit 유실을
+검증한다. 안전한 합성 Python subprocess의 반환도 검사한다. 실제 E01 parser 정확성,
+Docker daemon 장애 하의 종료, 채널별 native 취소, 모델의 다음 행동은 별도 운영 관측이다.
+P1 E2E가 실행 중이면 파일을 교체하지 않는다. P2 후보 통과와 배포를 별도 영수증으로 기록한다.
+P3 압축/비용, P4 전문 parser 확장, P5 대체 엔진·독립 holdout 검증은 이 묶음의 완료 항목이 아니다.
+미상 작업의 자동 재개/자동 재시도, 모든 도구의 cancellation 보장을 선언하지 않는다.

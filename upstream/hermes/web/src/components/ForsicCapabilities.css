@@ -1,0 +1,38 @@
+.forsic-capabilities {display:flex;flex-direction:column;gap:12px;color:var(--forsic-text)}
+.forsic-capabilities-scope {display:flex;flex-direction:column;gap:5px}
+.forsic-capabilities-scope span,.forsic-capabilities-actions>span {font-size:11px;color:var(--forsic-muted)}
+.forsic-capabilities-preset {display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;font-weight:600}
+.forsic-capabilities select,.forsic-capabilities button {border:1px solid var(--forsic-border);border-radius:7px;background:var(--forsic-inset);color:inherit;padding:7px 10px;font:inherit}
+.forsic-capabilities select {min-width:145px;font-size:12px}
+.forsic-capabilities button:disabled,.forsic-capabilities select:disabled {opacity:.45;cursor:not-allowed}
+.forsic-capabilities button:focus-visible,.forsic-capabilities select:focus-visible {outline:2px solid #aaa;outline-offset:3px}
+.forsic-capabilities-actions,.forsic-capabilities-actions>div,.forsic-capabilities-search {display:flex;align-items:center;justify-content:space-between;gap:8px}
+.forsic-capabilities-actions {border-block:1px solid var(--forsic-border);padding:12px 0;font-size:12px}
+.forsic-capabilities .forsic-capabilities-save {background:#d4d4d4;color:#202020;border-color:#d4d4d4;font-weight:600}
+.forsic-capabilities-search .forsic-catalogue-search {flex:1;min-width:0;margin:0}
+.forsic-capabilities .forsic-capability {margin:0;padding:14px;border:1px solid var(--forsic-border);border-radius:10px}
+.forsic-capabilities .forsic-capability[data-enabled=false] {background:rgba(128,128,128,.04)}
+.forsic-capabilities-switch {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
+.forsic-capabilities-switch>span {display:flex;gap:5px;align-items:center;color:var(--forsic-muted);font-size:11px}
+.forsic-capabilities-switch button {padding:3px;width:36px;height:22px;border-radius:20px;background:#444;flex-shrink:0}
+.forsic-capabilities-switch button span {display:block;width:14px;height:14px;border-radius:50%;background:#aaa;transition:transform .12s}
+.forsic-capabilities-switch button[aria-checked=true] {background:#aaa}
+.forsic-capabilities-switch button[aria-checked=true] span {background:#252525;transform:translateX(12px)}
+@media (prefers-reduced-motion:reduce) {.forsic-capabilities-switch button span {transition:none}}
+
+.forsic-capabilities {font-size:14px;line-height:1.8;gap:16px;}
+.forsic-capabilities-scope > strong {font-size:19px;font-weight:650;}
+.forsic-capabilities-scope > span,.forsic-capabilities-actions > span {font-size:13px;line-height:1.7;}
+.forsic-capabilities .forsic-capability {padding:18px;background:var(--forsic-surface);}
+.forsic-capabilities .forsic-capability-heading {display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
+.forsic-capabilities .forsic-capability-heading > strong {font-size:16px;line-height:1.65;}
+.forsic-capabilities .forsic-capability-state {flex-shrink:0;font-size:12px;line-height:1.8;color:var(--forsic-muted);border:1px solid var(--forsic-border);border-radius:20px;padding:1px 8px;}
+.forsic-capabilities .forsic-capability-body > p {font-size:14px;line-height:1.85;margin:10px 0 12px;}
+.forsic-capabilities .forsic-capability-technical {font-size:13px;color:var(--forsic-muted);}
+.forsic-capabilities .forsic-capability-technical > summary {cursor:pointer;min-height:28px;}
+.forsic-capabilities .forsic-capability-technical code {display:block;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0;}
+.forsic-capabilities-switch > span {font-size:12px;}
+.forsic-capabilities button {min-height:36px;}
+.forsic-capabilities .forsic-capabilities-switch button {min-height:24px;height:24px;width:40px;}
+.forsic-capabilities-switch button[aria-checked=true] span {transform:translateX(16px);}
+.forsic-capabilities summary:focus-visible {outline:2px solid var(--forsic-focus);outline-offset:3px;}

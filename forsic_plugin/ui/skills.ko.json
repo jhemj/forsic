@@ -1,0 +1,275 @@
+{
+  "schema": "forsic.ui.skill-copy.v1",
+  "locale": "ko",
+  "baseline_commit": "4d1ded52b510d39f8e650569ca35c80b9da7edf3",
+  "purpose": "UI-only Korean copy; never model prompt or canonical skill registry metadata.",
+  "skills": {
+    "forensic-investigation": {
+      "display_name": "종합 침해 조사",
+      "description": "조사 범위와 우선순위를 정하고, 확인한 근거에 따라 다음 검사와 종결 범위를 판단합니다.",
+      "category": "조사 운영",
+      "search_terms": [
+        "침해",
+        "종합",
+        "조사"
+      ],
+      "source_description_sha256": "03b728b8c1a29b09e91cdc547b767e8ebca973c286a906e485040b4bf944e9f4"
+    },
+    "evidence-intake": {
+      "display_name": "증거 접수·검증",
+      "description": "새 증거의 조사 범위, 이미지 형식, 분할 파일 구성과 무결성을 확인합니다.",
+      "category": "증거 확인",
+      "search_terms": [
+        "접수",
+        "이미지",
+        "무결성"
+      ],
+      "source_description_sha256": "4e0ee411779354653a390e1872ac5157a2a06ca0fb35e7e39e34f9c3d616962c"
+    },
+    "source-triage": {
+      "display_name": "증거 선별",
+      "description": "Linux 이미지와 추출 자료에서 현재 질문에 필요한 로그, 자동 실행 설정과 파일 흔적을 찾습니다.",
+      "category": "증거 확인",
+      "search_terms": [
+        "로그",
+        "선별",
+        "리눅스"
+      ],
+      "source_description_sha256": "e6a33bc34ab5e69a152e12dc79b96761b2aa282715e11dce7ca39917d082db9b"
+    },
+    "inspect-documents": {
+      "display_name": "문서 내용 확인",
+      "description": "사건의 Office·CSV 문서를 정적으로 읽고, PDF 등 별도 파서가 필요한 형식의 추출 한계를 구분합니다.",
+      "category": "자료 분석",
+      "search_terms": [
+        "문서",
+        "오피스",
+        "CSV",
+        "PDF"
+      ],
+      "source_description_sha256": "24264e02383fefd2fb26604458c2789e438fb745aa0ca953a6d500ea5df01147"
+    },
+    "inspect-scripts": {
+      "display_name": "스크립트 분석",
+      "description": "증거 속 셸·Python·JavaScript와 실행 설정을 읽고, 가능한 동작과 실제 실행 흔적을 구분합니다.",
+      "category": "자료 분석",
+      "search_terms": [
+        "스크립트",
+        "명령",
+        "정적 분석"
+      ],
+      "source_description_sha256": "bfe8ccd0620bfd8fae1cf56558c9f1cf5aaf1f3bbc35288fa5c017e7d59beefc"
+    },
+    "test-hypothesis": {
+      "display_name": "가설 비교",
+      "description": "불완전한 근거에서도 여러 설명을 비교하고, 현재 판단을 바꿀 수 있는 다음 검사를 선택합니다.",
+      "category": "조사 운영",
+      "search_terms": [
+        "가설",
+        "반론",
+        "판별"
+      ],
+      "source_description_sha256": "d2d7153f52ae2b0a2dc69e6d98233c4b0a2ede70735424887a1b7bde848015c9"
+    },
+    "correlate-time": {
+      "display_name": "시각 대조",
+      "description": "원문에 기록된 시각·시간 관계와 추정 사건 구간을 나누고, 추정의 가정을 함께 기록합니다.",
+      "category": "사건 재구성",
+      "search_terms": [
+        "시각",
+        "시간",
+        "타임라인"
+      ],
+      "source_description_sha256": "cc7574aa28d6a32848fa31289fbdd5190f6a3be57db6a0fd9acf724b388bbfd2"
+    },
+    "answer-question": {
+      "display_name": "판단·근거 기록",
+      "description": "현재 질문의 답과 근거, 반론, 한계, 정정 및 범위 종결을 같은 질문 기록에 저장합니다.",
+      "category": "조사 운영",
+      "search_terms": [
+        "답변",
+        "판단",
+        "정정"
+      ],
+      "source_description_sha256": "204d7314b9185fb22e5d5595f6f2150c544ce9f36c9698b3cad433873ce2cc8c"
+    },
+    "review-conclusions": {
+      "display_name": "결론 검토",
+      "description": "중요한 결론의 관측 정확성, 추론 연결과 경쟁 설명을 확인하고 같은 조사에서 정정합니다.",
+      "category": "조사 운영",
+      "search_terms": [
+        "결론",
+        "검토",
+        "재검증"
+      ],
+      "source_description_sha256": "ea7fc7111b6e2029ff70e2bbc85e46f9398379d254433324c62ee54099999f8a"
+    },
+    "forsic-report-driven": {
+      "display_name": "통합보고서 작성",
+      "description": "공유된 조사 설명과 정확한 근거로 읽기 쉬운 한국어 통합 HTML 보고서를 작성하고, 요청 시 같은 버전의 Word 문서를 만듭니다.",
+      "category": "보고·사례",
+      "search_terms": [
+        "보고서",
+        "워드",
+        "HTML"
+      ],
+      "source_description_sha256": "4427ab6511ed915845dfa05566a1e0bff69d8d315e58919e1e9238b018e9baef"
+    },
+    "threat-intelligence": {
+      "display_name": "위협 평판 대조",
+      "description": "파일 해시나 허용된 공인 IP·도메인의 GTI·VirusTotal 평판을 조회해 사건 원문과 대조합니다. 파일 업로드·URL 재검사는 하지 않습니다.",
+      "category": "탐지·대조",
+      "search_terms": [
+        "평판",
+        "GTI",
+        "VirusTotal"
+      ],
+      "source_description_sha256": "c9a34d23084d919666437f27dbe036f6bd37161348bd98b45e9db698db6258cf"
+    },
+    "executive-followup": {
+      "display_name": "보고서 후속 질문",
+      "description": "현재 보고서나 답변에서 남은 핵심 질문을 골라 기존 근거 확인과 필요한 재조사로 연결합니다.",
+      "category": "보고·사례",
+      "search_terms": [
+        "후속 질문",
+        "임원",
+        "재조사"
+      ],
+      "source_description_sha256": "7007d5e9cf6b3fed544dbc5a14f537f10918e3b58ff05dd648b5c50fca3f0b70"
+    },
+    "organize-indicators": {
+      "display_name": "관측 지표 정리",
+      "description": "사건에서 확인한 주소·해시·경로·계정을 출처와 함께 정리하고, 사건 관련성과 외부 평판을 구분합니다.",
+      "category": "사건 재구성",
+      "search_terms": [
+        "IOC",
+        "지표",
+        "해시"
+      ],
+      "source_description_sha256": "4d61619d0407808ed13714162abf55a2d89298889c5de1336c14e4711311d6d6"
+    },
+    "personal-data-scope": {
+      "display_name": "개인정보 보유·영향 조사",
+      "description": "개인정보 보유, 접근, 외부 반출을 나누어 조사하고 확인한 표본과 미검토 범위를 정리합니다.",
+      "category": "영향 조사",
+      "search_terms": [
+        "개인정보",
+        "보유",
+        "피해"
+      ],
+      "source_description_sha256": "735e85888b50bcc63d1865a21995442419e7a6873eb5423acab18b74e795dfe3"
+    },
+    "initial-access": {
+      "display_name": "최초 침입 경로 조사",
+      "description": "인증·서비스·파일 기록을 대조해 최초 접근 경로를 조사하고, 최초 관측과 실제 침입 시각을 구분합니다.",
+      "category": "사건 재구성",
+      "search_terms": [
+        "침입",
+        "진입",
+        "초기 접근"
+      ],
+      "source_description_sha256": "bece599b430fab22dcb2d2a445831886530ed13d8401711264a0eceb27ec9a5c"
+    },
+    "data-movement": {
+      "display_name": "자료 이동·반출 조사",
+      "description": "파일 복사·압축·통신 기록에서 전송 시도와 성공, 실제 전송 내용을 구분하고 정상 업무 전송 가능성을 확인합니다.",
+      "category": "영향 조사",
+      "search_terms": [
+        "반출",
+        "유출",
+        "전송"
+      ],
+      "source_description_sha256": "02ec25699dbf9524b35b6da616d7990cae225604ae9f6040bf3220f475e228af"
+    },
+    "inspect-artifacts": {
+      "display_name": "운영체제 흔적 분석",
+      "description": "Dissect와 확인된 보조 도구로 Windows 실행 흔적·레지스트리 및 Linux 인증·로그인 기록을 읽고 출처와 해석 범위를 남깁니다.",
+      "category": "자료 분석",
+      "search_terms": [
+        "아티팩트",
+        "레지스트리",
+        "로그인"
+      ],
+      "source_description_sha256": "263ad5dff6481b4ce27fafc787e793807533b035fa34eb3d1d0c0282786431ce"
+    },
+    "investigation-recipes": {
+      "display_name": "질문별 조사 절차",
+      "description": "DFIQ 질문을 참고한 선택형 조사 절차를 현재 질문에 적용하고 기존 도구·증거·판단 기록과 연결합니다.",
+      "category": "조사 운영",
+      "search_terms": [
+        "DFIQ",
+        "절차",
+        "방법론"
+      ],
+      "source_description_sha256": "d73489f95c2d0ac0c353546f0c945640c5ad827fad691c2b33b41c065d1d0b15"
+    },
+    "query-structured-logs": {
+      "display_name": "구조화 로그 조회",
+      "description": "CSV·JSONL 로그를 오프라인 SQL로 집계·결합하고 입력 해시, 원문 위치와 처리 실패 범위를 보존합니다.",
+      "category": "자료 분석",
+      "search_terms": [
+        "SQL",
+        "DuckDB",
+        "집계",
+        "CSV"
+      ],
+      "source_description_sha256": "eeee45afabc05320cd4ee466130e2e4ed51ba026f60500324e8e5105f6a52123"
+    },
+    "scan-windows-events": {
+      "display_name": "Windows 이벤트 탐지",
+      "description": "선택한 EVTX를 Hayabusa 규칙으로 검사해 조사 후보를 찾고, 원래 이벤트와 탐지 규칙을 다시 확인합니다.",
+      "category": "탐지·대조",
+      "search_terms": [
+        "EVTX",
+        "Hayabusa",
+        "윈도우"
+      ],
+      "source_description_sha256": "e5c541f874e50509f4eb08e2b4df4768954da43d5471d280c90e9ccc3d608406"
+    },
+    "scan-file-rules": {
+      "display_name": "파일 규칙 탐지",
+      "description": "선택한 파일을 로컬 YARA-X 규칙으로 검사하고 일치 위치와 실제 바이트를 확인합니다. 탐지만으로 악성을 확정하지 않습니다.",
+      "category": "탐지·대조",
+      "search_terms": [
+        "YARA",
+        "파일",
+        "규칙"
+      ],
+      "source_description_sha256": "c1c6d9c4056ab407c59e0576b87d2b7dbd79c71f2cdaf8684c36f29f765b5b51"
+    },
+    "import-timeline": {
+      "display_name": "타임라인 추출",
+      "description": "Plaso로 선택 파일의 시간 정보를 추출하고 원문·변환 이력을 보존해 필요한 사건만 기존 시간축에 연결합니다.",
+      "category": "사건 재구성",
+      "search_terms": [
+        "Plaso",
+        "타임라인",
+        "시간축"
+      ],
+      "source_description_sha256": "78442c521e1ea21ea7eb0db6aea3fffcfbb2bdddf46e24495bd3eb7a4937eef9"
+    },
+    "consult-previous-cases": {
+      "display_name": "과거 사례 참고",
+      "description": "보관한 과거 사례에서 현재 질문에 도움이 되는 조사 방법·근거·반론을 찾아 비교합니다.",
+      "category": "보고·사례",
+      "search_terms": [
+        "사례",
+        "과거",
+        "경험"
+      ],
+      "source_description_sha256": "5f22c0904faef2c4e1ae25843f285bb8ff4d8d52290149a380726de9cb6ecea7"
+    },
+    "scan-sensitive-data": {
+      "display_name": "자격증명·개인정보 탐지",
+      "description": "선택한 증거에서 자격증명과 한국 개인정보 후보를 오프라인으로 찾고, 검사 범위와 사건 판단을 구분합니다.",
+      "category": "탐지·대조",
+      "search_terms": [
+        "민감정보",
+        "토큰",
+        "개인정보",
+        "비밀번호"
+      ],
+      "source_description_sha256": "4ad0cc42bcc8184c4918115f941aecb65078db7089a13ee8eb76fe5295f4435d"
+    }
+  }
+}

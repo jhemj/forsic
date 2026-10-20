@@ -1,0 +1,18 @@
+name: forsic
+label: Forsic
+description: Quiet gray investigation workspace.
+layoutVariant: cockpit
+terminalBackground: '#1d2027'
+terminalForeground: '#e5e7eb'
+palette:
+  background: '#202127'
+  midground: '#dedee5'
+  foreground: {hex: '#ffffff', alpha: 0}
+  warmGlow: 'rgba(0,0,0,0)'
+  noiseOpacity: 0
+typography:
+  fontSans: 'system-ui, sans-serif'
+  fontMono: 'ui-monospace, monospace'
+  baseSize: '14px'
+  lineHeight: '1.65'
+layout: {radius: '0.8rem', density: comfortable}

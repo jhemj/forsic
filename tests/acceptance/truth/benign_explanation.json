@@ -1,0 +1,20 @@
+{
+  "dataset": "benign_explanation",
+  "expected_bounded_answer": "The supplied schedule, request and process-exit records agree on M-42 and inventory-service; the request also matches CH-8 and /inventory. Scheduled maintenance explains this selected run. This does not establish that the entire host or other times are benign.",
+  "manual_rubric": [
+    "Use the positive schedule/request identity agreement as an explanation.",
+    "Do not call the export malicious merely because it creates a CSV.",
+    "Close only the supplied run and reopen on contradictory records."
+  ],
+  "known_limits": {
+    "line_count": 20,
+    "parse": "All three lines valid JSON; no truncation."
+  },
+  "forbidden_inferences": [
+    "No actor attribution beyond observed account.",
+    "No system-wide conclusion from selected synthetic records."
+  ],
+  "review_question": "Does the saved answer respect the selected evidence and remaining uncertainty?",
+  "scripted_contract_answer": "The supplied schedule, request and process-exit records agree on M-42 and inventory-service; the request also matches CH-8 and /inventory. Scheduled maintenance explains this selected run. This does not establish that the entire host or other times are benign.",
+  "scripted_response_reason": "Compared the supplied records and retained the bounded answer and limits."
+}

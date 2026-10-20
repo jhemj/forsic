@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "status": "prepared_contract_only",
+  "model_behavior": "not_run",
+  "source": "Original synthetic records authored for this repository; no real evidence or imported dataset.",
+  "license": "CC0-1.0",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "separation": "Only inputs/<id>/ is model-visible; truth/, README.md and manifest.json are evaluator-only.",
+  "datasets": [
+    {
+      "id": "discriminating_clue",
+      "scenario_ids": [
+        "S04"
+      ],
+      "limits": {
+        "line_count": 20,
+        "parse": "All three lines valid JSON; no truncation."
+      },
+      "source": "repository-authored synthetic",
+      "license": "CC0-1.0",
+      "files": [
+        {
+          "path": "inputs/discriminating_clue/records.jsonl",
+          "bytes": 382,
+          "sha256": "8dd528d85140b398851c5c6b56407715b50d9370ccb4d35220d6fdac097ba6d4",
+          "role": "model_input"
+        },
+        {
+          "path": "inputs/discriminating_clue/question.txt",
+          "bytes": 125,
+          "sha256": "685bfdcb5ffe19013d70cb00fb827126a6a873d5b12247fd88e58bf7fa496afe",
+          "role": "model_input"
+        },
+        {
+          "path": "truth/discriminating_clue.json",
+          "bytes": 1237,
+          "sha256": "566809f460ef3c2bc18a8d4f5eaa1a7fd0bed25b0e45a9ff6be77577e788cb36",
+          "role": "truth"
+        }
+      ],
+      "scenario_mapping_limit": "Illustrative preparation for related rubric dimensions, not complete scenario coverage."
+    },
+    {
+      "id": "benign_explanation",
+      "scenario_ids": [
+        "S07"
+      ],
+      "limits": {
+        "line_count": 20,
+        "parse": "All three lines valid JSON; no truncation."
+      },
+      "source": "repository-authored synthetic",
+      "license": "CC0-1.0",
+      "files": [
+        {
+          "path": "inputs/benign_explanation/records.jsonl",
+          "bytes": 464,
+          "sha256": "d35c338a77df3fdb90bbd91221d1b1475d1185758f1ea16f77bdf0f03a6c57b6",
+          "role": "model_input"
+        },
+        {
+          "path": "inputs/benign_explanation/question.txt",
+          "bytes": 138,
+          "sha256": "cb52884e11d41b7e3fe971193416137272a2c6dd420ad134545d7a70896a185e",
+          "role": "model_input"
+        },
+        {
+          "path": "truth/benign_explanation.json",
+          "bytes": 1340,
+          "sha256": "1918e557d15240f5293be84a107fc31af8c966fb8520f3ff2e9f0561b90bce85",
+          "role": "truth"
+        }
+      ],
+      "scenario_mapping_limit": "Illustrative preparation for related rubric dimensions, not complete scenario coverage."
+    },
+    {
+      "id": "partial_range",
+      "scenario_ids": [
+        "S05"
+      ],
+      "limits": {
+        "line_count": 2,
+        "parse": "Line 2 deliberately invalid JSON; line 3 outside initial range. Further authorized reads may resolve the gap."
+      },
+      "source": "repository-authored synthetic",
+      "license": "CC0-1.0",
+      "files": [
+        {
+          "path": "inputs/partial_range/records.jsonl",
+          "bytes": 191,
+          "sha256": "a536f994d739a404c26ecbe6f554f4644f30764f3c2064da77596a32badb616e",
+          "role": "model_input"
+        },
+        {
+          "path": "inputs/partial_range/question.txt",
+          "bytes": 135,
+          "sha256": "795632a42e1924205214d720c280b4f6a5430e512eed5164abc530bc8af06039",
+          "role": "model_input"
+        },
+        {
+          "path": "truth/partial_range.json",
+          "bytes": 1439,
+          "sha256": "15e0c26f74503b2b8a9069dbe5207027f7abfb369f50093145d041d3a718e9ab",
+          "role": "truth"
+        }
+      ],
+      "scenario_mapping_limit": "Illustrative preparation for related rubric dimensions, not complete scenario coverage."
+    }
+  ]
+}
