@@ -54,6 +54,16 @@ class IndependentReviewFinalizationTests(unittest.TestCase):
         self.assertEqual(result['delivery_status'], 'independent_review_required')
         self.assertEqual(self.selected(), [])
 
+    def test_required_executive_rounds_cannot_be_replaced_by_availability_disclosure(self):
+        self.context.update(executive_followup_required=True, attempt={'status':'unavailable'})
+        self.review.update(status='not_reviewed', final_review_current=False,
+                           latest_final_review_id='', latest_final_status=None)
+        report=self.rendered()
+        result=finalize(self.case,self.state,report['bundle_id'],review_context=self.context)
+        self.assertEqual(result['delivery_status'],'independent_review_incomplete')
+        self.assertTrue(result['draft_preserved'])
+        self.assertEqual(self.selected(),[])
+
     def test_new_receipt_or_disposition_requires_report_rerender(self):
         report = self.rendered()
         self.review.update(review_id='review-final-2', latest_final_review_id='review-final-2')

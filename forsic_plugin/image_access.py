@@ -33,6 +33,25 @@ def evidence_image(image, root=Path('/evidence')):
     return resolved
 
 
+def destination_path(destination, work_root=Path('/work')):
+    """Anchor relative exports to /work without resolving through symlinks."""
+    raw = os.fspath(destination)
+    if not isinstance(raw, str) or not raw.strip() or '\x00' in raw:
+        raise ValueError('Destination must name a new file under /work')
+    path, root = Path(raw), Path(work_root)
+    if '..' in path.parts or not root.is_absolute():
+        raise ValueError('Destination must be a new path under /work; parent traversal is unsupported')
+    if not path.is_absolute():
+        path = root / path
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        raise ValueError('Destination must be a new path under /work') from None
+    if not relative.parts:
+        raise ValueError('Destination must name a new file under /work')
+    return path
+
+
 @contextmanager
 def new_destination(destination, work_root=Path('/work')):
     """Create exclusively through pinned directories without following symlinks.
@@ -40,15 +59,8 @@ def new_destination(destination, work_root=Path('/work')):
     Parents must already exist. On failure unlink only our inode in its pinned
     parent; a preexisting or replacement file must never be removed.
     """
-    path, root = Path(destination), Path(work_root)
-    if not path.is_absolute() or '..' in path.parts:
-        raise ValueError('Destination must be a new absolute path under /work')
-    try:
-        relative = path.relative_to(root)
-    except ValueError:
-        raise ValueError('Destination must be a new absolute path under /work') from None
-    if not relative.parts:
-        raise ValueError('Destination must name a new file under /work')
+    path, root = destination_path(destination, work_root), Path(work_root)
+    relative = path.relative_to(root)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     with ExitStack() as stack:
         parent = os.open(root, flags)
@@ -79,11 +91,17 @@ def export_file(image, args, *, work_root=Path('/work')):
         raise ValueError('export requires an explicit --file-path inside the image')
     destination = args.get('destination')
     if not isinstance(destination, str) or not destination:
-        raise ValueError('export requires --destination /work/NEW_FILE')
+        raise ValueError('export requires --destination NEW_FILE or /work/NEW_FILE')
     limit = args.get('max_bytes', EXPORT_LIMIT)
     if type(limit) is not int or not 0 < limit <= EXPORT_LIMIT:
         raise ValueError(f'export max_bytes must be an integer from 1 to {EXPORT_LIMIT}')
     digest, count = hashlib.sha256(), 0
+    try:
+        destination = str(destination_path(destination, work_root))
+    except ValueError as exc:
+        raise ExportError(str(exc), {'destination': destination, 'derived': True, 'bytes': 0,
+                                    'sha256': digest.hexdigest(), 'hash_scope': 'exported_bytes',
+                                    'complete': False, 'complete_file': False}) from exc
     with ExitStack() as image_stack:
         opened = image_stack.enter_context(open_image(image))
         volume, fs = opened.filesystem(args.get('volume_offset'))
@@ -147,7 +165,8 @@ def parser():
     result.add_argument('--max-bytes', type=int, help='search/export byte limit; export default and maximum 256 MiB')
     result.add_argument('--max-matches', type=int, help='search: match limit')
     result.add_argument('--max-seconds', type=float, help='search: time limit')
-    result.add_argument('--destination', help='export: NEW /work/... file; parent must exist; no overwrite or symlinks')
+    result.add_argument('--destination', help='export: NEW file relative to /work or absolute /work/...; '
+                        'parent must exist; no overwrite, parent traversal, or symlinks')
     return result
 
 

@@ -96,6 +96,16 @@ def page(value, path, args, envelope):
     if not isinstance(value, (list, dict)):
         if offset:
             raise ValueError('Scalar values have no record offset')
+        if type(value) in (int, float) and envelope.get('source_ref'):
+            from .retained_scalar import number_literal, number_identity, NUMBER_COORDINATES
+            text = number_literal(value)
+            numeric = {**result, 'value': value, 'text': text, 'byte_start': 0, 'byte_end': len(text.encode()),
+                    'total_bytes': len(text.encode()), 'full_field': True,
+                    'retained_scalar': number_identity(value), 'coordinate_basis': NUMBER_COORDINATES,
+                    'next_offset': None, 'complete_value': True}
+            if size(numeric) > MAX_BYTES:
+                raise ValueError('Whole numeric scalar exceeds source page budget; no partial number was returned')
+            return numeric
         return {**result, 'value': value, 'next_offset': None, 'complete_value': True}
     entries = list(value.items()) if isinstance(value, dict) else list(enumerate(value))
     if offset > len(entries):
@@ -370,15 +380,16 @@ def source_view(source, data, args, *, include_acquisition_context=True, include
                         source_input_contract=('Copy source_handle or returned read_call/next_call to reuse this exact retained id/version. Omit pointer for discovery; explicit pointer="" reads the retained root. Pointer/paging require source_handle or source_id+source_version. Explicit conflicting id/version is rejected.' if handle else 'Omit pointer for discovery (offset absent or 0). Explicit pointer="" reads the retained root and requires source_version, as does any pointer or nonzero offset page.'))
     from .source_locator import retained_coverage
     envelope['retained_coverage'] = retained_coverage(source)
-    from .measurement import measurement_view, acquisition_context
+    from .measurement import measurement_view
+    from .retained_scalar import citation_context
     if include_acquisition_context:
         envelope['presentation_contract'] = 'acquisition-context-v1'
-        envelope['acquisition_context'] = acquisition_context(data, args.get('pointer', ''))
+        envelope['acquisition_context'] = citation_context(data, args.get('pointer', ''))
     measurement=measurement_view(data)
     if measurement:envelope['measurement']=measurement
-    original = {**envelope, 'source': source, 'result': data}
-    if not continuation and size(original) <= MAX_BYTES:
-        return original
+    # Discovery uses the same child navigation as larger retained results.
+    # A raw result envelope hid exact read calls for small numeric metadata and
+    # empty-search coverage, even though explicit scalar pages supported C1.
     path = args.get('pointer', '')
     selected = select_source(source, data, path, args, handle)
     if not include_continuation:

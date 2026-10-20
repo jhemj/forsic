@@ -1,6 +1,7 @@
 """Actual native plugin registration, scoped menus and skill reads; synthetic only."""
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
+import ast
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from forsic_plugin import register
-from forsic_plugin.capability_policy import SKILLS, TOOLS, save as save_preferences
+from forsic_plugin.capability_policy import CORE_TOOLS, SKILLS, TOOLS, save as save_preferences
 from hermes_cli import plugins
 from hermes_cli.config import read_user_config_raw, save_config
 from hermes_cli.plugins_state import save_plugin_setting
@@ -89,6 +90,50 @@ class NativeCapabilityTests(unittest.TestCase):
         branches = {branch['title'] for branch in mission['tool_arguments']['anyOf']}
         self.assertEqual('forsic_shell' in branches, enabled)
         self.assertEqual(branches, set(mission['tool_name']['enum']))
+
+    def test_launcher_pin_reaches_native_toolset_loader_without_broadening_menu(self):
+        from types import SimpleNamespace
+        from model_tools import get_tool_definitions
+        from tui_gateway import server
+        launcher = Path(__file__).with_name('run.py')
+        tree = ast.parse(launcher.read_text(),filename=str(launcher))
+        assignments = [node for node in tree.body if isinstance(node,ast.Assign) and any(
+            isinstance(target,ast.Subscript) and isinstance(target.value,ast.Attribute) and
+            isinstance(target.value.value,ast.Name) and target.value.value.id == 'os' and
+            target.value.attr == 'environ' and isinstance(target.slice,ast.Constant) and
+            target.slice.value == 'HERMES_TUI_TOOLSETS' for target in node.targets)]
+        self.assertEqual(len(assignments),1,'Launcher must declare its native menu pin explicitly')
+        # Execute the actual pin assignment without importing/launching run.py.
+        environment = {}
+        pin_module = ast.Module(body=assignments,type_ignores=[])
+        exec(compile(pin_module,str(launcher),'exec'),{'os':SimpleNamespace(environ=environment)})
+        with self.current_home('a'), patch.dict(os.environ,environment):
+            enabled = server._load_enabled_toolsets(platform='web')
+            selected = get_tool_definitions(enabled_toolsets=enabled,
+                disabled_toolsets=server._load_disabled_toolsets(),quiet_mode=True,
+                skip_tool_search_assembly=True)
+        names = {item['function']['name'] for item in selected}
+        self.assertIn('clarify',names)
+        self.assertTrue(set(TOOLS).issubset(names))
+        self.assertEqual(names-(set(TOOLS)|{'clarify','memory'}),set())
+
+    def test_native_clarify_is_opt_in_and_remains_outside_forsic_evidence_missions(self):
+        from model_tools import get_tool_definitions
+        from tools.clarify_tool import CLARIFY_SCHEMA
+        with self.current_home('a'):
+            baseline = self.menu()
+            self.assertNotIn('clarify',baseline)
+            self.write(target_os='all',tools={name:False for name in TOOLS if name not in CORE_TOOLS},skills={})
+            selected = get_tool_definitions(enabled_toolsets=['forsic','clarify'],quiet_mode=True,
+                skip_tool_search_assembly=True)
+            menu = {item['function']['name']:item['function'] for item in selected}
+            self.assertEqual(menu['clarify'],CLARIFY_SCHEMA)
+            self.assertNotIn('clarify',TOOLS)
+            self.assertNotIn('clarify',baseline['forsic_mission']['parameters']['properties']['tool_name']['enum'])
+            self.assertFalse(any(name in menu for name in ('terminal','execute_code','web_search','delegate_task')))
+            disabled = get_tool_definitions(enabled_toolsets=['forsic','clarify'],disabled_toolsets=['clarify'],
+                quiet_mode=True,skip_tool_search_assembly=True)
+            self.assertNotIn('clarify',{item['function']['name'] for item in disabled})
 
     def test_config_changes_filter_and_restore_same_registered_tools_and_skills(self):
         with self.current_home('a'):
@@ -249,6 +294,70 @@ class NativePluginSettingWriterTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             save_plugin_setting('forsic', ('capabilities',), {}, replace=True)
         self.assertEqual(path.read_bytes(), corrupt)
+
+
+
+
+
+class NativeClarifyExecutionTests(unittest.TestCase):
+    def test_inline_clarify_preserves_callback_outcomes_and_keyboard_interrupt(self):
+        from types import SimpleNamespace
+        from agent.inline_tool_executors import INLINE_TOOL_EXECUTORS, InlineToolContext
+        args = {'questions':[{'question':'합성 조사 범위를 선택해주세요','choices':['한 호스트','두 호스트']}]}
+        context = InlineToolContext(effective_task_id='synthetic-session',tool_call_id='call-clarify',messages=[])
+        callback = unittest.mock.Mock(return_value={'answers':{'q0':'한 호스트'},'outcome':'answered'})
+        agent = SimpleNamespace(clarify_callback=callback)
+        execute = INLINE_TOOL_EXECUTORS['clarify']
+        result = json.loads(execute(agent,args,context))
+        self.assertEqual(callback.call_args.args[0][0]['qid'],'q0')
+        self.assertEqual(result['responses'][0]['user_response'],'한 호스트')
+        for outcome in ('interrupted','undelivered','timeout'):
+            callback.return_value = {'answers':{},'outcome':outcome}
+            result = json.loads(execute(agent,args,context))
+            self.assertEqual(result['outcome'],outcome)
+            self.assertEqual(result['responses'][0]['status'],'unanswered')
+            self.assertIsNone(result['responses'][0]['user_response'])
+        callback.side_effect = KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            execute(agent,args,context)
+
+    def test_sequential_native_clarify_fires_pre_and_terminal_post_with_same_call_identity(self):
+        from types import SimpleNamespace
+        from agent import tool_executor as native
+        seen = []
+        args = {'questions':[{'question':'합성 사용자 확인','choices':['계속','보류']}]}
+        def ask(questions):
+            seen.append(('callback',questions))
+            return {'answers':{'q0':'보류'},'outcome':'answered'}
+        agent = SimpleNamespace(session_id='synthetic-session',_current_turn_id='turn-synthetic',
+            _current_api_request_id='api-synthetic',clarify_callback=ask,
+            _tool_guardrails=SimpleNamespace(before_call=lambda *_:SimpleNamespace(allows_execution=True)))
+        ref = native._ToolCallRef('clarify',args,'synthetic-session','call-native-clarify',[])
+        state = native._ManagedToolResult(None,args,[],False,False)
+        def pre(name,arguments,**identity):
+            seen.append(('pre',name,arguments,identity));return None,None
+        def post(**event):
+            seen.append(('post',event))
+        dispatch = native._resolve_sequential_dispatch(agent,ref,[])
+        with patch('hermes_cli.plugins._dispatch_pre_tool_call_hooks',side_effect=pre), \
+             patch('model_tools._emit_post_tool_call_hook',side_effect=post), \
+             patch.object(native,'_begin_tool_execution'), \
+             patch.object(native,'_run_with_activity_heartbeat',side_effect=lambda _,__,execute:execute()), \
+             patch('agent.terminal_approval_batch.prepare_current_terminal'), \
+             patch.object(native,'apply_transform_tool_result',side_effect=lambda _,**kw:kw['result']), \
+             patch.object(native,'_commit_tool_result',return_value=None):
+            state.result = native._dispatch_authorized_once(agent,state,ref,execute=dispatch.execute,
+                scope_block=None,display_index=None,begin_execution=None,authorization_gate=None)
+            native._publish_sequential_result(agent,[],ref,state,tool_duration=0,index=1,budget=None,
+                transform_applied=dispatch.transform_applied)
+        self.assertEqual([event[0] for event in seen],['pre','callback','post'])
+        pre_ids = seen[0][3]; post_event = seen[2][1]
+        for key,value in {'session_id':'synthetic-session','tool_call_id':'call-native-clarify',
+                          'turn_id':'turn-synthetic','api_request_id':'api-synthetic'}.items():
+            self.assertEqual(pre_ids[key],value)
+            self.assertEqual(post_event[key],value)
+        self.assertEqual(post_event['function_name'],'clarify')
+        self.assertEqual(json.loads(post_event['result'])['responses'][0]['user_response'],'보류')
 
 
 if __name__ == '__main__':

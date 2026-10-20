@@ -177,6 +177,89 @@ def test_legacy_mapping_preserves_bytes_and_repeats(registry):
         resolve_request(profile_name='unknown')
 
 
+def legacy_profile(registry, name):
+    home = registry.home / 'profiles' / name
+    home.mkdir(parents=True)
+    (home / 'config.yaml').write_text(json.dumps({'plugins': {'entries': {'forsic': {
+        'enabled': True, 'settings': {'intake_root': str(home / 'intake'),
+                                     'library_path': str(home / 'library.sqlite3')}}}}}))
+    return home
+
+
+def test_completed_empty_migration_does_not_resurrect_profiles(registry):
+    from forsic_plugin.tenants import _atomic, migrate_workspace
+    profile = legacy_profile(registry, 'old-profile')
+    _atomic(registry.path, {'schema': 1, 'tenants': [], 'operations': {},
+                            'legacy_migration_complete': True})
+    before = {p: p.read_bytes() for p in (registry.path, registry.home / 'config.yaml', profile / 'config.yaml')}
+    for _ in range(2):
+        assert migrate_workspace() == {'tenant_ids': [], 'data_moved': False, 'model_requests': 0}
+        assert registry.list_public() == []
+    assert before == {p: p.read_bytes() for p in before}
+
+
+@pytest.mark.parametrize('completion_marker', [None, False])
+def test_interrupted_migration_resumes_and_preserves_registered_ownership(registry, monkeypatch, completion_marker):
+    from forsic_plugin.tenants import _atomic, migrate_workspace
+    if completion_marker is not None:
+        _atomic(registry.path, {'schema': 1, 'tenants': [], 'operations': {},
+                                'legacy_migration_complete': completion_marker})
+    profile = legacy_profile(registry, 'old-profile')
+    memory = profile / 'memories' / 'MEMORY.md'
+    memory.parent.mkdir()
+    memory.write_bytes(b'synthetic historical memory')
+    original = TenantRegistry.bootstrap_legacy
+
+    def interrupt_named(self, **kwargs):
+        if kwargs.get('profile_name') == 'old-profile':
+            raise OSError('synthetic interrupted migration')
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(TenantRegistry, 'bootstrap_legacy', interrupt_named)
+    with pytest.raises(OSError, match='interrupted migration'):
+        migrate_workspace()
+    partial = registry._load()
+    assert partial.get('legacy_migration_complete') is not True
+    existing = registry.resolve(profile_name='default')
+    bookmark = registry.public(existing)['start_url']
+    monkeypatch.setattr(TenantRegistry, 'bootstrap_legacy', original)
+    result = migrate_workspace()
+    assert result['tenant_ids'] == [existing['tenant_id'], registry.resolve(profile_name='old-profile')['tenant_id']]
+    assert registry._load()['legacy_migration_complete'] is True
+    assert registry.resolve(profile_name='default') == existing
+    assert registry.public(registry.resolve(profile_name='default'))['start_url'] == bookmark
+    assert memory.read_bytes() == b'synthetic historical memory'
+    saved = registry.path.read_bytes()
+    assert migrate_workspace() == result
+    assert registry.path.read_bytes() == saved
+
+    # Completion disables automatic discovery, while explicit import remains possible.
+    later = legacy_profile(registry, 'later-profile')
+    assert migrate_workspace() == result
+    with pytest.raises(LookupError):
+        registry.resolve(profile_name='later-profile')
+    imported = registry.bootstrap_legacy(profile_name='later-profile', profile_home=later)
+    assert imported['tenant_id'] in migrate_workspace()['tenant_ids']
+
+
+def test_migration_completion_preserves_interleaved_create_operation(registry, monkeypatch):
+    from forsic_plugin.tenants import migrate_workspace
+    original = TenantRegistry.bootstrap_legacy
+    created = []
+
+    def create_after_bootstrap(self, **kwargs):
+        result = original(self, **kwargs)
+        created.append(create(self, 'Created during migration'))
+        return result
+
+    monkeypatch.setattr(TenantRegistry, 'bootstrap_legacy', create_after_bootstrap)
+    migrate_workspace()
+    stored = registry._load()
+    assert stored['legacy_migration_complete'] is True
+    assert registry.resolve(tenant_id=created[0]['tenant_id']) == created[0]
+    assert any(op.get('tenant_id') == created[0]['tenant_id'] for op in stored['operations'].values())
+
+
 def test_global_admission_does_not_expose_other_tenant_details(registry, tmp_path):
     from forsic_plugin.investigations import Investigations, InvestigationUnavailable
     a, b = create(registry, 'A'), create(registry, 'B')

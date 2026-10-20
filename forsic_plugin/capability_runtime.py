@@ -85,7 +85,7 @@ def _verify_session(home, session):
     current = list(getattr(agent, 'tools', None) or [])
     name = lambda tool: (tool.get('function') or {}).get('name', '')
     relevant = lambda tools: {name(tool): tool for tool in tools
-                              if name(tool).startswith('forsic_') or name(tool) == 'skills'}
+                              if name(tool).startswith('forsic_') or name(tool) in ('skills', 'clarify')}
     if relevant(current) != relevant(expected):
         return False
     if set(getattr(agent, 'valid_tool_names', ())) != {name(tool) for tool in current}:

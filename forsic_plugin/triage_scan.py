@@ -79,6 +79,8 @@ def rule_metadata(path):
 
 def engine(profile):
     identity = {'helper_sha256': sha(Path(__file__))}
+    if profile == 'linux_persistence':
+        return identity, None
     if profile == 'linux_login_parser':
         parser = Path('/opt/forsic/login_records.py')
         if not parser.is_file():
@@ -165,6 +167,94 @@ def linux(item, request, directory, deadline):
     return scope, candidates
 
 
+# Configuration structure only. Values remain opaque and never become code.
+MAX_PERSISTENCE_LINES = 20000
+CRON_MACROS = frozenset(('@reboot', '@yearly', '@annually', '@monthly', '@weekly', '@daily', '@midnight', '@hourly'))
+
+
+def persistence(item, request, directory, deadline):
+    scope = {'input_id': item['input_id'], 'state': 'complete', 'candidate_count': 0,
+        'counts_complete': True, 'reason_codes': []}
+    candidates = []
+    raw = Path(item['path']).read_bytes()
+    try:
+        if b'\0' in raw:
+            raise UnicodeError()
+        raw.decode('utf-8-sig')
+    except UnicodeError:
+        scope.update(state='skipped', counts_complete=False, reason_codes=['unsupported_encoding'])
+        return scope, candidates
+    fmt = item.get('triage_format')
+    if fmt not in ('cron_user', 'cron_system', 'systemd_unit'):
+        scope.update(state='skipped', counts_complete=False, reason_codes=['unsupported_input'])
+        return scope, candidates
+    offset, section, pending = 0, False, None
+    def partial(reason):
+        scope.update(state='partial', counts_complete=False)
+        if reason not in scope['reason_codes']:
+            scope['reason_codes'].append(reason)
+    def emit(kind, start, end, first, last, empty=False):
+        scope['candidate_count'] += 1
+        if len(candidates) < request['candidate_limit']:
+            candidates.append({'input_id': item['input_id'], 'ordinal': scope['candidate_count'],
+                'entry_kind': kind, 'value_empty': empty, 'byte_start': start, 'byte_end': end,
+                'line_start': first, 'line_end': last})
+    # splitlines() recognizes vertical controls as lines; only LF is a source line.
+    lines = raw.split(b'\n', MAX_PERSISTENCE_LINES)
+    for index, physical in enumerate(lines):
+        if index == len(lines)-1 and not physical:
+            break
+        line = physical + (b'\n' if offset+len(physical) < len(raw) else b'')
+        start, offset = offset, offset+len(line)
+        number = index+1
+        if number > MAX_PERSISTENCE_LINES:
+            partial('line_limit'); break
+        if time.monotonic() >= deadline:
+            partial('deadline_reached'); break
+        text = line.decode('utf-8-sig' if index == 0 else 'utf-8').strip()
+        if any(ord(c) < 32 and c not in '\t\r\n' for c in text):
+            partial('unsupported_syntax'); continue
+        if not text or text.startswith(('#', ';') if fmt == 'systemd_unit' else ('#',)):
+            continue
+        if fmt != 'systemd_unit':
+            if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*\s*=.*', text):
+                continue
+            fields = text.split(None, 1 if fmt == 'cron_user' else 2) if text.startswith('@') else text.split(None, 5 if fmt == 'cron_user' else 6)
+            required = (2 if fmt == 'cron_user' else 3) if text.startswith('@') else (6 if fmt == 'cron_user' else 7)
+            valid = len(fields) == required
+            if text.startswith('@'):
+                valid = valid and fields[0] in CRON_MACROS
+            else:
+                # Syntax subset, not schedule evaluation or dialect inference.
+                valid = valid and all(re.fullmatch(r'[A-Za-z0-9*/?,#~L-]+', field) for field in fields[:5])
+            if valid:
+                emit('cron_macro' if text.startswith('@') else 'cron_schedule', start, offset, number, number)
+            else:
+                partial('unsupported_syntax')
+            continue
+        if pending is not None:
+            # Comments/blank lines above do not terminate a continuation.
+            if text.endswith('\\'):
+                continue
+            emit('systemd_directive', pending[0], offset, pending[1], number, False)
+            pending = None
+            continue
+        if re.fullmatch(r'\[[A-Za-z][A-Za-z0-9]*\]', text):
+            section = True
+            continue
+        match = re.fullmatch(r'([A-Za-z][A-Za-z0-9]*)\s*=(.*)', text)
+        if not section or not match:
+            partial('unsupported_syntax'); continue
+        value = match[2].strip()
+        if value.endswith('\\'):
+            pending = (start, number)
+        else:
+            emit('systemd_directive', start, offset, number, number, not value)
+    if pending is not None:
+        partial('unsupported_syntax')
+    return scope, candidates
+
+
 def windows(item, request, directory, deadline):
     stem = directory/item['input_id']
     scope = {'input_id': item['input_id'], 'state': 'failed', 'candidate_count': 0,
@@ -231,7 +321,7 @@ def execute(request, directory):
             try:
                 if sha(Path(item['path'])) != item['sha256']:
                     raise ValueError('Changed staged bytes')
-                profile = linux if request['profile'] == 'linux_login_parser' else windows
+                profile = {'linux_login_parser': linux, 'linux_persistence': persistence, 'windows_evtx': windows}[request['profile']]
                 scope, candidates = profile(item, parser_request, directory, deadline)
             except (OSError, ValueError, KeyError, TypeError):
                 scope, candidates = {'input_id': item['input_id'], 'state': 'failed', 'candidate_count': 0,

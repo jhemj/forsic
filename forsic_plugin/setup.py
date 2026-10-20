@@ -50,8 +50,12 @@ def local_admin(request):
     # configuration writes on a multiplexed host.
     profiles = request.query_params.getlist('profile')
     served = getattr(getattr(request.scope.get('app'), 'state', None), 'initial_profile', 'default') or 'default'
-    from .tenants import current_scope
-    scope = current_scope()
+    scope = None
+    # request_scope explicitly admits the unselected host setup/tenant gate.
+    # Do not reinterpret that validated None as an unknown active tenant.
+    if not hasattr(request.state, 'forsic_tenant_scope') or request.state.forsic_tenant_scope is not None:
+        from .tenants import current_scope
+        scope = current_scope()
     if scope is not None:
         served = scope['profile_name']
     if any(profile and profile != served for profile in profiles):

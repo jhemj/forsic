@@ -213,6 +213,23 @@ class ReviewDispositionTests(unittest.TestCase):
                 self.assertEqual(state['dispositions'][0]['reason'],answer['reason'])
                 self.assertEqual(len(self.calls),1)
 
+    def test_new_material_checkpoint_does_not_replay_failed_request(self):
+        self.setup_review();self.fake.side_effect=TimeoutError('synthetic unknown delivery')
+        failed=review.goal_advisory_context(**self.kwargs(stage='exploration'))
+        first=self.request_paths()[0]
+        response_path=first.with_name(first.name.replace('-request.json','-response.json'))
+        original=(first.read_bytes(),response_path.read_bytes())
+        self.dispose(failed,'scope_limited',citation_refs=[],
+                     reason='The independent response was not received; the direct investigation remains bounded.')
+        self.add_sources(1)
+        self.fake.side_effect=self.response
+        fresh=review.goal_advisory_context(**self.kwargs(stage='exploration',turns_used=5))
+        self.assertEqual(fresh['status'],'received')
+        self.assertNotEqual(fresh['review_id'],failed['review_id'])
+        self.assertEqual(self.fake.call_count,2)
+        self.assertEqual(len(self.request_paths()),2)
+        self.assertEqual((first.read_bytes(),response_path.read_bytes()),original)
+
     def test_source_correction_requires_grounded_refutation_not_automatic_erasure(self):
         self.setup_review()
         result=review.goal_advisory_context(**self.kwargs())

@@ -24,11 +24,11 @@ auxiliary:
     enabled: false
     model_upgrade_enabled: false
 platform_toolsets:
-  cli: [forsic]
-  api: [forsic]
-  web: [forsic]
-  desktop: [forsic]
-  telegram: [forsic]
+  cli: [forsic, clarify]
+  api: [forsic, clarify]
+  web: [forsic, clarify]
+  desktop: [forsic, clarify]
+  telegram: [forsic, clarify]
 agent:
   # Forsic supplies investigation discipline; omit native coding and generic execution briefs.
   coding_context: 'off'

@@ -1,6 +1,7 @@
 import {fetchJSON} from './api'
 export type MemoryMode = 'off' | 'manual' | 'confirmed_auto'
 export interface Tenant {tenant_id:string;display_name:string;description?:string;profile_name:string;revision:number;memory_policy:{mode:MemoryMode};start_url?:string;new_url?:string;resume_url?:string}
+export interface TenantDirectory {tenants:Tenant[];access:{can_create:boolean;mode:'local'|'restricted'}}
 export interface TenantScope extends Tenant {case_id?:string;session_id?:string}
 let selected: Pick<Tenant,'tenant_id'|'profile_name'> | null = null
 const verifiedProfiles=new Map<string,string>()

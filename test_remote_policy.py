@@ -3,6 +3,7 @@ import asyncio
 from contextlib import closing
 import hashlib
 import json
+import os
 import sqlite3
 from pathlib import Path
 import sys
@@ -21,6 +22,8 @@ class RemotePolicyTest(unittest.IsolatedAsyncioTestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        home_patch=patch.dict(os.environ,{'HERMES_HOME':str(self.root/'home')})
+        home_patch.start();self.addCleanup(home_patch.stop)
         self.settings = {'remote_evidence_directory_only': True, 'intake_root': str(self.root/'intake')}
         self.policy = ForsicRemotePolicy(self.settings, self.root/'home')
         self.manifest = self.root/'intake/cases/synthetic/manifest.json'
@@ -63,7 +66,8 @@ class RemotePolicyTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(sent[0]['status'],403)
 
     async def test_product_routes_and_bound_existing_case_reads_remain_available(self):
-        for method,path in [('GET','/'),('GET','/forsic'),('GET','/assets/product.js'),
+        for method,path in [('GET','/'),('GET','/forsic'),('GET','/tenants'),('GET','/assets/product.js'),
+                            ('GET','/api/plugins/forsic/tenants'),('GET','/api/plugins/forsic/tenants/resolve'),
                             ('GET','/api/dashboard/plugins'),('GET','/fonts-terminal/JetBrainsMono-Regular.woff2'),('GET','/api/tools/toolsets'),
                             ('GET','/api/plugins/forsic/investigations'),('GET','/api/plugins/forsic/evidence-sources'),
                             ('GET','/api/plugins/forsic/investigation-view'),('GET','/api/plugins/forsic/report-bundles/bundle/report.docx'),
@@ -77,6 +81,18 @@ class RemotePolicyTest(unittest.IsolatedAsyncioTestCase):
         reached,sent=await self.http(self.scope('/api/sessions/unbound/messages'))
         self.assertEqual(reached,[])
         self.assertEqual(sent[0]['status'],403)
+
+    async def test_tenant_entry_read_keeps_auth_and_trusted_remote_scope(self):
+        for path in ('/api/plugins/forsic/tenants','/api/plugins/forsic/tenants/resolve'):
+            reached,sent=await self.http(self.scope(path),status=401)
+            self.assertEqual(sent[0]['status'],401)
+            self.assertEqual(reached[0]['state']['forsic_remote_profile'],'default')
+        for method,path in [('POST','/api/plugins/forsic/tenants'),
+                            ('PUT','/api/plugins/forsic/tenants/any/memory-policy'),
+                            ('GET','/api/plugins/forsic/tenant-memory')]:
+            reached,sent=await self.http(self.scope(path,method=method))
+            self.assertFalse(reached)
+            self.assertEqual(sent[0]['status'],403)
 
     async def test_actual_peer_and_fixed_startup_policy_ignore_forged_forwarding(self):
         self.settings['remote_evidence_directory_only']=False

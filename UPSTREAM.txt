@@ -43,6 +43,12 @@ Maintained integration areas
   the deadline during main and auxiliary work. Controls use exact-value CAS and
   expiry callbacks revalidate owning goals so stale writes do not undo a pause.
   Budget exhaustion preserves partial work and never certifies completion.
+- Terminal turn errors persist a pause on the same native goal before an idle
+  runtime can be discarded. The goal identity captured at turn preparation and
+  native exact-value CAS preserve user pauses and replacement goals. Only the
+  classified error layer/code is retained; no raw provider text, extra judge,
+  retry loop or budget reset is introduced. Bounded compression recovery keeps
+  its existing path.
 - Native goal evaluation receives the typed per-turn iteration-limit outcome
   across CLI, messaging and TUI delivery. It still uses the existing judge,
   completion checks, turn budget and pause/CAS fences; no verdict is overridden.

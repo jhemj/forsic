@@ -25,10 +25,30 @@ When selected files match the question, prefer a bounded triage pass over repeat
 manual parsing: `forsic_shell(action="triage", profile="windows_evtx", targets=...)`
 for complete EVTX exports, or `profile="linux_login_parser"` with
 `login_format="linux-glibc-x86-le-384"` for that explicitly verified login ABI.
-Use exact retained source/version/pointer targets; image containers and directories
-are not scan inputs. `capabilities` describes OS/purpose recommendations and limits;
+Each target requires explicit `kind="evidence_file"` (returned selected-file path
+pointer) or `kind="workspace_export"` (the exact returned pointer to a complete export
+receipt), plus `source_handle` or exact `source_id`/`source_version`. Copy a returned
+`retained_export_target` or one `retained_export_targets` entry, including its exact export_line when present;
+it selects a receipt, and admission still
+checks conversation ownership, complete-file status and file hash. `format="text"`
+and `encoding="auto"` are byte-preserving defaults, including EVTX/login binary
+inputs; they are not assertions that the file is text. Do not invent paths, target
+kinds, profile formats or source versions. Image containers and directories are
+not scan inputs. For selected Linux cron/systemd configurations use
+`profile="linux_persistence"`, adding `triage_format="cron_user"`,
+`"cron_system"`, or `"systemd_unit"` to each retained target after identifying its
+actual format. This returns structural configured-entry candidates and exact
+byte/line ranges, without command/value text. Cron system/user forms, standard
+macros, comments/environment lines and systemd repeated/reset/continued directives
+are covered as text structure; values remain opaque. Unsupported syntax or
+encoding, limits and deadlines remain explicit unchecked scope. Configured text
+does not establish effective configuration, enablement, execution or maliciousness.
+`capabilities` describes OS/purpose recommendations and limits;
 unknown OS has no default profile. Recommendations are optional, not a scan checklist. Run one profile at
-a time. Linux records are parsed observations, not anomaly detections.
+a time. Linux records are parsed observations, not anomaly detections. Discover
+installed image/login helpers through the capability menu and their `--help`
+before writing a parser; use `python /opt/forsic/image_access.py export` for a
+selected complete file and `/opt/forsic/login_records.py` for its supported ABI.
 
 Use returned candidates to propose hypotheses, then follow `source_call` and the
 original record coordinates before adopting evidence in `forsic_question`.

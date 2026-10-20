@@ -33,6 +33,7 @@ export interface InvestigationReviewQuestion {id: string; question: string; disp
 export interface InvestigationView {
   case_id: string; session_id?: string; profile?: string; questions: InvestigationQuestion[]; sources: InvestigationSource[]; observations: InvestigationObservation[]; timeline: InvestigationTime[]
   review_questions?: InvestigationReviewQuestion[]; review_question_coverage?: {current_goal_questions?: number; historical_goal_questions?: number}; timeline_empty_reason?: string
+  task_focus?: InvestigationTaskFocus
   scope?: 'case'; sessions?: InvestigationSession[]; reports?: InvestigationReport[]
   counts?: Record<string, number>; omitted_counts?: Record<string, number>; partial?: boolean
 }
@@ -58,3 +59,18 @@ export function investigationTimeGroups(rows: InvestigationTime[]) {
   const unknown = rows.filter(row => !comparable.includes(row) && !modeled.includes(row) && !metadata.includes(row))
   return [{key: 'comparable', label: '비교 가능한 기록 시각', rows: comparable}, {key: 'modeled', label: '추정 구간과 시간 후보', rows: modeled}, {key: 'metadata', label: '파일 메타데이터 시각', rows: metadata}, {key: 'unknown', label: '순서를 확인할 수 없는 시각', rows: unknown}].filter(group => group.rows.length)
 }
+
+export interface InvestigationCheck {
+  mission_id: string; mission_version: string; state: string; complete: boolean; tool: string; why: string
+  result_ref: InvestigationRef | null; assessment_ref: InvestigationRef | null; outcome: string | null
+}
+export interface InvestigationTask {
+  id: string; revision: number; definition_version: string; question: string; work_state: string
+  assessment: string; review_required: boolean; answer_is_model_assessment: string; scope: string
+  judgments: {inference_strength: string; assumptions: string[]; limitations: string[]; counterevidence_refs: InvestigationRef[]; counterevidence_ref_count: number}[]
+  alternatives: string[]; next_checks: string[]; remaining_gap_count: number
+  remaining_gap_examples: {id: string; reason: string; disposition: string}[]
+  checks: InvestigationCheck[]; check_counts: {completed: number; pending_or_recheck: number}; omitted_checks: number; omitted_details: number
+  details_call: {tool: string; arguments: Record<string, string>}
+}
+export interface InvestigationTaskFocus {status: 'ready' | 'unavailable'; tasks: InvestigationTask[]; omitted_tasks: number | null}

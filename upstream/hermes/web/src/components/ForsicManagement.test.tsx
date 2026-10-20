@@ -19,6 +19,19 @@ async function render(profile='sample'){
  return {host,click,type,rerender:async(profile:string)=>act(async()=>root.render(<ForsicManagement profile={profile} caseId="case-a"/>))};
 }
 function posted(){return fetchJSON.mock.calls.filter(call=>call[1]?.method==='POST'&&typeof call[1]?.body==='string').map(call=>JSON.parse(call[1].body));}
+const proposalFixture=()=>({id:'proposal-a',revision:3,status:'review_pending',draft_sha256:'reviewed-hash',draft:{pack_id:'local.workflow',version:'1.0.0',name:'workflow',description:'반복 절차',skill_md:'General procedure',requires_tools:['forsic_shell']},reason:'반복 시행착오 감소',applicability:'선택 입력',limitations:'전체 범위 아님',diff:'changed',target:null,origin:{case_id:'case-a',receipts:[{evidence_id:'receipt-a',sha256:'source-hash',tool:'forsic_shell'}]},validation:{structure:'draft_checked',functional:'not_observed'},publication:{status:'not_saved'},activation:{status:'not_requested'}});
+it('publishes only the reviewed exact skill revision and never auto-activates',async()=>{
+ const value=fixture();value.skill_proposals={items:[proposalFixture()]};fetchJSON.mockResolvedValue(value);
+ const {host,click}=await render();await click('스킬 제안');expect(posted()).toHaveLength(0);expect(host.textContent).toContain('실제 효과 미확인');await click('검토한 스킬 저장');expect(posted()).toHaveLength(0);await click('검토한 변경 실행');expect(posted()[0]).toMatchObject({action:'skill.publish',proposal_id:'proposal-a',proposal_revision:3,reviewed_sha256:'reviewed-hash'});expect(posted().some(body=>body.action==='skill.activate')).toBe(false);
+});
+it('requires a changed skill draft to be saved and reviewed before publication',async()=>{
+ const value=fixture();value.skill_proposals={items:[proposalFixture()]};fetchJSON.mockResolvedValue(value);
+ const {host,click,type}=await render();await click('스킬 제안');await type('[aria-label="workflow 절차 내용"]','Changed procedure');expect([...host.querySelectorAll<HTMLButtonElement>('button')].find(node=>node.textContent==='검토한 스킬 저장')?.disabled).toBe(true);await click('수정한 초안 저장 검토');await click('검토한 변경 실행');expect(posted()[0]).toMatchObject({action:'skill.draft',proposal_revision:3,draft:{skill_md:'Changed procedure'}});
+});
+it('shows builtin proposals as review-only and enforces remote read-only management',async()=>{
+ const value=fixture();value.local_admin=false;value.skill_proposals={items:[{...proposalFixture(),target:{builtin:'source-triage',sha256:'builtin-hash'}}]};fetchJSON.mockResolvedValue(value);
+ const {host,click}=await render();await click('스킬 제안');expect(host.textContent).toContain('배포된 스킬을 자동 교체하지 않습니다');expect([...host.querySelectorAll<HTMLButtonElement>('button')].find(node=>node.textContent==='검토한 스킬 저장')?.disabled).toBe(true);expect(host.querySelector<HTMLTextAreaElement>('[aria-label="workflow 절차 내용"]')?.disabled).toBe(true);expect(posted()).toHaveLength(0);
+});
 it('separates case pin from default and applies only the reviewed change',async()=>{
  const {host,click}=await render();expect(fetchJSON).toHaveBeenCalledWith('/api/plugins/forsic/management?profile=sample&case_id=case-a');
  expect(host.textContent).toContain('env-new');expect(host.textContent).toContain('env-old');

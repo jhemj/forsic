@@ -5,6 +5,7 @@ import {toolDetail} from '@/lib/forsic-tool-detail';
 import {ForsicCapabilities} from './ForsicCapabilities';
 import {ForsicInvestigation} from './ForsicInvestigation';
 import {useForsicInvestigation} from '@/hooks/useForsicInvestigation';
+import {ForsicMissionFocus} from './ForsicMissionFocus';
 import {ForsicReports} from './ForsicReports';
 import {ForsicPaneSeparator} from './ForsicPaneSeparator';
 import {ForsicEvidenceCollection} from './ForsicEvidenceCollection';
@@ -66,7 +67,7 @@ export function ForsicWorkbench({children, inspector, connected, running: native
       {<aside hidden={!view} ref={panel} tabIndex={-1} id="forsic-inspector" className="forsic-inspector" aria-label={view ? VIEW_LABELS[view] : '조사 모니터'} onKeyDown={event => {if (event.key === 'Escape') {event.stopPropagation(); closePanel();}}}>
         <header className="forsic-inspector-header"><span className="forsic-inspector-title">{view === 'investigation' ? <Clock3 size={16} aria-hidden="true"/> : <TerminalSquare size={16} aria-hidden="true"/>}<strong>{!view || view === 'investigation' ? '조사 모니터' : view === 'reports' ? '사건 보고서' : view === 'evidence' ? '증거 모음' : `${VIEW_LABELS[view]} 설정`}</strong></span><div>{view !== 'evidence' && view !== 'tools' && view !== 'skills' && <button type="button" aria-label="목록 새로고침" disabled={investigation.loading} data-loading={investigation.loading} onClick={() => void investigation.refresh()}><RefreshCw size={15} aria-hidden="true"/></button>}<button type="button" aria-label="조사 패널 닫기" onClick={closePanel}><X size={17} aria-hidden="true"/></button></div></header>
         <div className="forsic-inspector-scroll">
-          <div hidden={view !== 'investigation'}><ForsicInvestigation key={`${inspector.profile}:${investigation.data?.case_id || expectedCaseId || ''}`} data={investigation.data} loading={investigation.loading} error={investigation.error} readSource={investigation.readSource} onReviewTabChange={setReviewTab}/></div>
+          <div hidden={view !== 'investigation'}><ForsicMissionFocus focus={investigation.data?.task_focus}/><ForsicInvestigation key={`${inspector.profile}:${investigation.data?.case_id || expectedCaseId || ''}`} data={investigation.data} loading={investigation.loading} error={investigation.error} readSource={investigation.readSource} onReviewTabChange={setReviewTab}/></div>
           {view === 'evidence' && <ForsicEvidenceCollection key={`${inspector.profile}:${inspector.sessionId}:${expectedCaseId || investigation.data?.case_id || ''}`}
             sessionId={inspector.sessionId} profile={inspector.profile} caseId={expectedCaseId || investigation.data?.case_id} active={inspector.active}/>}
           {view === 'reports' && <ForsicReports questions={investigation.data?.questions} reports={investigation.data?.reports} loading={investigation.loading} error={investigation.error} hasCase={Boolean(investigation.data)} profile={inspector.profile}/>}

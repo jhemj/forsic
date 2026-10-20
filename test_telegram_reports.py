@@ -3,6 +3,7 @@ import asyncio
 from copy import deepcopy
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 import tempfile
@@ -22,6 +23,11 @@ class TelegramReportTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        self.addCleanup(patch.stopall)
+        patch.dict(os.environ, {'HERMES_HOME': str(self.root)}).start()
+        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+        token = set_hermes_home_override(self.root)
+        self.addCleanup(reset_hermes_home_override, token)
         self.case, _, self.note = fixture(self.root)
         self.state = current(self.case)
         self.rendered = bundle(self.case, self.state)

@@ -60,6 +60,12 @@ REMEDIES = {
     'sensitive_export_changed': 'The workspace file differs from its retained export receipt. Compare or obtain a new explicit export.',
     'sensitive_unsupported_format': 'Use an existing supported extractor, then select its text or record derivative. Binary/container data was not scanned.',
     'sensitive_resume_mismatch': 'This resume_ref belongs to different inputs or settings. Inspect the retained scan; request a new scan explicitly only for the changed scope.',
+    'sensitive_source_selection_invalid': 'Copy a retained source_handle and exact returned pointer from this case; do not substitute a path.',
+    'sensitive_export_source_invalid': 'Select a successful, terminated shell export from this conversation with a complete stdout preview.',
+    'sensitive_export_selection_required': 'Copy one returned retained_export_targets entry, including its export_line. A labelled or batched stdout is not one export receipt.',
+    'sensitive_export_receipt_invalid': 'Select a complete retained export receipt with an exported-byte SHA-256; export_line selects one exact retained stdout line.',
+    'sensitive_export_destination_invalid': 'Select an export whose retained destination is a file inside this conversation workspace.',
+    'sensitive_export_file_unavailable': 'The selected workspace export is unavailable or not a permitted regular file. Inspect it or obtain a new explicit export.',
 }
 
 
@@ -67,15 +73,83 @@ class ScanRejected(ValueError):
     """Actionable public code, never a source value or detector diagnostic."""
 
 
+def _complete_export_receipt(receipt):
+    return (isinstance(receipt, dict) and receipt.get('derived') is True
+        and receipt.get('complete_file') is True and receipt.get('hash_scope') == 'exported_bytes'
+        and isinstance(receipt.get('sha256'), str) and HASH.fullmatch(receipt['sha256']) is not None)
+
+
+def _export_destination(receipt):
+    value = receipt.get('destination')
+    if not isinstance(value, str) or '\0' in value:
+        raise ScanRejected('sensitive_export_destination_invalid')
+    path = PurePosixPath(value)
+    if path.parts[:2] != ('/', 'work') or '..' in path.parts or len(path.parts) < 3:
+        raise ScanRejected('sensitive_export_destination_invalid')
+    return path
+
+
+def export_receipt_lines(stdout):
+    """Derived selectors only; never replace or reinterpret retained stdout."""
+    if not isinstance(stdout, str):
+        return
+    for line, value in enumerate(stdout.split('\n'), 1):
+        try:
+            receipt = json.loads(value)
+            if _complete_export_receipt(receipt):
+                _export_destination(receipt)
+                yield line, receipt
+        except (ValueError, TypeError):
+            continue
+
+
+def export_receipt(stdout, export_line=None):
+    """Select exactly the submitted scalar or line, never the first match."""
+    value = stdout
+    if export_line is not None:
+        lines = stdout.split('\n')
+        if type(export_line) is not int or not 1 <= export_line <= len(lines):
+            raise ScanRejected('sensitive_export_receipt_invalid')
+        value = lines[export_line - 1]
+    try:
+        receipt = json.loads(value)
+    except (ValueError, TypeError):
+        code = ('sensitive_export_selection_required' if export_line is None
+            and next(export_receipt_lines(stdout), None) else 'sensitive_export_receipt_invalid')
+        raise ScanRejected(code) from None
+    if not _complete_export_receipt(receipt):
+        raise ScanRejected('sensitive_export_receipt_invalid')
+    _export_destination(receipt)
+    return receipt
+
+
+def workspace_export_scope(data, pointer):
+    """Only the exact retained command stdout can declare an export."""
+    scope = data
+    if data.get('tool') != 'forsic_shell' or pointer != '/stdout':
+        raise ScanRejected('sensitive_export_source_invalid')
+    execution = scope.get('execution')
+    preview = scope.get('preview_truncated', {})
+    raw = scope.get('raw_output', scope.get('raw_output_metadata', {}))
+    if (scope.get('error') or not isinstance(execution, dict)
+            or execution.get('exit_code') != 0 or execution.get('termination_confirmed') is not True
+            or not isinstance(preview, dict) or preview.get('stdout')
+            or not isinstance(raw, dict) or raw.get('truncated') or raw.get('complete') is False):
+        raise ScanRejected('sensitive_export_source_invalid')
+    return scope
+
+
 def properties():
     return {
         'targets': {'type': 'array', 'minItems': 1, 'maxItems': 64,
-            'description': 'Select retained references, never new paths. retained_text scans one body scalar; evidence_file selects a returned original file path; workspace_export selects a complete export receipt in /stdout.',
+            'description': 'Select retained references, never new paths. retained_text scans one body scalar; evidence_file selects a returned original file path; workspace_export selects a complete receipt in /stdout, with the returned export_line for labelled or JSONL output.',
             'items': {'type': 'object', 'properties': {
                 'source_handle': {'type': 'string', 'maxLength': 2048},
                 'source_id': {'type': 'string', 'maxLength': 64},
                 'source_version': {'type': 'string', 'maxLength': 64},
                 'pointer': {'type': 'string', 'maxLength': 512},
+                'export_line': {'type': 'integer', 'minimum': 1,
+                    'description': 'workspace_export only: exact 1-based LF-delimited line in selected retained stdout, copied from retained_export_targets; never inferred from a path.'},
                 'kind': {'type': 'string', 'enum': ['retained_text', 'evidence_file', 'workspace_export']},
                 'encoding': {'type': 'string', 'enum': ['auto', 'utf-8', 'utf-16', 'cp949']},
                 'format': {'type': 'string', 'enum': ['text', 'csv', 'jsonl']}},
@@ -96,7 +170,7 @@ def validate(args):
         raise ValueError('Select 1 to 64 retained targets')
     result = []
     for target in targets:
-        allowed = {'source_id', 'source_version', 'source_handle', 'pointer', 'kind', 'encoding', 'format'}
+        allowed = {'source_id', 'source_version', 'source_handle', 'pointer', 'kind', 'encoding', 'format', 'export_line'}
         if not isinstance(target, dict) or set(target) - allowed:
             raise ValueError('Select a retained source and pointer, not a new path')
         if not isinstance(target.get('pointer'), str) or not re.fullmatch(r'/[A-Za-z0-9_~/.-]{1,510}', target['pointer']):
@@ -112,6 +186,9 @@ def validate(args):
                 or value['encoding'] not in ('auto', 'utf-8', 'utf-16', 'cp949')
                 or value['format'] not in ('text', 'csv', 'jsonl')):
             raise ValueError('Unsupported target kind, encoding or format')
+        if 'export_line' in value and (value['kind'] != 'workspace_export' or value['pointer'] != '/stdout'
+                or type(value['export_line']) is not int or value['export_line'] < 1):
+            raise ValueError('export_line must select one positive retained /stdout line for workspace_export')
         result.append(value)
     profiles = args.get('profiles', ['secrets', 'pii_kr'])
     if (not isinstance(profiles, list) or not profiles or len(profiles) > 2
@@ -260,16 +337,24 @@ def _stage(case, args, session_id, directory, native):
     from .shell_workspace import _workspace
     inputs, used, selections = [], 0, set()
     for i, submitted in enumerate(args['targets'], 1):
-        target = resolve_source_handle(case, submitted)
+        try:
+            target = resolve_source_handle(case, submitted)
+        except ValueError:
+            raise ScanRejected('sensitive_source_selection_invalid') from None
         event = case.event(target['source_id'])
         if not event or event['kind'] != 'tool_result' or event['data'].get('tool') not in EVIDENCE_TOOLS:
-            raise ValueError('Select a retained evidence result from this case')
+            raise ScanRejected('sensitive_source_selection_invalid')
         data = event['data']
-        if source_record(event)['version'] != target.get('source_version') or data.get('error'):
+        if source_record(event)['version'] != target.get('source_version'):
             raise ScanRejected('sensitive_source_version_changed')
-        value = select(data, target['pointer'])
+        if data.get('error') and target['kind'] != 'workspace_export':
+            raise ScanRejected('sensitive_source_selection_invalid')
+        try:
+            value = select(data, target['pointer'])
+        except ValueError:
+            raise ScanRejected('sensitive_source_selection_invalid') from None
         if not isinstance(value, str):
-            raise ValueError('Select one body scalar or returned file path')
+            raise ScanRejected('sensitive_source_selection_invalid')
         key = f'F{i:04d}'
         item = {'input_id': key, 'path': '/scan-input/' + key,
             'encoding': target['encoding'], 'format': target['format'],
@@ -307,28 +392,28 @@ def _stage(case, args, session_id, directory, native):
                     original_location={'coordinate_space': 'selected_file_bytes', 'path': value},
                     coverage={'original_scope': 'selected_regular_file'})
             else:
-                if (data['tool'] != 'forsic_shell' or event['session'] != session_id
-                        or target['pointer'] != '/stdout'
-                        or data.get('execution', {}).get('termination_confirmed') is not True
-                        or data.get('execution', {}).get('exit_code') != 0
-                        or data.get('preview_truncated', {}).get('stdout')):
-                    raise ValueError('Select a complete export receipt from this conversation')
-                receipt = json.loads(value)
-                if (not isinstance(receipt, dict) or receipt.get('derived') is not True
-                        or receipt.get('complete_file') is not True or receipt.get('hash_scope') != 'exported_bytes'
-                        or not isinstance(receipt.get('sha256'), str) or not HASH.fullmatch(receipt['sha256'])):
-                    raise ValueError('Select a complete image_access export receipt')
-                logical = PurePosixPath(receipt.get('destination', ''))
-                if logical.parts[:2] != ('/', 'work') or '..' in logical.parts or len(logical.parts) < 3:
-                    raise ValueError('Export destination is outside the conversation workspace')
+                if event['session'] != session_id:
+                    raise ScanRejected('sensitive_export_source_invalid')
+                workspace_export_scope(data, target['pointer'])
+                receipt = export_receipt(value, target.get('export_line'))
+                logical = _export_destination(receipt)
+                if 'export_line' in target:
+                    item['source_ref']['export_line'] = target['export_line']
                 path = _workspace(case, session_id).joinpath(*logical.parts[2:])
                 item.update(source_role='derived_workspace_export',
                     original_location={'coordinate_space': 'derived_export_bytes', 'destination': str(logical),
                         'declared_source': receipt.get('source'), 'physical_image_offset': None},
                     coverage={'original_scope': 'declared_export', 'original_linkage': 'retained_command_declaration'},
                     expected_sha256=receipt['sha256'])
-            _no_symlinks(path)
-            info = path.stat()
+            try:
+                _no_symlinks(path)
+                info = path.stat()
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError('Not a regular file')
+            except (OSError, ValueError):
+                if target['kind'] == 'workspace_export':
+                    raise ScanRejected('sensitive_export_file_unavailable') from None
+                raise
             identity = ('file', info.st_dev, info.st_ino)
             if identity in selections:
                 raise ValueError('The same selected file occurs more than once')

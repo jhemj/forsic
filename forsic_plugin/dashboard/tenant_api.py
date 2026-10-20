@@ -31,7 +31,17 @@ async def request_scope(request:Request):
             values.extend(str(source[key]) for source in (body,request.path_params) if source.get(key))
         if len(set(values))>1:raise HTTPException(403,'요청의 테넌트·프로필·사건 범위가 일치하지 않습니다.')
         selected[field]=values[0] if values else ''
-    try:scope=resolve_request(**selected,request=request)
+    remote_profile=getattr(request.state,'forsic_remote_profile',None)
+    try:
+        if remote_profile is not None and any(selected.values()):
+            if selected['profile_name'] not in ('',remote_profile):
+                raise PermissionError('이 서버에서 제공하는 조직의 조사를 선택해주세요.')
+            if selected['tenant_id']:
+                from forsic_plugin.tenants import TenantRegistry
+                # Check metadata ownership before opening any case/session data.
+                TenantRegistry().resolve(tenant_id=selected['tenant_id'],profile_name=remote_profile)
+            selected['profile_name']=remote_profile
+        scope=resolve_request(**selected,request=request)
     except Exception as exc:api_error(exc)
     request.state.forsic_tenant_scope=scope
     if scope is None:
@@ -102,9 +112,17 @@ class MemoryAction(BaseModel):
 
 
 @router.get('/tenants')
-def tenants_list():
+def tenants_list(request:Request):
     from forsic_plugin.tenants import TenantRegistry
-    try:return {'tenants':TenantRegistry().list_public()}
+    from forsic_plugin.setup import local_admin
+    try:
+        tenants=TenantRegistry().list_public()
+        remote_profile=getattr(request.state,'forsic_remote_profile',None)
+        if remote_profile is not None:
+            tenants=[item for item in tenants if item['profile_name']==remote_profile]
+        can_create=remote_profile is None and local_admin(request)
+        return {'tenants':tenants,'access':{'can_create':can_create,
+                'mode':'local' if can_create else 'restricted'}}
     except Exception as exc:api_error(exc)
 
 

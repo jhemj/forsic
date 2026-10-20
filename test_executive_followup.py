@@ -215,6 +215,7 @@ class ExecutiveFollowupTests(unittest.TestCase):
         self.assertFalse(review.review_state(self.resolved())['final_review_current'])
 
     def test_pause_cancel_and_failed_delivery_never_start_or_repeat_round(self):
+        from forsic_plugin.report_driven.finalization import _review_gate, independent_review_projection
         self.prepare()
         self.goal.status='paused';self.session(self.sid,goal=self.goal)
         self.call();self.assertFalse(self.calls)
@@ -225,10 +226,22 @@ class ExecutiveFollowupTests(unittest.TestCase):
         self.assertEqual(result['status'],'delivery_unconfirmed')
         state=review.review_state(self.resolved())
         self.answer(state['pending_findings'],limited=True)
-        self.call()
+        partial=self.call()
         self.assertEqual(self.fake.call_count,1)
         self.assertEqual(len(self.request_paths()),1)
-        self.assertFalse(review.review_state(self.resolved())['executive_followup']['complete'])
+        state=review.review_state(self.resolved())
+        self.assertFalse(state['executive_followup']['complete'])
+        self.assertEqual(state['executive_followup']['status'],'blocked')
+        self.assertEqual(state['executive_followup']['blocked_status'],'delivery_unconfirmed')
+        self.assertEqual(partial['status'],'delivery_unconfirmed')
+        self.assertFalse(partial['requires_followup'])  # No endless continuation of an unknown call.
+        self.assertIn('미완료',partial['context'])
+        context={'enabled':True,'resolved':self.resolved()}
+        disclosure=independent_review_projection(context,host.current(self.case))
+        _,blocked=_review_gate(self.case,host.current(self.case),
+            {'bundle_id':'synthetic','independent_review':disclosure},context)
+        self.assertEqual(blocked['delivery_status'],'independent_review_incomplete')
+        self.assertTrue(blocked['draft_preserved'])
 
     def test_cancellation_during_executive_response_is_retained_without_second_call(self):
         self.prepare();cancelled=[False]

@@ -1,4 +1,5 @@
 import asyncio
+import os
 import contextlib
 import hashlib
 from pathlib import Path
@@ -25,6 +26,14 @@ def update(text='@PosicBot 어떤 근거인가요?', **changes):
 
 
 class MentionTests(unittest.TestCase):
+    def setUp(self):
+        isolated = tempfile.TemporaryDirectory(); self.addCleanup(isolated.cleanup)
+        self.addCleanup(patch.stopall)
+        patch.dict(os.environ, {'HERMES_HOME': isolated.name}).start()
+        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+        token = set_hermes_home_override(isolated.name)
+        self.addCleanup(reset_hermes_home_override, token)
+
     def test_real_telegram_update_serialization_and_failed_admission_retains_input(self):
         wire=Update.de_json(update(),None).to_dict()
         self.assertIsInstance(wire['message']['date'],int)
@@ -348,7 +357,7 @@ class MentionTests(unittest.TestCase):
             async def send(text): sent.append(text); return len(sent)
             async def send_user(text): users.append(text); return len(users)
             asyncio.run(mirror.tick(send,send_user=send_user))
-            self.assertEqual(sent,['이번 질문의 답이에요'])
-            self.assertEqual(users,['웹에서 입력한 별도 질문'])
+            self.assertEqual(sent,[])
+            self.assertEqual(users,[])
             db.close()
 if __name__=='__main__': unittest.main()

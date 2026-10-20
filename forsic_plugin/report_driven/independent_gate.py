@@ -17,7 +17,8 @@ def context(case, state, args, *, dispatch=False):
             or resolved['goal_id'] != args.get('_goal_id')
             or resolved['conversation_id'] != args.get('_session_id')):
         raise ValueError('현재 대화·목표·사건에 연결된 보고서 검토만 수행할 수 있습니다.')
-    result = {'enabled': True, 'resolved': resolved}
+    result = {'enabled': True, 'resolved': resolved,
+              'executive_followup_required': options.get('executive_followup') is True}
     # Only availability/attempt metadata is cached here. Original model requests
     # and responses remain in the independent review's immutable receipts.
     identity = review._identity(resolved)

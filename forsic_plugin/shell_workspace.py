@@ -40,8 +40,18 @@ os.execv('/bin/bash',['/bin/bash','-e','-o','pipefail','-c',sys.argv[2]])
 def schema():
     from .sensitive_policy import properties
     from .triage_policy import properties as triage_properties
+    triage = triage_properties()
+    shared = properties()
+    # The shared target envelope serves both actions. Preserve sensitive-scan
+    # fields/limits while exposing the profile-specific assertion to the model;
+    # each action still applies its own stricter validator before any execution.
+    shared['targets']['items']['properties']['triage_format'] = triage['targets']['items']['properties']['triage_format']
+    shared['targets']['items']['anyOf']=[{'required':['source_handle']},{'required':['source_id','source_version']}]
+    shared['targets']['items']['properties']['kind']['description']=('Required for triage: evidence_file or workspace_export. '
+        'For sensitive_scan only, omitted kind defaults to retained_text.')
+    shared['targets']['description'] += ' Each target needs source_handle or source_id plus source_version, with an exact retained pointer. For triage, kind is required (evidence_file or workspace_export); format=text and encoding=auto retain binary bytes. linux_persistence requires triage_format; linux_login_parser requires login_format.'
     return {'type':'object', 'properties':{
-        **triage_properties(), **properties(),
+        **triage, **shared,
         'action':{'type':'string','enum':['run','capabilities','sensitive_scan','triage','triage_query'],'default':'run',
                   'description':'triage runs a bounded selected-file profile and returns candidates only. run requires command. capabilities checks installed tools. sensitive_scan runs selected local secrets/pii_kr detectors on retained targets; no command, network or online validation. Read scan-sensitive-data for selection/coverage.'},
         'command':{'type':'string','minLength':1,'maxLength':MAX_COMMAND_BYTES,
@@ -399,6 +409,12 @@ def _command_outcome(value, stdout):
         return outcome
     outcome['status']='returned' if code==0 else 'failed'
     argv=_literal_argv(value['command'])
+    if code not in (None,0) and argv is None:
+        outcome['hint']=('Bash -e -o pipefail may stop this script before later checks or recovery branches. '
+                         'Internal steps were not observed; inspect stderr and existing files before retrying. '
+                         'Use separate calls for independent checks, and handle expected search exit 1 inside scripts explicitly with if/else.')
+        if code==141:
+            outcome['hint']+=' Status 141 can indicate SIGPIPE from a producer when a consumer such as head closes early; it is not a no-match result.'
     if code==1 and _atomic_search(argv):
         return {**outcome,'status':'no_matches','basis':'atomic_search_exit_status',
                 'meaning':'No selected matches for this literal grep/rg command and its options; not a conclusion about the case.'}

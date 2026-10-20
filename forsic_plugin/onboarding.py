@@ -108,6 +108,33 @@ def choices(value):
     return {'purpose': purpose, 'environment': environment, 'question': question, 'prompt': prompt}
 
 
+def initial_triage(config, capabilities):
+    """Offer discovery at initial question admission, without selecting evidence.
+
+    Wizard labels are user assertions, never inferred OS findings. This pure
+    projection neither probes a runtime nor starts a scanner or persistent job.
+    """
+    selected = config.get('onboarding') or {}
+    if (not isinstance(selected, dict) or selected.get('purpose') != 'comprehensive'
+            or not capabilities.tool_enabled('forsic_shell')):
+        return None
+    from .triage_policy import recommendations
+    declared = selected.get('environment', 'unknown')
+    target = declared if declared in ('windows', 'linux', 'macos') else 'unknown'
+    recommendation = recommendations(target, 'quick')
+    value = {'role': 'optional_initial_plan', 'declared_environment': declared,
+        'environment_basis': 'user_selection_not_observed',
+        'state': recommendation['state'], 'profiles': recommendation['profiles'],
+        'runtime_verified': False, 'execution_requested': False,
+        'lookup': {'tool': 'forsic_shell', 'arguments': {'action': 'capabilities'}},
+        'selection': 'Identify the evidence OS/format, then choose useful bounded profiles and explicit retained inputs. '
+            'No registered profile is not a clean result. Recheck candidates in source before adopting them; '
+            'choose further investigation by value, not scanner ranking alone.'}
+    if capabilities.skill_enabled('source-triage'):
+        value['procedure'] = {'tool': 'forsic_skill', 'arguments': {'name': 'source-triage'}}
+    return value
+
+
 class EvidenceBrowser:
     limit = 100
     max_entries = 10000

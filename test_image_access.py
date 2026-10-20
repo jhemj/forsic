@@ -196,6 +196,52 @@ class ImageAccessTests(unittest.TestCase):
         self.assertEqual(self.image.read_bytes(), original)
         self.assertEqual(stat.S_IMODE((self.work/'new.bin').stat().st_mode) & 0o111, 0)
 
+    def test_relative_export_is_anchored_to_work_and_returns_absolute_destination(self):
+        (self.work/'exports').mkdir()
+        destination = './exports/export__etc_passwd'
+        result = self.export(destination)
+        expected = self.work/'exports'/'export__etc_passwd'
+        self.assertEqual(result['destination'], str(expected))
+        self.assertEqual(expected.read_bytes(), self.payload.read_bytes())
+        self.assertEqual(result['sha256'], hashlib.sha256(self.payload.read_bytes()).hexdigest())
+        self.assertTrue(result['complete_file'])
+
+    def test_export_preserves_spaces_in_destination_filename(self):
+        for destination in (' report file.bin ', 'nested folder/ report file.bin '):
+            with self.subTest(destination=destination):
+                (self.work/'nested folder').mkdir(exist_ok=True)
+                result = self.export(destination)
+                expected = self.work/destination
+                self.assertEqual(result['destination'], str(expected))
+                self.assertEqual(expected.read_bytes(), self.payload.read_bytes())
+
+    def test_invalid_destination_form_is_rejected_before_opening_image(self):
+        for destination in (' ', '\t\n', '.', './', '../escape', 'nested/../../escape',
+                            str(self.work/'..'/'escape'), str(self.root/'escape'), 'bad\x00name'):
+            with self.subTest(destination=destination), patch.object(access, 'open_image') as opened:
+                with self.assertRaises(access.ExportError) as failed:
+                    self.export(destination)
+                opened.assert_not_called()
+                self.assertFalse(failed.exception.details['complete_file'])
+                self.assertEqual(failed.exception.details['bytes'], 0)
+        self.assertEqual(list(self.work.iterdir()), [])
+
+        with patch.object(access, 'open_image') as opened:
+            with self.assertRaisesRegex(ValueError, 'requires --destination'):
+                access.export_file(self.image, self.args('export', destination=''), work_root=self.work)
+            opened.assert_not_called()
+
+    def test_relative_export_keeps_exclusive_and_nofollow_creation(self):
+        existing = self.work/'existing'
+        existing.write_bytes(b'preserve')
+        (self.work/'linked-file').symlink_to(existing)
+        (self.work/'linked-parent').symlink_to(self.root, target_is_directory=True)
+        for destination in ('existing', 'linked-file', 'linked-parent/escaped'):
+            with self.subTest(destination=destination), self.assertRaises(access.ExportError):
+                self.export(destination)
+        self.assertEqual(existing.read_bytes(), b'preserve')
+        self.assertFalse((self.root/'escaped').exists())
+
     def test_export_limit_before_creation_and_lower_limit(self):
         with self.assertRaisesRegex(access.ExportError, 'exceeds') as failed:
             self.export(max_bytes=3)

@@ -13,7 +13,10 @@ Observation and review
   coordinates. Export completeness never means investigation completeness.
 - Exploration review is blind to the investigator's answer. Final review sees
   current owned questions and the candidate answer separately from source fields.
-- Review remains at most three calls per native goal on the configured model.
+- The first saved agent answer admits exploration review on the existing native
+  tool boundary. It settles before main generation/compaction continues, using
+  the existing timeout, cancellation and retained request/response contracts.
+- Ordinary review remains at most three calls per native goal on the configured model.
   The final slot is reserved; unknown delivery is not automatically resent.
 - Each suggestion has a stable review/finding identity and exact presented quote.
   Per-item quote failure does not erase other valid suggestions. Literal matching
@@ -47,8 +50,12 @@ Delivery
 - Reports disclose handled findings and limitations. Final selection binds the
   immutable report snapshot to current review and disposition metadata. Drafts
   remain available when final selection is blocked or requires regeneration.
-- Known review unavailability can be disclosed for scoped delivery; unreadable
-  review state cannot be treated as an empty pending set.
+- Known ordinary review unavailability can be disclosed for scoped delivery;
+  unreadable review state cannot be treated as an empty pending set. When the
+  operator requests three executive rounds of five questions, availability
+  disposition does not satisfy those rounds. An interrupted round is explicitly
+  incomplete, preserves drafts, and prevents final selection without replaying
+  unknown work or repeatedly forcing synthetic continuations.
 
 Validation and limits
 Synthetic tests exercise changed filenames, harmless configuration, false quote,

@@ -90,3 +90,71 @@ FORSIC 화면 설계 원칙 (2026-10-06)
    별도 대화/보드 버튼은 두지 않고 보관 아이콘만 둔다. 보관함에서는 복원 아이콘을 쓴다.
 
 10. 대화 제목은 내용 요약으로 생성하지 않는다. 사건 안의 생성 순서로 첫 번째 분석, 두 번째 분석처럼 표시하고 최근 활동 정렬과 무관하게 번호를 유지한다.
+
+
+Composable execution and recovery (2026-10-21)
+---------------------------------------------
+Recovery must preserve what actually ran, not require a model to reconstruct a
+compound script from one final exit code. Forsic keeps the native Hermes goal,
+turn, cancellation and evidence ledger. It does not add a second agent loop.
+
+Independent checks use separate native tool calls. Hermes owns their dispatch,
+middleware, cancellation and result commit; Forsic adds no batch scheduler or
+step-execution API. A simple literal grep/rg exit 1 is no_matches; arbitrary
+pipelines do not inherit that interpretation. A compound script's internal
+stages remain unobserved. A failed call cannot imply that later checks ran, and
+successful calls are not automatically replayed. Stateful scripts remain available.
+
+Exports return canonical workspace destinations and retained selectors. Relative
+destinations are resolved under /work before image parsing; traversal, symlinks
+and overwrite remain prohibited. Scanner admission can select one exact complete
+JSONL export from a successfully completed native call.
+Case/session ownership, immutable source version, full-file receipt, path and
+byte-hash checks remain mandatory. Printed JSON cannot create host execution facts.
+
+Model views and native pruning retain bounded whole selectors, actual process
+status, and exact lookup calls. Full raw bytes stay in the existing ledger. Shell
+stdout is derived material for citations, not an original observation or coverage
+attestation. Actionable admission failures describe an allowed next action without
+exposing private detector diagnostics. A scan candidate is still a lead requiring
+source review and explicit adoption in the existing question note.
+
+A completed legacy tenant migration is durable. An explicitly emptied registry
+can remain empty after restart; startup must not recreate old organization
+identity from a remaining configuration file. Incomplete migrations resume
+idempotently, preserving native ownership and interleaved registrations.
+
+Comparison and limits
+~~~~~~~~~~~~~~~~~~~~
+The pinned Hermes terminal already owns process handles and retained results.
+OpenClaw documents owned execution and continuation from settled tool results
+without replaying completed actions:
+https://docs.openclaw.ai/tools/exec
+https://docs.openclaw.ai/concepts/compaction
+Forsic applies those lifecycle principles while retaining its stricter read-only
+evidence boundary and unknown-completion fence. This is a design comparison, not
+a claim of equal investigation quality on an unmeasured local model.
+
+The one-shot container adapter remains because the native general-purpose Docker
+backend permits persistent writable containers, profile mounts and container
+recreation/retry. Replacing it without preserving original-read-only mounts,
+fixed resource limits, separate raw byte streams and confirmed cleanup would
+change the forensic contract. It uses the native interruption signal and tool
+call lifecycle; it does not manage conversations, goals or model retries.
+
+Native reuse audit: plugin loop comparisons and result summaries are callbacks to
+Hermes, not another repetition detector. Tenant memory writes use native
+MemoryStore with a domain provenance sidecar. Remaining duplicated maintenance
+logic includes compression-lineage traversal in investigation/tenant views and
+atomic idle-close checks around native GoalManager. Consolidate these through
+narrow native APIs with branch, tenant and lease regressions before deleting
+the adapters. Independent-review pending-job tracking remains bounded advice
+within native context threads; it has no investigation-tool execution authority.
+
+Remaining measured interface limits: image export is capped at 256 MiB per file;
+initial triage stages at most eight selected files and 32 MiB combined. No total
+workspace disk quota is enforced. Export admission requires a complete retained
+preview; large omitted receipt text needs explicit retrieval rather than guessing.
+Workspace-export candidate navigation may return an acquisition receipt, requiring
+a separate original-range read. These are explicit limits, not evidence of source
+absence. Offline contract tests do not establish end-to-end forensic conclusions.

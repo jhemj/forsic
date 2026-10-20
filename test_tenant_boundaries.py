@@ -91,6 +91,45 @@ class TenantBoundaryTests(unittest.TestCase):
             self.assertFalse(Path(scope['case_root']).exists())
             self.assertFalse(Path(scope['library_store']).exists())
 
+    def test_empty_completed_registry_allows_host_setup_list_and_local_create(self):
+        from forsic_plugin.tenants import _atomic, current_scope
+        _atomic(self.registry.path, {'schema': 1, 'tenants': [], 'operations': {},
+                                     'legacy_migration_complete': True})
+        before = self.files()
+        with patch('forsic_plugin.dashboard.plugin_api.Case', side_effect=AssertionError('opened case')), \
+             patch('socket.create_connection', side_effect=AssertionError('network request')), \
+             patch('socket.socket.connect', side_effect=AssertionError('network request')):
+            setup = self.client.get(self.prefix + '/setup')
+            self.assertEqual(setup.status_code, 200, setup.text)
+            self.assertTrue(setup.json()['local_admin'])
+            listed = self.client.get(self.prefix + '/tenants')
+            self.assertEqual(listed.status_code, 200, listed.text)
+            self.assertEqual(listed.json(), {'tenants': [], 'access': {'can_create': True, 'mode': 'local'}})
+            self.assertEqual(self.files(), before)
+            # The host entry exception does not relax tenant ownership elsewhere.
+            with self.assertRaises(PermissionError):
+                current_scope()
+            self.assertEqual(self.client.get(self.prefix + '/library').status_code, 400)
+            intent = {'display_name': 'Fresh tenant', 'memory_mode': 'manual', 'operation_id': str(uuid.uuid4())}
+            created = self.client.post(self.prefix + '/tenants', json=intent)
+            self.assertEqual(created.status_code, 200, created.text)
+            self.assertEqual(len(self.registry.list_public()), 1)
+            self.assertTrue(self.registry._load()['legacy_migration_complete'])
+
+    def test_empty_registry_host_administration_keeps_transport_and_profile_fences(self):
+        from forsic_plugin.tenants import _atomic
+        _atomic(self.registry.path, {'schema': 1, 'tenants': [], 'operations': {},
+                                     'legacy_migration_complete': True})
+        intent = {'display_name': 'Denied tenant', 'operation_id': str(uuid.uuid4())}
+        remote = TestClient(self.app, base_url='http://localhost:8860', client=('192.0.2.20', 1234))
+        self.assertEqual(remote.post(self.prefix + '/tenants', json=intent).status_code, 403)
+        for headers in ({'Origin': 'https://evil.example'}, {'X-Forwarded-For': '127.0.0.1'},
+                        {'Host': 'evil.example'}):
+            denied = self.client.post(self.prefix + '/tenants', json=intent, headers=headers)
+            self.assertEqual(denied.status_code, 403, denied.text)
+        self.assertEqual(self.client.get(self.prefix + '/setup', params={'profile': 'other'}).status_code, 404)
+        self.assertEqual(self.registry.list_public(), [])
+
     def test_mismatched_selectors_and_direct_foreign_case_session_denied(self):
         _, _, saved = self.case(self.b)
         from hermes_state import SessionDB
@@ -163,6 +202,37 @@ class TenantBoundaryTests(unittest.TestCase):
         for path in ('/library','/management','/investigations','/status','/tenant-memory'):
             response=self.client.get(self.prefix+path)
             self.assertEqual(response.status_code,400,(path,response.text))
+
+    def test_remote_entry_lists_served_tenant_and_resolves_without_admin_access(self):
+        from forsic_plugin.remote_policy import ForsicRemoteAccessMiddleware,ForsicRemotePolicy
+        app=FastAPI();app.state.initial_profile='default'
+        app.include_router(plugin_api.router,prefix=self.prefix)
+        app.add_middleware(ForsicRemoteAccessMiddleware,policy=ForsicRemotePolicy(
+            {'remote_evidence_directory_only':True,'intake_root':self.legacy['intake_root']},self.root))
+        remote=TestClient(app,base_url='http://192.0.2.50:8860',client=('192.0.2.20',1234))
+        before=self.files()
+        listed=remote.get(self.prefix+'/tenants')
+        self.assertEqual(listed.status_code,200,listed.text)
+        self.assertEqual([t['tenant_id'] for t in listed.json()['tenants']],[self.legacy['tenant_id']])
+        self.assertEqual(listed.json()['access'],{'can_create':False,'mode':'restricted'})
+        selected=remote.get(self.prefix+'/tenants/resolve',params={'tenant_id':self.legacy['tenant_id']})
+        self.assertEqual(selected.status_code,200,selected.text)
+        self.assertEqual(selected.json()['profile'],'default')
+        # A known tenant ID must not bypass the fixed served profile by omitting
+        # profile=; reject it before opening its native session/case store.
+        with patch('forsic_plugin.tenants.assert_session_scope',side_effect=AssertionError('foreign data opened')):
+            for query in ({'tenant_id':self.a['tenant_id']},
+                          {'tenant_id':self.a['tenant_id'],'session_id':'foreign'},
+                          {'tenant_id':self.b['tenant_id'],'case_id':'foreign'}):
+                denied=remote.get(self.prefix+'/tenants/resolve',params=query)
+                self.assertIn(denied.status_code,(403,404))
+        self.assertEqual(remote.post(self.prefix+'/tenants',json={}).status_code,403)
+        self.assertEqual(remote.get(self.prefix+'/tenant-memory',params={'tenant_id':self.legacy['tenant_id']}).status_code,403)
+        self.assertEqual(remote.get(self.prefix+'/investigations').status_code,400)
+        self.assertEqual(self.files(),before)
+        local=self.client.get(self.prefix+'/tenants').json()
+        self.assertEqual(len(local['tenants']),3)
+        self.assertEqual(local['access'],{'can_create':True,'mode':'local'})
 
     def test_unregistered_native_profile_cannot_fall_back_to_global_intake_or_library(self):
         from forsic_plugin.tenants import current_scope

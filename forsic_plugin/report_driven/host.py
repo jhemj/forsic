@@ -663,6 +663,11 @@ def _invoke(case,args):
         observed_scope = report_scope_inventory(case, args)
         from .narrative import selection as narrative_selection, status as narrative_status, prepare
         prose = narrative_status(s, narrative_selection(s, args))
+        if prose['judgment_review_questions'] and not args.get('allow_partial'):
+            result = prepare(s, args)
+            result.update(rendered=False,
+                partial_snapshot_option={'action':'render','question_ids':prose['question_ids'],'allow_partial':True})
+            return result
         if not prose['ready'] and not args.get('allow_partial'):
             # The native agent consumes the writing packet and authors sections
             # in its ordinary next turn. Rendering itself never calls a model.
@@ -774,19 +779,25 @@ def assess(case,s,p):
         allowed_sources={r['id'] for r in m['reuse_result_refs']+m['input_refs']+m['preserved_counterevidence_refs']+[ref('source',find(s,'sources',rid)) for rid in m['result_ids']] if r['kind']=='source'}
         if src['id'] not in allowed_sources:raise ValueError('Citation was not part of the mission input')
         raw=pointer(case.event(src['id'])['data'],c['pointer']);literal=c['literal'];start=int(c['byte_start']);end=start+len(literal.encode())
+        from .model_pages import select
+        from .retained_scalar import number_literal, citation_context
+        value=select(case.event(src['id'])['data'],c['pointer'])
+        if type(value) in (int,float):
+            raw=number_literal(value)
+            if start!=0 or literal!=raw:
+                raise ValueError('Numeric citations must select the whole canonical JSON number at byte_start=0')
         if start<0 or not literal or raw.encode()[start:end]!=literal.encode():
             raise ValueError('Literal is not the exact retained UTF-8 field span: citations['+str(citation_index)+
                 '].literal/byte_start. Use forsic_reporting(source, source_id='+src['id']+
                 ', query=<short exact fragment>) and copy the returned match.citation; offsets belong to that retained field, not the file. No assessment was saved.')
         # Quoting the value of /path or /scope is metadata, not body access.
         from .measurement import field_role
-        body=field_role(case.event(src['id'])['data'],c['pointer'])=='body'
+        body=isinstance(value,str) and field_role(case.event(src['id'])['data'],c['pointer'])=='body'
         presented='full_field' if start==0 and end==len(raw.encode()) else 'exact_excerpt'
         if not body:presented='metadata'
         check_citation_view(m['required_view'],presented,citation_index)
-        from .measurement import acquisition_context
-        context=acquisition_context(case.event(src['id'])['data'],c['pointer'])
-        ob=dict(id='O-'+digest({'citation':c,'acquisition_context':context})[:20],acquisition_context=context,version=src['version'],source_ref=ref('source',src),statement='원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=literal,canonical_sha256=hashlib.sha256(literal.encode()).hexdigest(),presented_view=presented,coordinate_basis='retained tool-result scalar UTF-8 bytes; not original image offset',byte_start=start,byte_end=end,interpretation_limit='이 필드·제시 구간의 기록만 확인; 성공·승인·귀속·전체 부재는 별도 판별')
+        context=citation_context(case.event(src['id'])['data'],c['pointer'])
+        ob=dict(id='O-'+digest({'citation':c,'acquisition_context':context})[:20],acquisition_context=context,version=src['version'],source_ref=ref('source',src),statement='보존된 수치 필드의 정규 JSON 표현' if 'retained_scalar' in context else '원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=literal,canonical_sha256=hashlib.sha256(literal.encode()).hexdigest(),presented_view=presented,coordinate_basis=context.get('coordinate_basis','retained tool-result scalar UTF-8 bytes; not original image offset'),byte_start=start,byte_end=end,interpretation_limit='이 필드·제시 구간의 기록만 확인; 성공·승인·귀속·전체 부재는 별도 판별')
         prior=next((x for x in s['observations'] if x['id']==ob['id']),None)
         if prior and definition(prior)==definition(ob):ob=deepcopy(prior)
         observations.append(ob)

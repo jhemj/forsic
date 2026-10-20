@@ -25,7 +25,20 @@ MAX_INDEX_BYTES = 8 * 1024**2
 # serialized bytes. 2000 records leave room for source/summary below 8 MiB.
 MAX_RECORDS = 2000
 PRIVATE_NAME = '.triage-artifacts'
+PERSISTENCE_FORMATS = ('cron_user', 'cron_system', 'systemd_unit')
 PROFILES = {
+    'linux_persistence': {
+        'target_os': 'linux', 'purposes': ['quick', 'persistence'],
+        'applicability': 'Explicitly selected cron_user, cron_system or systemd_unit UTF-8 configuration files.',
+        'kind': 'configuration_candidates', 'input': 'Complete retained files/exports with caller-asserted triage_format per target.',
+        'engine': 'forsic.triage_scan persistence structure version 1',
+        'rules': 'Structural entries only; no maliciousness rules, command execution or environment expansion.',
+        'return': 'Fixed entry labels, exact byte/line ranges, counts and source/hash recheck calls; no command/value text.',
+        'limitations': 'Configured text only; effective configuration, enablement, execution, authorization and maliciousness are not established. Unsupported syntax is partial scope.',
+        'cost_limits': {'selected_files': MAX_TARGETS, 'combined_input_bytes': MAX_BYTES,
+            'timeout_seconds': 300, 'returned_candidates': MAX_CANDIDATES,
+            'lines_per_file': 20000, 'execution': 'sequential'},
+    },
     'windows_evtx': {
         'target_os': 'windows', 'purposes': ['quick', 'account', 'persistence'],
         'applicability': 'Explicitly selected Windows EVTX files; rule detection candidates.',
@@ -92,6 +105,11 @@ def properties():
     target = storage.properties()['targets']
     target = {**target, 'maxItems': MAX_TARGETS,
         'description': 'Explicit retained evidence_file or workspace_export targets with exact source version; no directory/image/default full scan.'}
+    target['items'] = {**target['items'], 'properties': {**target['items']['properties'],
+        'kind': {'type': 'string', 'enum': ['evidence_file', 'workspace_export']},
+        'triage_format': {'type': 'string', 'enum': list(PERSISTENCE_FORMATS)}},
+        'required': ['kind', 'pointer'],
+        'description': 'triage requires kind=evidence_file or workspace_export, pointer and source_handle or source_id/source_version. Defaults format=text and encoding=auto preserve binary bytes, not a file-format assertion. linux_persistence also requires triage_format.'}
     return {'profile': {'type': 'string', 'enum': list(PROFILES)},
         'targets': target,
         'login_format': {'type': 'string', 'enum': ['linux-glibc-x86-le-384']},
@@ -105,8 +123,30 @@ def validate(args):
         raise ValueError('triage accepts one profile, retained targets, explicit login_format and bounded limits only')
     profile = args.get('profile')
     if profile not in PROFILES:
-        raise ValueError('Select windows_evtx or linux_login_parser; other profiles are unavailable')
-    checked = storage.validate({k: v for k, v in args.items() if k in ('targets', 'timeout_seconds', 'resume_ref')})
+        raise ValueError('Select a registered triage profile')
+    submitted_targets = args.get('targets')
+    if not isinstance(submitted_targets, list) or any(not isinstance(t, dict) for t in submitted_targets):
+        raise ValueError('Select retained targets')
+    for index, target in enumerate(submitted_targets):
+        prefix = f'targets[{index}]'
+        for field in ('kind', 'pointer'):
+            if field not in target:
+                raise ValueError(f'{prefix}.{field} is required for triage')
+        if 'source_handle' not in target:
+            for field in ('source_id', 'source_version'):
+                if field not in target:
+                    raise ValueError(f'{prefix}.{field} is required without source_handle')
+        if target['kind'] not in ('evidence_file', 'workspace_export'):
+            raise ValueError(f'{prefix}.kind must be evidence_file or workspace_export')
+        if profile == 'linux_persistence' and target.get('triage_format') not in PERSISTENCE_FORMATS:
+            raise ValueError(f'{prefix}.triage_format must be cron_user, cron_system or systemd_unit for linux_persistence')
+    formats = [t.get('triage_format') for t in submitted_targets]
+    if profile != 'linux_persistence' and any('triage_format' in t for t in submitted_targets):
+        raise ValueError('triage_format applies only to linux_persistence')
+    checked = storage.validate({**{k: v for k, v in args.items() if k in ('timeout_seconds', 'resume_ref')},
+        'targets': [{k: v for k, v in t.items() if k != 'triage_format'} for t in submitted_targets]})
+    if profile == 'linux_persistence':
+        checked['targets'] = [{**t, 'triage_format': f} for t, f in zip(checked['targets'], formats)]
     if len(checked['targets']) > MAX_TARGETS or any(t['kind'] not in ('evidence_file', 'workspace_export') for t in checked['targets']):
         raise ValueError('Select 1 to 8 complete retained files or exports, never retained text or a full image')
     if any(t['encoding'] != 'auto' or t['format'] != 'text' for t in checked['targets']):
@@ -176,7 +216,8 @@ def _project(body, inputs, args, scan_id, *, candidate_limit=None):
     def numbers(value):
         return {k: value[k] for k in counts if type(value.get(k)) is int and 0 <= value[k] <= 10**12}
     reasons = {'record_limit', 'record_warnings', 'truncated_tail', 'engine_diagnostics', 'engine_timeout',
-        'engine_failed', 'engine_unavailable', 'rules_unverified', 'unsupported_input', 'output_invalid', 'deadline_reached'}
+        'engine_failed', 'engine_unavailable', 'rules_unverified', 'unsupported_input', 'output_invalid', 'deadline_reached',
+        'unsupported_syntax', 'line_limit', 'unsupported_encoding'}
     for value in body.get('inputs', []):
         key = value.get('input_id')
         if key not in by_id or key in {s['input_id'] for s in scopes}:
@@ -200,21 +241,31 @@ def _project(body, inputs, args, scan_id, *, candidate_limit=None):
                 or (key, ordinal) in seen_candidates):
             raise ValueError('Invalid candidate locator')
         seen_candidates.add((key, ordinal))
-        locator = {k: row[k] for k in ('byte_start', 'byte_end', 'record_index', 'event_record_id', 'record_type')
+        locator = {k: row[k] for k in ('byte_start', 'byte_end', 'record_index', 'event_record_id', 'record_type', 'line_start', 'line_end')
             if type(row.get(k)) is int and 0 <= row[k] <= 2**63-1}
         if args['profile'] == 'linux_login_parser' and not (
             locator.get('byte_start', -1) == locator.get('record_index', -2) * 384
             and locator.get('byte_end') == locator['byte_start'] + 384 <= by_id[key]['bytes']):
             raise ValueError('Invalid login byte coordinate')
+        if args['profile'] == 'linux_persistence' and not (
+                0 <= locator.get('byte_start', -1) < locator.get('byte_end', -1) <= by_id[key]['bytes']
+                and 1 <= locator.get('line_start', 0) <= locator.get('line_end', 0) <= 20000
+                and row.get('entry_kind') in ('cron_schedule', 'cron_macro', 'systemd_directive')
+                and type(row.get('value_empty')) is bool):
+            raise ValueError('Invalid persistence coordinates or metadata')
         candidate = {'candidate_id': f'C{len(candidates)+1:04d}', 'input_id': key, 'ordinal': ordinal,
             'status': 'candidate_not_adopted', 'source_recheck': {'source_ref': by_id[key]['source_ref'],
                 'sha256': by_id[key]['sha256'], **locator},
             'restricted_row_ref': {'scan_id': scan_id, 'input_id': key, 'candidate_ordinal': ordinal, 'model_access': False}}
+        if args['profile'] == 'linux_persistence':
+            candidate.update(entry_kind=row['entry_kind'], value_empty=row['value_empty'],
+                triage_format=by_id[key]['triage_format'],
+                interpretation='configured_text_only_effective_state_and_execution_not_established')
         ref = by_id[key]['source_ref']
         candidate['source_call'] = {'tool': 'forsic_reporting', 'arguments': {
             'action': 'source', 'source_id': ref['id'], 'source_version': ref['version'],
             'pointer': ref['pointer']}}
-        if (args['profile'] == 'linux_login_parser' and by_id[key]['selection_kind'] == 'evidence_file'):
+        if (args['profile'] in ('linux_login_parser', 'linux_persistence') and by_id[key]['selection_kind'] == 'evidence_file'):
             location = by_id[key].get('original_location', {})
             if location.get('coordinate_space') == 'selected_file_bytes':
                 candidate['original_byte_call'] = {'tool': 'forsic_read_bytes', 'arguments': {
@@ -274,6 +325,9 @@ def invoke(case, submitted, session_id, native_execution=None):
             staged = job / 'inputs'
             staged.mkdir(mode=0o700)
             inputs = storage._stage(case, args, session_id, staged, native_execution)
+            if args['profile'] == 'linux_persistence':
+                for item, target in zip(inputs, args['targets']):
+                    item['triage_format'] = target['triage_format']
             if args['profile'] == 'windows_evtx':
                 # Hayabusa's extension filtering must not silently skip opaque
                 # staging names; bytes and original retained locators stay exact.
@@ -416,7 +470,12 @@ def invoke(case, submitted, session_id, native_execution=None):
             return retained
         details = getattr(exc, 'details', {})
         code = details.get('error_code')
-        return _failure(code if code in ('workspace_busy', 'cancelled_before_start') else 'triage_rejected', details.get('execution'))
+        rejected = _failure(code if code in ('workspace_busy', 'cancelled_before_start') else 'triage_rejected', details.get('execution'))
+        if isinstance(exc, storage.ScanRejected) and exc.args and exc.args[0] in storage.REMEDIES:
+            code = exc.args[0]
+            rejected.update(admission_failure_code=code.removeprefix('sensitive_'),
+                next_step=storage.REMEDIES[code])
+        return rejected
 
 
 def query_properties():

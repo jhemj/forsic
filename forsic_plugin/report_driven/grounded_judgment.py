@@ -13,7 +13,7 @@ def schema(contract_version='v1'):
     string={'type':'string'}
     strings={'type':'array','items':string}
     aggregate = {'type':'object','properties':{
-        'citation_refs':{**strings,'description':'Copy citation_ref for exact supporting text, not headings/other lines. Get other lines via source lookup; no preparation or mission required.'},
+        'citation_refs':{**strings,'description':'Copy returned C1/C2 refs for the supporting retained text or whole finite number. Follow source field read_calls for other values; do not substitute a nearby field. No preparation or mission required.'},
         'counter_citation_refs':strings,
         'assertion_kind':{'type':'string','enum':['fact','interpretation']},
         'inference_strength':{'type':'string','enum':['favored','plausible','unrated']},
@@ -106,13 +106,13 @@ def records(case,state,note,judgment,contract_version='v1'):
             for value in dict.fromkeys(analysis[role]):
                 c=selection(case,state,value);source,span=_citation(case,state,c)
                 source_ids.append(source['id'])
-                from .measurement import acquisition_context
-                context=acquisition_context(case.event(source['id'])['data'],c['pointer'])
+                from .retained_scalar import citation_context
+                context=citation_context(case.event(source['id'])['data'],c['pointer'])
                 ob=Observation.model_validate(dict(id='O-'+digest({'citation':c,'acquisition_context':context})[:20],
                     acquisition_context=context,version=source['version'],source_ref=ref('source',source),
-                    statement='원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=c['literal'],
+                    statement='보존된 수치 필드의 정규 JSON 표현' if 'retained_scalar' in context else '원문 필드에 기록된 문자열',field_pointer=c['pointer'],literal=c['literal'],
                     canonical_sha256=hashlib.sha256(c['literal'].encode()).hexdigest(),presented_view=span['presented_view'],
-                    coordinate_basis='retained tool-result scalar UTF-8 bytes; not original image offset',
+                    coordinate_basis=context.get('coordinate_basis','retained tool-result scalar UTF-8 bytes; not original image offset'),
                     byte_start=span['byte_start'],byte_end=span['byte_end'],
                     interpretation_limit='이 필드·제시 구간의 기록만 확인; 성공·승인·귀속·전체 부재는 별도 판별')).model_dump()
                 if ob['id'] not in {o['id'] for o in observations}:observations.append(ob)

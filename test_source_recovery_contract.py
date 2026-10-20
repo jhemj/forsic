@@ -23,7 +23,10 @@ class SourceRecoveryContractTests(unittest.TestCase):
         data = {'tool': 'forsic_read', 'complete': True, 'text': 'observed'}
         source = self.source(data)
         discovery = source_view(source, data, {})
-        self.assertEqual(discovery['result'], data)
+        self.assertEqual({item['key']: item['value'] for item in discovery['items']}, data)
+        for item in discovery['items']:
+            field = source_view(source, data, item['read_call'])
+            self.assertEqual(field.get('text', field.get('value')), data[item['key']])
         self.assertEqual(source_view(source, data, {'offset': 0}), discovery)
         self.assertIn('retained tool-result root', discovery['pointer_basis'])
         self.assertIn('Explicit pointer=""', discovery['source_input_contract'])

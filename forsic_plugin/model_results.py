@@ -22,6 +22,74 @@ def _mission_summary(record):
         'assessment_rules': rules}
 
 
+def _shell_view(view, source):
+    """Omit only known repeated metadata; execution and restrictions stay visible."""
+    from .report_driven.model_pages import source_read_call
+
+    def call(pointer):
+        return {'tool': 'forsic_reporting', 'arguments': {
+            **source_read_call(source, pointer, view['source_handle']), 'limit': 25}}
+
+    policy = view.get('execution_policy')
+    if isinstance(policy, dict):
+        repeated = ('triage', 'image_access', 'structured_query', 'login_records', 'sensitive_scan')
+        compact = {k: v for k, v in policy.items() if k not in (*repeated, 'environment')}
+        details = {k: call('/execution_policy/' + k) for k in repeated if k in policy}
+        if 'environment' in policy:
+            details['environment'] = call('/execution_policy/environment')
+        view['execution_policy'] = compact
+        view['policy_details_calls'] = details
+        view['omitted_fields'].extend('execution_policy/' + k for k in details)
+        triage = policy.get('triage', {})
+        view['capability_menu'] = {
+            'triage_profiles': {name: {'target_os': item['target_os'], 'kind': item['kind']}
+                for name, item in triage.get('profiles', {}).items()},
+            'unavailable_profiles': triage.get('unavailable_profiles', {}),
+            'availability': 'Declared profiles; installed engines and target-format support require checking. Unsupported is not absent evidence.',
+            'helpers': {name: {key: policy[name][key] for key in ('help_command', 'skill', 'reference') if key in policy[name]}
+                for name in ('image_access', 'structured_query', 'login_records') if name in policy},
+            'sensitive_scan': {'action': 'sensitive_scan', 'skill': 'scan-sensitive-data'},
+            'discovery_call': {'tool': 'forsic_shell', 'arguments': {'action': 'capabilities'}}}
+    if view.get('action') == 'capabilities':
+        # The discovery script and JSON stdout duplicate structured capabilities.
+        view['command_call'] = call('/command')
+        view.pop('command', None)
+        view['omitted_fields'].append('command')
+        if view.get('runtime_capabilities', {}).get('state') == 'observed':
+            view['stdout_call'] = call('/stdout')
+            view.pop('stdout', None)
+            view['omitted_fields'].append('stdout')
+    return view
+
+
+def _export_target(view):
+    """Select only a complete retained receipt; staging still verifies its file."""
+    from .sensitive_policy import export_receipt, export_receipt_lines, workspace_export_scope
+    try:
+        workspace_export_scope(view, '/stdout')
+    except ValueError:
+        return
+    try:
+        export_receipt(view.get('stdout', ''))
+    except (TypeError, ValueError):
+        selectors, total = [], 0
+        for line, _ in export_receipt_lines(view.get('stdout', '')):
+            total += 1
+            if len(selectors) < 64:
+                selectors.append({'source_handle': view['source_handle'],
+                    'pointer': '/stdout', 'kind': 'workspace_export', 'export_line': line})
+        if not selectors:
+            return
+        view.update(retained_export_targets=selectors, retained_export_target_count=total,
+            omitted_retained_export_target_count=total-len(selectors))
+    else:
+        view['retained_export_target'] = {'source_handle': view['source_handle'],
+            'pointer': '/stdout', 'kind': 'workspace_export'}
+    view['retained_export_selection_note'] = ('These are derived selectors over unchanged retained stdout. '
+        'Copy one exact target, including export_line when present, after choosing a profile and its required format/ABI. '
+        'Admission still verifies source version, conversation ownership, complete receipt, file boundaries and exported-byte hash; this selector is not admission or coverage.')
+
+
 def evidence_view(result, case):
     from .archive_selection import result_view
     result = result_view(result, case)
@@ -51,7 +119,8 @@ def evidence_view(result, case):
             **source_read_call(source, '/raw_output/'+stream+'_base64', view['source_handle']), 'limit':4096}}
             for stream in ('stdout','stderr')}
         view['presentation_note']='stdout/stderr are unchanged retained UTF-8 previews of derived command output. Full captured bytes remain in raw_output and are paged as base64 through raw_output_calls; neither view establishes original evidence content or coverage.'
-        return view
+        _export_target(view)
+        return _shell_view(view, source)
     if not isinstance(result.get('text'),str) or not isinstance(result.get('base64'),str):
         return result
     from .report_driven.host import source_record

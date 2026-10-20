@@ -17,7 +17,12 @@ class ReportNarrativeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.case, self.reads, self.note = fixture(self.tmp.name)
-        worked(self.case)
+        state = worked(self.case)
+        question = state["questions"][0]
+        invoke(self.case, {"action": "question", "payload": {
+            "operation_id": "editorial-fixture-assessment", "question_id": question["id"],
+            "expected_revision": question["revision"], "assessment": "undetermined",
+            "reason": "Explicitly retain the synthetic uncertain answer before editorial writing"}})
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -150,6 +155,55 @@ class ReportNarrativeTests(unittest.TestCase):
         self.assertEqual(response["status"], "authoring_required")
         self.assertNotIn("error", response)
         self.assertEqual(current(self.case)["status"]["investigation"], "partial")
+
+    def test_invalidated_judgment_precedes_editorial_rewrite_and_can_be_reassessed(self):
+        self.finish()
+        old = note(self.case, {"action": "get", "note_id": self.note["note_id"]})["note"]
+        note(self.case, {"action": "save", "note_id": old["note_id"], "revision": old["revision"],
+                         "question": old["question"], "answer": "새 관측과 기존 해석의 연결은 재검토가 필요합니다.",
+                         "evidence_ids": old["evidence_ids"], "correction_reason": "관측 범위 변경"})
+        state = current(self.case)
+        question = state["questions"][0]
+        self.assertTrue(question["judgment_review_required"])
+        before = self.case.db.read_bytes()
+        for action in ("compose", "render"):
+            with self.subTest(action=action), patch("socket.socket", side_effect=AssertionError("offline only")):
+                packet = invoke(self.case, {"action": action})
+                self.assertEqual(packet["status"], "judgment_review_required")
+                recovery = packet["judgment_review_questions"][0]
+                self.assertEqual((recovery["question_id"], recovery["revision"]),
+                                 (question["id"], question["revision"]))
+                self.assertEqual(packet["next_call"], recovery["read_call"])
+                read = invoke(self.case, packet["next_call"]["arguments"])
+                self.assertIn(question["id"], json.dumps(read))
+        self.assertEqual(before, self.case.db.read_bytes())
+        with self.assertRaisesRegex(ValueError, "judgment.*review"):
+            self.write("summary", text="이 문단의 수정만으로 판단 검토를 대신할 수 없습니다.")
+        self.assertEqual(before, self.case.db.read_bytes())
+        self.assertTrue(invoke(self.case, {"action": "render", "allow_partial": True})["files"])
+        response = invoke(self.case, {"action": "question", "payload": {
+            "operation_id": "reassess-current-answer", "question_id": question["id"],
+            "expected_revision": question["revision"], "assessment": "undetermined",
+            "reason": "현재 답의 유보 판단을 명시적으로 재평가"}})
+        self.assertIn("question", response)
+        self.assertEqual(invoke(self.case, {"action": "compose"})["status"], "authoring_required")
+        self.finish()
+        self.assertTrue(invoke(self.case, {"action": "render"})["files"])
+
+    def test_pending_judgment_does_not_block_an_unrelated_selected_question(self):
+        state = current(self.case)
+        other = deepcopy(state["questions"][0])
+        other.update(id="Q-other", judgment_review_required=True, work_state="scoped_closed",
+                     closure_rationale="No further retained check chosen")
+        state["questions"].append(other)
+        packet = prepare(state, {"question_ids": [state["questions"][0]["id"]]})
+        self.assertEqual(packet["status"], "authoring_required")
+        self.assertEqual(packet["judgment_review_questions"], [])
+        pending = prepare(state, {"question_ids": [other["id"]]})
+        self.assertEqual(pending["status"], "judgment_review_required")
+        item = next(row for row in pending["items"] if row["kind"] == "question")
+        self.assertEqual(item["work_state"], "scoped_closed")
+        self.assertTrue(item["judgment_review_required"])
 
 
 if __name__ == "__main__":

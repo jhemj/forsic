@@ -8,7 +8,7 @@ root = Path(__file__).resolve().parent
 upstream = root / 'upstream/hermes'
 os.environ['HERMES_HOME'] = str(root / 'state/hermes')
 os.environ['HERMES_RUNTIME_DIR'] = str(root / 'state/tools')
-os.environ['HERMES_TUI_TOOLSETS'] = 'forsic'
+os.environ['HERMES_TUI_TOOLSETS'] = 'forsic,clarify'
 # Forsic procedures are registered by the plugin and read on demand. Keep the
 # native sync mechanism, but do not seed a second, generic skill library.
 os.environ['HERMES_BUNDLED_SKILLS'] = str(root / 'config/bundled-skills')

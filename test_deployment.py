@@ -67,7 +67,7 @@ class DeploymentTests(unittest.TestCase):
         home = self.root / 'state/hermes'
         config = json.loads((home / 'config.yaml').read_text())
         self.assertEqual(config['fallback_model'], {})
-        self.assertEqual(config['platform_toolsets']['telegram'], ['forsic'])
+        self.assertEqual(config['platform_toolsets']['telegram'], ['forsic', 'clarify'])
         self.assertEqual((home / 'config.yaml').stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.root / 'state').stat().st_mode & 0o777, 0o700)
         self.assertEqual((home / 'plugins/forsic').resolve(), self.root / 'forsic_plugin')

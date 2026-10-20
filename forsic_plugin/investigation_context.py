@@ -410,6 +410,16 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
                         compact['answer_qualifications_omitted'] = True
                     if len(_encoded(body)) > budget:
                         body[section].pop(); body['omitted'][section] += 1
+    # Task detail supplements existing navigation only when it fits; never
+    # displace the current qualified answer or exact lookup to show history.
+    from .task_focus import project_tasks
+    remaining = budget-len(_encoded(body))-20
+    if remaining >= 900:
+        focus = project_tasks(state, questions, max_bytes=remaining)
+        if focus['tasks']:
+            body['task_focus'] = focus
+            if len(_encoded(body)) > budget:
+                body.pop('task_focus')
     context = _encoded(body).decode('utf-8')
     if len(context.encode('utf-8')) > budget:
         raise ValueError('Projection identity/omission metadata exceeds its budget')

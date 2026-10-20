@@ -129,6 +129,22 @@ class SetupTests(SetupFixture, unittest.TestCase):
         response = self.client.put('/api/plugins/forsic/setup?profile=other', json=self.body)
         self.assertEqual(response.status_code, 403)
 
+    def test_explicit_unscoped_host_entry_keeps_served_profile_and_bound_checks(self):
+        request = self.request()
+        request.state.forsic_tenant_scope = None
+        with patch('forsic_plugin.tenants.current_scope', side_effect=PermissionError('unknown active tenant')) as current:
+            self.assertTrue(s.local_admin(request))
+            current.assert_not_called()
+            other = self.request()
+            other.state.forsic_tenant_scope = None
+            other.scope['query_string'] = b'profile=other'
+            self.assertFalse(s.local_admin(other))
+            current.assert_not_called()
+        request.state.forsic_tenant_scope = {'profile_name': 'selected'}
+        with patch('forsic_plugin.tenants.current_scope', side_effect=PermissionError('stale tenant ownership')):
+            with self.assertRaisesRegex(PermissionError, 'stale tenant'):
+                s.local_admin(request)
+
     def test_remote_projection_has_no_private_values_and_no_mutation(self):
         client = TestClient(self.app, base_url='https://forsic.example.com', client=('127.0.0.1', 40000))
         value = client.get('/api/plugins/forsic/setup').json()

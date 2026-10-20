@@ -90,7 +90,7 @@ def register(ctx):
     specs['indicators'] = ('Case indicators; load organize-indicators. Keep raw values/exact citations; observed is not malicious. upsert merges canonical provenance. list/get/export are offline; CSV/JSON is local, not a blocklist or delivery.', schema_properties(), ['action'])
     from .shell_workspace import schema as shell_schema
     shell_contract = shell_schema()
-    specs['shell'] = ('Isolated case terminal. run requires command; capabilities checks installed tools. triage runs one bounded selected-file profile sequentially (Windows EVTX or explicit Linux login ABI). triage_query pages/filters its retained safe candidates by scan_id and index_sha256 without rerunning; candidates require source recheck and analyst adoption. sensitive_scan uses retained targets for local secrets/PII detection; no arbitrary command or online credential checks. /evidence is read-only; /work persists per conversation. Output is derived. Inspect execution receipts; never replay unknown work.',
+    specs['shell'] = ('Isolated case terminal. run requires command; capabilities checks installed tools. triage runs one bounded selected-file profile sequentially (Windows EVTX, explicit Linux login ABI, or Linux cron/systemd configuration candidates). triage_query pages/filters its retained safe candidates by scan_id and index_sha256 without rerunning; candidates require source recheck and analyst adoption. sensitive_scan uses retained targets for local secrets/PII detection; no arbitrary command or online credential checks. /evidence is read-only; /work persists per conversation. Output is derived. Inspect execution receipts; never replay unknown work.',
                       shell_contract['properties'],shell_contract['required'])
     from .search_selection import reference_schema
     specs['search'][1]['cursor_ref'] = reference_schema()
@@ -219,7 +219,7 @@ def register(ctx):
         draft=narrative_schema(),
         allow_partial={'type':'boolean','description':'render: explicitly allow a technical interim snapshot without current authored prose; not a completed reader report.'})
     description += ' compose prepares/saves native-agent reader prose with existing judgments; no new model loop. render requests composition if prose is missing/stale. Every paragraph selects returned basis_keys; citations are numbered by the host.'
-    specs['reporting'] = (description + ' review_inbox reads pending findings/source lookups offline. Investigate, then forsic_review_response records disposition with C1/C2 evidence or scoped limits. state is bounded: follow pointer/next_offset with snapshot_id (source_version for source). Only exact source pages provide citation_ref. No evidence-tool cache reads or whole-state repeats for omitted records.', properties, required)
+    specs['reporting'] = (description + ' review_inbox reads pending findings/source lookups offline. Investigate, then forsic_review_response records disposition with C1/C2 evidence or scoped limits. state is bounded: follow pointer/next_offset with snapshot_id (source_version for source). Source child read_calls select exact text or whole finite numbers for citation_ref. No evidence-tool cache reads or whole-state repeats for omitted records.', properties, required)
     # Case scope is already supplied at each native turn; refresh via the read facade.
     specs.pop('case')
     properties['action']['enum'].append('case')
@@ -285,7 +285,7 @@ def register(ctx):
             cancel=lambda:is_thread_interrupted(tid) or is_thread_interrupted(owner)
             if cancel():return None
             advice=goal_advisory_context(session_id=sid,goal_id=resolved['goal_id'],goal_text=resolved['goal'].goal,
-                turns_used=1,stage='exploration',cancel_check=cancel,enabled=True,nonblocking=True,
+                turns_used=1,stage='exploration',cancel_check=cancel,enabled=True,
                 executive_followup=executive_followup_enabled,**projection_options)
         signature=_hash(advice)
         if early_attempts.get(key)==signature:return None
@@ -490,9 +490,39 @@ def register(ctx):
     def skill(args, task_id='', session_id='', **kwargs):
         if builder_session():
             return json.dumps(disabled_result('tool', 'forsic_skill'))
+        action = args.get('action', 'read')
+        if action in ('propose', 'proposals'):
+            try:
+                from .skill_proposals import WorkflowSkillProposals
+                from .extension_hub import home_path
+                from .dashboard.management_store import digest
+                sid = session_id or task_id
+                case = session_case(sid)
+                binding = native_goal_binding(sid, **projection_options)
+                if binding.get('status') != 'ready' or binding.get('case_id') != case.config['case_id']:
+                    raise ValueError('Current native conversation binding is unavailable.')
+                proposals = WorkflowSkillProposals(home_path())
+                if action == 'proposals':
+                    items = proposals.catalog(case.config['case_id'])
+                    return json.dumps({'proposals': [{key: item[key] for key in
+                        ('id', 'revision', 'status', 'draft_sha256', 'reason', 'publication', 'activation')}
+                        | {'name': item['draft']['name'], 'description': item['draft']['description']}
+                        for item in items[-20:]], 'total': len(items), 'omitted': max(0, len(items)-20)}, ensure_ascii=False)
+                payload = args.get('proposal')
+                # Stable retries reuse the private proposal; this grants no publication or execution permission.
+                operation = 'native-skill-' + digest({'conversation': binding['conversation_id'], 'proposal': payload})
+                saved = proposals.propose(case, payload, operation_id=operation,
+                    allowed_session_ids=set(binding.get('session_lineage', [])) | {binding['conversation_id']})
+                return json.dumps({key: saved[key] for key in
+                    ('id', 'revision', 'status', 'draft_sha256', 'validation', 'publication', 'activation')}
+                    | {'name': saved['draft']['name'], 'next_step': 'Saved privately for review in management → workflow skills; not activated.'}, ensure_ascii=False)
+            except (ValueError, OSError, TypeError, KeyError) as exc:
+                return json.dumps({'error': str(exc), 'status': 'not_saved'}, ensure_ascii=False)
+        if action != 'read':
+            return json.dumps({'error': 'Choose read, proposals or propose. Publication and activation are management actions.'})
         from tools.skills_tool import skill_view
         selected_capabilities = capabilities()
-        if not args:
+        if not args.get('name'):
             return json.dumps({'skills': [item for item in skill_catalog if selected_capabilities.skill_enabled(item['name'])] + extension_catalog(extension_skills, intake, capabilities, session_id or task_id)}, ensure_ascii=False)
         if args.get('name') in ('report-executive', 'report-analyst') and 'file_path' not in args:
             args = {'name': 'forsic-report-driven', 'file_path': 'references/audiences.md'}
@@ -512,10 +542,14 @@ def register(ctx):
                                'references': skill_references[name]}, ensure_ascii=False)
         result = json.loads(skill_view('forsic:' + name, file_path=file_path, task_id=task_id, preprocess=False))
         if result.get('success') and file_path is None:
+            import hashlib
+            result['procedure_ref'] = {'builtin': name, 'sha256': hashlib.sha256(
+                (Path(__file__).resolve().parent / 'skills' / name / 'SKILL.md').read_bytes()).hexdigest()}
             result['linked_files'] = {'references': skill_references[name]}
             result['usage_hint'] = 'Use forsic_skill with this name and a listed file_path for a reference; omit both for the procedure catalog.'
         return json.dumps(result, ensure_ascii=False)
-    skill_schema = {'name': 'forsic_skill', 'description': 'No arguments: procedure names/purposes. Select name, then optional listed reference file_path. Read-only; no scripts/preprocessing.', 'parameters': {'type': 'object', 'properties': {'name': {'type': 'string', 'enum': list(skills) + [entry['name'] for entry in extension_skills]}, 'file_path': {'type': 'string', 'description': 'A references/*.md path listed by the selected skill.'}}, 'additionalProperties': False}}
+    from .skill_proposals import proposal_schema
+    skill_schema = {'name': 'forsic_skill', 'description': 'No arguments: procedure catalog. Read name and optional listed file_path. After useful repeatable work, optionally propose a generalized procedure using successful receipt IDs; proposals lists saved drafts. No execution, publication or activation.', 'parameters': {'type': 'object', 'properties': {'action': {'type': 'string', 'enum': ['read', 'proposals', 'propose']}, 'name': {'type': 'string', 'enum': list(skills) + [entry['name'] for entry in extension_skills]}, 'file_path': {'type': 'string', 'description': 'A references/*.md path listed by the selected skill.'}, 'proposal': proposal_schema()}, 'additionalProperties': False}}
     ctx.register_tool(name='forsic_skill', toolset='forsic', description='Discover or read a Forsic procedure on demand.',
                       schema=skill_schema, handler=skill, pin_config_sensitive=True, check_fn=no_cache_check_fn(lambda: not builder_session()),
                       dynamic_schema_overrides=partial(dynamic_schema, 'forsic_skill', skill_schema))
@@ -561,6 +595,11 @@ def register(ctx):
                         expected_goal_id=resolved['goal_id'], expected_conversation_id=resolved['conversation_id'])
                     if seeded.get('status') == 'unavailable':
                         context += '\nInitial question persistence: ' + json.dumps(seeded, ensure_ascii=False)
+                    elif seeded.get('status') == 'saved':
+                        from .onboarding import initial_triage
+                        starting_points = initial_triage(case.config, capabilities())
+                        if starting_points:
+                            context += '\nInitial triage planning: ' + json.dumps(starting_points, ensure_ascii=False)
             except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
                 context += '\nInitial question persistence unavailable: ' + type(exc).__name__
             projection = post_context_compaction(session_id=session_id, max_bytes=6000, include_runtime_clock=False, **projection_options)
@@ -648,5 +687,19 @@ def register(ctx):
     register_builder(ctx)
     ctx.register_hook("pre_llm_call", before_turn)
     ctx.register_hook("post_llm_call", after_turn)
+    def clarification_notice(phase, tool_name='', session_id='', **kwargs):
+        if tool_name != 'clarify' or not session_id or builder_session(session_id):
+            return None
+        try:
+            from telegram_mirror import record_clarification
+            case = intake.case(session_id)
+            if case is not None:
+                record_clarification(case, phase, tool_name, session_id=session_id, **kwargs)
+        except (OSError, ValueError, TypeError, KeyError):
+            # Notification observations never change native clarification or its cancellation.
+            pass
+        return None
+    ctx.register_hook('pre_tool_call', partial(clarification_notice, 'requested'))
+    ctx.register_hook('post_tool_call', partial(clarification_notice, 'resolved'))
     for hook in ("pre_api_request", "post_api_request", "api_request_error", "pre_auxiliary_call", "post_auxiliary_call"):
         ctx.register_hook(hook, partial(receipt, hook))

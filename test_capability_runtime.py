@@ -224,6 +224,23 @@ class CapabilityRuntimeTests(unittest.TestCase):
         frame = self.server._sessions['runtime']['transport'].write.call_args.args[0]
         self.assertEqual(frame['params']['type'], 'session.info')
 
+    def test_clarify_menu_mismatch_cannot_be_reported_as_applied_even_with_matching_pin(self):
+        agent = self.live_agent()
+        clarify = {'type':'function','function':{'name':'clarify','parameters':{'type':'object'}}}
+        session = self.server._sessions['runtime']
+        for current, expected in (([],[clarify]),([clarify],[])):
+            with self.subTest(current=current,expected=expected):
+                agent.tools = current
+                agent.valid_tool_names = {item['function']['name'] for item in current}
+                agent._session_db.update_session_tool_names('synthetic',{'tools':current})
+                with patch('model_tools.get_tool_definitions',return_value=expected):
+                    self.assertFalse(runtime._verify_session(self.home,session))
+        agent.tools = [clarify]; agent.valid_tool_names = {'clarify'}
+        agent._session_db.update_session_tool_names('synthetic',{'tools':[clarify]})
+        with patch('model_tools.get_tool_definitions',return_value=[clarify]):
+            self.assertTrue(runtime._verify_session(self.home,session))
+        self.assertTrue(session['goal_user_paused'])
+
     def test_swallowed_refresh_or_pin_failure_returns_pending_and_can_retry(self):
         agent = self.live_agent()
         with patch.object(self.server, '_refresh_live_sessions'):

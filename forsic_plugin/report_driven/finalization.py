@@ -47,6 +47,8 @@ def independent_review_projection(review_context, state):
     projection = {key: result.get(key) for key in keys}
     if result.get('executive_followup'):
         projection['executive_followup'] = result['executive_followup']
+    if review_context.get('executive_followup_required'):
+        projection['executive_followup_required'] = True
     projection['enabled'] = True
     # Received attempts are represented by the retained receipt. Other current
     # final receipts supply their own availability status when re-rendered.
@@ -71,6 +73,10 @@ def _review_gate(case, state, manifest, context):
     if projection.get('requires_followup') or projection.get('pending_finding_ids'):
         status = 'independent_review_pending'
         next_step = 'review_inbox에서 보존된 중요 의견을 읽고 review_response로 근거와 처분을 저장한 뒤 보고서를 다시 생성하세요.'
+    elif ((projection.get('executive_followup_required') or projection.get('executive_followup'))
+            and not (projection.get('executive_followup') or {}).get('complete')):
+        status = 'independent_review_incomplete'
+        next_step = '요청한 임원 독자 3회·15개 질문이 미완료입니다. 가용성 처분은 질문·답의 완료가 아닙니다. 초안을 보존하고 부분 결과와 검토 중단 상태를 알리세요. 미확정 요청은 자동 재전송하지 않습니다.'
     elif not projection.get('final_review_current') and not projection['availability_limitation']:
         status = 'independent_review_required'
         next_step = '현재 답과 근거에 대한 최종 독립 검토를 수행한 뒤 보고서를 다시 생성하세요.'

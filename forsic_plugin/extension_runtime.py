@@ -206,6 +206,10 @@ def read_skill(entries, args, intake, capabilities, session_id='', task_id=''):
     if result.get('success') and reference is None: result['linked_files'] = {'references': entry['references']}
     result['extension'] = {k: entry['pack']['manifest'][k] for k in ('id', 'version')}
     result['extension']['sha256'] = entry['pack']['sha256']
+    if result.get('success') and reference is None:
+        result['procedure_ref'] = {'pack_id': entry['pack']['manifest']['id'],
+            'version': entry['pack']['manifest']['version'], 'sha256': entry['pack']['sha256'],
+            'skill_name': entry['logical_name']}
     return result
 
 

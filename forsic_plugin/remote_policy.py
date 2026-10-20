@@ -124,9 +124,10 @@ class ForsicRemotePolicy:
                 r'/api/plugins/forsic/(?:skills-ui-copy|review-chat|evidence-collection(?:/exports/[^/]+(?:/download)?)?)', path):
             return True  # Ordinary authentication and endpoint ownership checks still run.
         if method in ('GET', 'HEAD'):
-            if path in ('/login', '/auth/login', '/auth/callback', '/api/plugins/forsic/setup', '/api/plugins/forsic/capabilities'):
+            if path in ('/login', '/auth/login', '/auth/callback', '/api/plugins/forsic/setup', '/api/plugins/forsic/capabilities',
+                        '/api/plugins/forsic/tenants', '/api/plugins/forsic/tenants/resolve'):
                 return True
-            if path in ('/', '/forsic', '/chat', '/sessions', '/favicon.ico') or path.startswith('/assets/') or re.fullmatch(r'/(?:fonts|fonts-terminal)/[^/]+\.(?:woff2?|ttf|otf)', path):
+            if path in ('/', '/forsic', '/chat', '/sessions', '/tenants', '/favicon.ico') or path.startswith('/assets/') or re.fullmatch(r'/(?:fonts|fonts-terminal)/[^/]+\.(?:woff2?|ttf|otf)', path):
                 return True
             if path in ('/api/auth/me', '/api/auth/providers', '/api/dashboard/plugins',
                         '/api/dashboard/themes', '/api/dashboard/font', '/api/tools/toolsets'):
@@ -192,6 +193,9 @@ class ForsicRemoteAccessMiddleware:
         if scope['type'] == 'http':
             if not await asyncio.to_thread(self.policy.http_allowed, scope):
                 return await self._json(send, 403, {'detail': DENIED})
+            # Trusted transport context, never a client header. The tenant gate
+            # may list/resolve this served profile without admitting other homes.
+            scope.setdefault('state', {})['forsic_remote_profile'] = self.policy.profile
             if scope['path'] in ('/api/profiles', '/api/profiles/active', '/api/dashboard/plugins'):
                 # Run the ordinary auth/router first. Projection never turns an
                 # existing 401/403 into an unauthenticated success response.

@@ -53,7 +53,7 @@ class PromptEfficiencyTests(unittest.TestCase):
             self.assertTrue(prior.is_coding)
             coding = prior.system_prompt_parts(valid_tool_names=agent.valid_tool_names, workspace_block='')
             self.assertTrue(coding[0])
-        self.assertTrue(all(toolsets == ['forsic'] for toolsets in config['platform_toolsets'].values()))
+        self.assertTrue(all(toolsets == ['forsic', 'clarify'] for toolsets in config['platform_toolsets'].values()))
         print('Native generic/coding brief chars omitted:', len(OPENAI_MODEL_EXECUTION_GUIDANCE),
               '+', sum(len(part) for parts in coding for part in parts))
 

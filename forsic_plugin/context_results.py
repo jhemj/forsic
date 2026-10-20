@@ -96,6 +96,36 @@ def review_navigation(body):
     return {'independent_review': view}
 
 
+def shell_navigation(body, lookup):
+    """Whole bounded export selectors, with no output body."""
+    if body.get('tool') != 'forsic_shell' or not isinstance(lookup, dict):
+        return {}
+    from .report_driven.source_handles import handle_reference
+    ref, handle = body.get('source_ref'), body.get('source_handle')
+    def target(value):
+        return (isinstance(value, dict)
+            and set(value) <= {'kind', 'source_handle', 'pointer', 'export_line'}
+            and value.get('kind') == 'workspace_export' and value.get('source_handle') == handle
+            and isinstance(handle, str) and handle_reference(handle) == ref
+            and value.get('pointer') == '/stdout'
+            and ('export_line' not in value or type(value['export_line']) is int and value['export_line'] >= 1)
+            and len(json.dumps(value, ensure_ascii=False)) <= 900)
+    result = {}
+    if target(body.get('retained_export_target')):
+        result['retained_export_target'] = deepcopy(body['retained_export_target'])
+    selectors = body.get('retained_export_targets')
+    if isinstance(selectors, list):
+        selected = [value for value in selectors if target(value)]
+        total = body.get('retained_export_target_count', len(selectors))
+        total = max(len(selectors), total) if type(total) is int else len(selectors)
+        result.update(retained_export_targets=deepcopy(selected[:4]), retained_export_target_count=total,
+            omitted_retained_export_target_count=total-min(4, len(selected)))
+    if result:
+        result['shell_result_lookup'] = {'tool': 'forsic_reporting', 'arguments': {
+            **lookup['arguments'], 'pointer': '/stdout', 'limit': 4096}}
+    return result
+
+
 def summarize(tool, args, content):
     try:
         body = json.loads(content)
@@ -149,6 +179,7 @@ def summarize(tool, args, content):
     if isinstance(body.get('evidence_id'), str) and len(body['evidence_id']) <= 160:
         view['retained_result_id'] = body['evidence_id']
     view.update(execution_summary(body))
+    view.update(shell_navigation(body, view.get('lookup')))
     error = body.get('error')
     question_repair = (body.get('error_code') in ('invalid_question_fields', 'invalid_review_response') and
                        isinstance(body.get('invalid_fields'),list) and isinstance(body.get('recovery'),dict))
@@ -176,6 +207,10 @@ def summarize(tool, args, content):
         for key in ('error_type', 'error_code', 'failure_stage', 'execution_status'):
             if isinstance(body.get(key), str) and len(body[key]) <= 120:
                 view[key] = body[key]
+        from .sensitive_policy import REMEDIES
+        admission = body.get('admission_failure_code')
+        if isinstance(admission, str) and 'sensitive_' + admission in REMEDIES:
+            view.update(admission_failure_code=admission, next_step=REMEDIES['sensitive_' + admission])
         view.update(source_repair)
     else:
         # Only returned records acknowledge a write. Requested outcome/answer is intent.
@@ -302,6 +337,11 @@ def summarize(tool, args, content):
             view.pop(field)
             view[field + '_omitted'] = True
             encoded = json.dumps(view, ensure_ascii=False, separators=(',', ':'))
+    # Drop complete navigation items with counts, never chop an exact selector.
+    while len(encoded) > 2000 and view.get('retained_export_targets'):
+        view['retained_export_targets'].pop()
+        view['omitted_retained_export_target_count'] += 1
+        encoded = json.dumps(view, ensure_ascii=False, separators=(',', ':'))
     if source_repair:
         # Recovery inputs outrank previews and repeated identity. Preserve the
         # failed version and requested pointer separately from the retry call.

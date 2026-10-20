@@ -20,8 +20,9 @@ capabilities. Forsic supplies the selected evidence scope; operators do not need
 to enter container paths or bind mounts. ewfinfo and ewfverify run as host
 subprocesses, outside that isolation. Allocated-image file access is not
 deleted-file carving. All visitors share one operator workspace and its case
-records. Separate user accounts, tenant isolation and role-based permissions
-are not supplied. Removing admin UI does not remove native backend admin routes.
+records. Tenant profiles isolate operational memory and case ownership; they are not
+separate authenticated users or a role-based access-control system. Removing
+admin UI does not remove native backend admin routes.
 
 Guided first installation
 -------------------------

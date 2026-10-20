@@ -63,15 +63,25 @@ class ReportingPageTests(unittest.TestCase):
         self.assertFalse(reason['presented'])
         self.assertEqual(reason['pointer'], '/gaps/0/reason')
 
-    def test_source_small_contract_and_case_reads_are_unchanged(self):
+    def test_source_small_discovery_preserves_fields_and_read_only_case(self):
         s = current(self.case)
         source = s['sources'][0]
         before = self.case.db.read_bytes()
         with patch('socket.socket', side_effect=AssertionError('network forbidden')):
             result = invoke(self.case, {'action':'source','source_id':source['id']})
-            self.assertEqual(result['result'], self.case.event(source['id'])['data'])
-            self.assertEqual(result['source'], source)
-            self.bounded(result)
+            fields = []
+            while True:
+                self.bounded(result)
+                self.assertEqual(result['source_ref'], {'id': source['id'], 'version': source['version']})
+                fields.extend(result['items'])
+                if result['next_call'] is None:
+                    break
+                result = invoke(self.case, result['next_call'])
+            self.assertEqual({item['key']: item['value'] for item in fields}, self.case.event(source['id'])['data'])
+            for item in fields:
+                field = invoke(self.case, item['read_call'])
+                self.assertEqual(field['pointer'], item['pointer'])
+                self.bounded(field)
             invoke(self.case, {'action':'state'})
             invoke(self.case, {'action':'gaps'})
         self.assertEqual(self.case.db.read_bytes(), before)

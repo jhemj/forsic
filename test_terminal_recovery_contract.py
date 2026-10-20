@@ -48,6 +48,7 @@ class TerminalRecoveryTests(unittest.TestCase):
         launched.assert_called_once()
         return value
 
+
     def test_atomic_no_match_preserves_raw_exit_without_failure(self):
         value = self.invoke('grep -c -F -- absent ' + shlex.quote(str(self.file)))
         self.assertEqual(value['execution']['exit_code'], 1)
@@ -77,6 +78,35 @@ class TerminalRecoveryTests(unittest.TestCase):
         self.assertEqual(value['command_outcome']['status'], 'failed')
         self.assertEqual(value['command_outcome']['individual_steps'], 'not_observed')
 
+    def test_no_match_in_semicolon_batch_prevents_later_independent_check(self):
+        marker = self.work / 'independent-check'
+        value = self.invoke('grep -c -F -- absent ' + shlex.quote(str(self.file)) +
+                            '; printf reached > ' + shlex.quote(str(marker)))
+        self.assertEqual(value['execution']['exit_code'], 1)
+        self.assertEqual(value['stdout'], '0\n')
+        self.assertFalse(marker.exists())
+        self.assertEqual(value['command_outcome']['status'], 'failed')
+        self.assertIn('before later checks or recovery branches', value['command_outcome']['hint'])
+
+    def test_missing_file_error_before_recovery_branch_does_not_claim_recovery(self):
+        missing = self.work / 'missing-export'
+        command = ('grep -c -F -- absent ' + shlex.quote(str(missing)) +
+                   '; if [ ! -f ' + shlex.quote(str(missing)) + ' ]; then printf recovered > ' +
+                   shlex.quote(str(missing)) + '; fi')
+        value = self.invoke(command)
+        self.assertEqual(value['execution']['exit_code'], 2)
+        self.assertFalse(missing.exists())
+        self.assertEqual(value['command_outcome']['status'], 'failed')
+        self.assertEqual(value['command_outcome']['individual_steps'], 'not_observed')
+        self.assertTrue(value['stderr'])
+
+    def test_script_printed_receipts_do_not_establish_step_execution(self):
+        value = self.invoke("printf '%s\\n' '{\"step\":\"recovery\",\"state\":\"returned\",\"exit_code\":0}'; exit 2")
+        self.assertIn('"state":"returned"', value['stdout'])
+        self.assertEqual(value['execution']['exit_code'], 2)
+        self.assertEqual(value['command_outcome']['status'], 'failed')
+        self.assertEqual(value['command_outcome']['individual_steps'], 'not_observed')
+
     def test_pipeline_no_match_and_sigpipe_are_not_atomic_search(self):
         value = self.invoke('grep -F absent ' + shlex.quote(str(self.file)) + ' | head -n 1')
         self.assertEqual(value['command_outcome']['status'], 'failed')
@@ -84,6 +114,7 @@ class TerminalRecoveryTests(unittest.TestCase):
         value = self.invoke('grep -F match ' + shlex.quote(str(self.file)) + ' | head -n 1')
         self.assertEqual(value['execution']['exit_code'], 141)
         self.assertEqual(value['command_outcome']['status'], 'failed')
+        self.assertIn('SIGPIPE', value['command_outcome']['hint'])
 
     @staticmethod
     def outcome(command, code, stdout=b'', **execution):
@@ -122,23 +153,26 @@ class TerminalRecoveryTests(unittest.TestCase):
 
     def recipe(self):
         reference = ROOT / 'forsic_plugin/skills/source-triage/references/image-access.md'
-        return reference.read_text().split('```bash\n', 1)[1].split('```', 1)[0].replace('/work/example.log', str(self.file))
+        calls=[json.loads(block.split('```',1)[0]) for block in reference.read_text().split('```json\n')[1:]]
+        return [call['command'].replace('/work/example.log',shlex.quote(str(self.file))) for call in calls]
 
-    def test_documented_recipe_continues_after_no_match_and_marks_unstarted_on_read_error(self):
-        recipe = self.recipe()
+    def test_documented_separate_calls_preserve_no_match_and_read_failure(self):
+        search_command,size_command = self.recipe()
         for present in (True, False):
             if not present:
                 self.file.unlink()
-            result = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', recipe], capture_output=True, text=True)
-            steps = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
+            search = self.invoke(search_command)
             if present:
-                self.assertEqual(result.returncode, 0)
-                self.assertEqual(steps[1]['status'], 'no_matches')
-                self.assertEqual(steps[-1], {'step': 'file_size', 'state': 'returned', 'exit_code': 0})
+                self.assertNotIn('error',search)
+                self.assertEqual(search['command_outcome']['status'], 'no_matches')
+                size=self.invoke(size_command)
+                self.assertEqual(size['execution']['state'],'returned')
+                self.assertEqual(size['execution']['exit_code'],0)
+                self.assertEqual(int(size['stdout']),self.file.stat().st_size)
             else:
-                self.assertEqual(result.returncode, 2)
-                self.assertEqual(steps[-1], {'step': 'file_size', 'state': 'not_started'})
-                self.assertFalse(any(step['step']=='file_size' and step['state']=='started' for step in steps))
+                self.assertEqual(search['execution']['exit_code'],2)
+                self.assertEqual(search['command_outcome']['status'],'failed')
+                self.assertTrue(search['stderr'])
 
     def test_login_recipe_preserves_partial_exit_and_allows_independent_check(self):
         reference = ROOT / 'forsic_plugin/skills/inspect-artifacts/references/linux.md'

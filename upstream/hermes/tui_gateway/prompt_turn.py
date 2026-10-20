@@ -78,6 +78,40 @@ def _active_goal_manager(session: dict):
     return goal_mgr if goal_mgr.is_active() else None
 
 
+def _turn_goal_identity(session: dict) -> str | None:
+    """Snapshot the requested scope, without evaluating or spending a goal turn."""
+    from hermes_cli.goals import goal_identity, load_goal
+    state = load_goal(str(session.get("session_key") or ""))
+    return goal_identity(state) if state is not None and state.status == "active" else None
+
+
+def _pause_failed_turn_goal(session: dict, expected_identity: str | None, failure: Any) -> None:
+    """Keep failure recovery durable after transport cleanup, without stopping a replacement goal."""
+    if expected_identity is None:
+        return
+    from hermes_cli.goals import GoalManager, _StaleGoalEvaluation, _goal_state_mutation, goal_identity
+    from agent.error_surface import build_error_surface_from_exception, build_error_surface_from_result
+    surface = (build_error_surface_from_exception(failure) if isinstance(failure, BaseException)
+               else build_error_surface_from_result(failure)) or {}
+    # Persist the bounded native taxonomy, never raw API text (which may contain secrets).
+    reason = f"turn failed: {surface.get('layer', 'gateway')}/{surface.get('code', 'turn_error')}; resume to retry"
+
+    @_goal_state_mutation
+    def pause_failed_turn(manager):
+        # The native control refresh + exact-value CAS covers a concurrent pause/replacement
+        # between this check and _save, including controls from another process.
+        state = manager.state
+        if state is not None and state.status == "active" and goal_identity(state) == expected_identity:
+            manager.pause(reason=reason)
+
+    try:
+        pause_failed_turn(GoalManager(str(session.get("session_key") or "")))
+    except _StaleGoalEvaluation:
+        pass  # A newer native control owns the state; never overwrite it with this turn's failure.
+    except Exception as exc:
+        _hook_failure("goal terminal failure pause", exc)
+
+
 def _plan_goal_compression_recovery(
     session: dict, result: Any, *, status: str, raw: Any) -> tuple[str | None, str | None]:
     """Bounded active-goal retry after compression exhaustion: ``(continuation, notice)``.
@@ -343,7 +377,8 @@ def _turn_outcome(result: Any, error_surface: dict | None = None) -> tuple[Any, 
 
 
 def _goal_followup_after_turn(
-    sid: str, session: dict, result: Any, status: str, raw: Any) -> str | None:
+    sid: str, session: dict, result: Any, status: str, raw: Any,
+    *, expected_goal_identity: str | None = None) -> str | None:
     """/goal continuation (mirrors gateway/run._post_turn_goal_continuation): the prompt to
     chain once ``running`` is released, or None.  Compression failures are never judge
     input: the error text is not work toward the goal, and judging it spends a turn."""
@@ -363,6 +398,9 @@ def _goal_followup_after_turn(
             _hook_failure("goal guardrail pause", exc)
         return None
     compression_exhausted = bool(isinstance(result, dict) and result.get("compression_exhausted"))
+    if status == "error" and not compression_exhausted:
+        _pause_failed_turn_goal(session, expected_goal_identity, result)
+        return None
     try:
         recovery_prompt, recovery_notice = _plan_goal_compression_recovery(
             session, result, status=status, raw=raw)
@@ -530,6 +568,7 @@ class _TurnRun:
     prompt_text: str = ""
     marker_key: str = ""
     receipt_attempted: bool = False
+    goal_identity: str | None = None
 
 
 def _adopt_out_of_band_turns(session: dict) -> None:
@@ -702,6 +741,7 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
     bound = _profile_runtime_scope_tokens(session.get("profile_home"))
     if bound is not None:
         scopes.home, scopes.secret, scopes.terminal = bound.home, bound.secret, bound.terminal
+    st.goal_identity = _turn_goal_identity(session)
     # The sudo password callback is thread-local: without re-wiring here, sudo prompts
     # fall through to /dev/tty and hang the headless gateway (re-run is a no-op).
     _wire_callbacks(sid)
@@ -1035,6 +1075,7 @@ def _recover_turn_exception(sid: str, session: dict, st: _TurnRun, e: BaseExcept
                 f"{time.strftime('%Y-%m-%d %H:%M:%S')} · sid={sid} ===\n")
             f.write(traceback.format_exc())
     print(f"[gateway-turn] {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+    _pause_failed_turn_goal(session, st.goal_identity, e)
     # A finalizer exception can leave in-memory history at the turn-start snapshot.
     _restore_agent_history_after_turn_error(session, st.agent)
     if st.terminal_callback is not None and not st.receipt_attempted:
@@ -1205,7 +1246,8 @@ def _run_prompt_submit(
                 sid, session, st, text, display_kind, display_metadata)
             payload, raw, status = _complete_turn_payload(session, st, status_note, cols)
             _emit("message.complete", sid, payload)
-            goal_followup = _goal_followup_after_turn(sid, session, st.result, status, raw)
+            goal_followup = _goal_followup_after_turn(
+                sid, session, st.result, status, raw, expected_goal_identity=st.goal_identity)
             if status == "complete":
                 _after_complete_turn(sid, session, st, raw)
             # Goal judge + loop tick evaluation mutate persisted state AFTER message.complete: publish the

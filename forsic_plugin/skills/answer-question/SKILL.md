@@ -46,8 +46,10 @@ Replace it when the new understanding is ready. Bounds are eight paragraphs, 1,6
 
 ## Adopt evidence
 
-Select citation_ref values returned by a read's presented_spans or forsic_reporting(source). Check the connection
-between each pointer/text_preview's actual observation and the answer; send judgment along with answer and reason.
+Select citation_ref values returned by a read's presented_spans or forsic_reporting(source). Follow returned child
+read_calls to the exact field, including metadata numbers; a whole finite number receives a C1 ref for its retained
+JSON value, not original-image bytes or an inferred event. Empty lists and missing fields are not numeric zero.
+Compare the selected field and acquisition_context with the claim; send judgment with answer and reason.
 The judgment field has this form:
 
 ```json

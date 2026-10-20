@@ -21,6 +21,11 @@ locators. Rule metadata describes the rule; it is not evidence of compromise.
 linux_login_parser: explicitly asserted Linux/glibc x86 little-endian 384-byte
 login ABI. Returns parsed record candidates and exact byte ranges. It is a parser,
 not an anomaly detector; no account or authentication attribution is automatic.
+linux_persistence: explicitly selected UTF-8 cron_user, cron_system or systemd_unit
+configuration files. Structural entry candidates keep exact byte/line ranges;
+raw commands and values stay private. Configured text does not establish effective
+configuration, enablement, execution, authorization or maliciousness. Unsupported
+syntax, line/deadline limits and encoding gaps retain partial/skipped scope.
 
 Limits: 8 selected files, 32 MiB combined staged inputs, 300 seconds of container
 runtime, 2,000 login records per file, 20 returned candidates and 8 MiB engine output
@@ -32,9 +37,14 @@ complete/partial/failed/skipped state. Source recheck and explicit note adoption
 remain separate. An identical completed scan can be selected with resume_ref.
 Unknown completion is inspected, never automatically rerun.
 
+The initial admitted comprehensive question offers this discovery once, respecting
+operator capability settings. It does not select inputs or start an automatic scan.
 The same catalogue offers optional OS/purpose starting points. Unknown OS is not
 treated as Windows; absent macOS/data-movement profiles remain explicitly absent.
 The agent chooses relevant checks and records important omissions in existing notes.
+Managed environments preserve helper bytes: deploy the updated application and
+register/select a checked environment with the updated helper at a case idle
+boundary. Editing the host helper alone does not update an existing case pin.
 
 forsic_shell(action="triage_query") reads the retained safe candidate index using
 the returned scan_id and index_sha256. It never starts a parser/container. Select

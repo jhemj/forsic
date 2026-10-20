@@ -72,13 +72,20 @@ def _citation(case, state, citation):
         raise ValueError('Stale citation source version; review the original retained source again')
     value = select(event['data'], citation['pointer'])
     literal, start = citation['literal'], citation['byte_start']
-    if not isinstance(value, str) or not isinstance(literal, str) or not literal or type(start) is not int or start < 0:
+    if not isinstance(literal, str) or not literal or type(start) is not int or start < 0:
         raise ValueError('Select an actual nonempty retained string span')
-    raw, fragment = value.encode('utf-8'), literal.encode('utf-8')
+    if isinstance(value, str):
+        raw = value.encode('utf-8')
+    else:
+        from .retained_scalar import number_literal
+        raw = number_literal(value).encode('utf-8')
+        if start != 0 or literal.encode('utf-8') != raw:
+            raise ValueError('Numeric citations must select the whole canonical JSON number at byte_start=0')
+    fragment = literal.encode('utf-8')
     end = start + len(fragment)
     if raw[start:end] != fragment:
         raise ValueError('Citation is not the exact retained UTF-8 field span')
-    role = field_role(event['data'], citation['pointer'])
+    role = field_role(event['data'], citation['pointer']) if isinstance(value, str) else 'metadata'
     view = ('full_field' if start == 0 and end == len(raw) else 'exact_excerpt') if role == 'body' else 'metadata'
     return source, {'source_id': source['id'], 'pointer': citation['pointer'],
                     'byte_start': start, 'byte_end': end, 'presented_view': view}
@@ -86,7 +93,7 @@ def _citation(case, state, citation):
 
 def _source_choices(case, state, eid):
     """Replay a native source page; presentation may derive its exact source only."""
-    from .host import find, source_record
+    from .host import find, source_record, encoded
     from .model_pages import source_view
     data, args = _receipt(case, eid, 'source')
     from .source_handles import resolve_source_handle
@@ -118,7 +125,8 @@ def _source_choices(case, state, eid):
                            include_continuation=paging is not None, include_coordinate_calls=coordinates is not None,
                            case=case if 'source_handle' in data else None)
     actual = {key: value for key, value in data.items() if key not in ('tool', 'started_id')}
-    if actual != expected:
+    # Python equality aliases True/1/1.0; replay must preserve retained JSON types.
+    if actual != expected or encoded(actual) != encoded(expected):
         raise ValueError('Source receipt does not match its retained source request and version')
     choices = []
     if expected.get('view_kind') == 'retained_literal_locations':

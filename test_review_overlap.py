@@ -230,6 +230,13 @@ class ReviewOverlapTests(unittest.TestCase):
         bad=json.loads(tools['forsic_question']({'operation_id':'missing-answer'},session_id=self.sid))
         self.assertIn('error',bad);self.assertFalse(self.calls)
         q=current(self.case)['questions'][0]
+        dispatched_threads=[]
+        original=self.blocked
+        def boundary_review(**kwargs):
+            dispatched_threads.append(threading.get_ident())
+            return original(**kwargs)
+        self.fake.side_effect=boundary_review
+        self.release.set()
         saved=json.loads(tools['forsic_question']({'operation_id':'save-first-answer',
             'question_id':q['id'],'expected_revision':q['revision'],
             'answer':'Provisional record comparison; success remains unconfirmed',
@@ -237,11 +244,16 @@ class ReviewOverlapTests(unittest.TestCase):
         self.assertNotIn('error',saved,saved)
         self.assertTrue(saved['independent_review']['requires_followup'],saved)
         self.assertTrue(self.entered.wait(3));self.assertEqual(len(self.calls),1)
+        self.assertEqual(dispatched_threads,[threading.get_ident()])
+        self.assertEqual(self.jobs,[])
         self.assertEqual(len(self.request_paths()),1)
+        request=review._read(self.request_paths()[0])
+        self.assertEqual(request['execution_mode'],'boundary')
+        response_path=self.request_paths()[0].with_name(self.request_paths()[0].name.replace('-request.json','-response.json'))
+        self.assertEqual(review._read(response_path)['status'],'received')
         # An ungrounded provisional answer may still require judgment review;
         # timing admission is not semantic acceptance of that answer.
         self.assertNotIn('Provisional record comparison',self.calls[0]['messages'][1]['content'])
-        self.settle()
 
     def test_review_failure_does_not_reclassify_committed_answer_as_failed_save(self):
         from forsic_plugin.report_driven.host import current

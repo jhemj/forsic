@@ -129,7 +129,8 @@ class TenantRegistry:
 
     def _load(self):
         data = _read(self.path, {'schema': 1, 'tenants': [], 'operations': {}})
-        if data.get('schema') != 1 or not isinstance(data.get('tenants'), list):
+        if (data.get('schema') != 1 or not isinstance(data.get('tenants'), list)
+                or ('legacy_migration_complete' in data and type(data['legacy_migration_complete']) is not bool)):
             raise ValueError('테넌트 등록 정보를 확인할 수 없습니다.')
         identities, homes, profiles = set(), set(), set()
         for entry in data['tenants']:
@@ -445,8 +446,17 @@ def resolve_request(*, tenant_id='', profile_name='', session_id='', case_id='',
 
 
 def migrate_workspace():
-    """Explicit startup migration: preserve old data/URLs and publish only proven mappings."""
+    """One-time startup migration; explicit bootstrap_legacy admits later profiles.
+
+    An absent/false completion marker resumes interrupted migration in place.
+    A completed, even empty, registry never rediscovers unregistered profiles.
+    """
     registry = TenantRegistry()
+    with registry._locked():
+        data = registry._load()
+        if data.get('legacy_migration_complete') is True:
+            return {'tenant_ids': [t['tenant_id'] for t in data['tenants'] if t.get('status') == 'ready'],
+                    'data_moved': False, 'model_requests': 0}
     result = []
     homes = [('default', registry.home)]
     profiles = registry.home / 'profiles'
@@ -459,4 +469,10 @@ def migrate_workspace():
         if name != 'default' and not entry:
             continue
         result.append(registry.bootstrap_legacy(profile_name=name, profile_home=home)['tenant_id'])
+    with registry._locked():
+        # Reload after independently locked bootstrap/create operations so their
+        # mappings and operation receipts cannot be lost at completion.
+        data = registry._load()
+        data['legacy_migration_complete'] = True
+        _atomic(registry.path, data)
     return {'tenant_ids': result, 'data_moved': False, 'model_requests': 0}

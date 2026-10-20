@@ -281,6 +281,20 @@ class IndependentReviewTests(unittest.TestCase):
         self.assertEqual(paths[0].read_bytes(),raw);self.assertEqual(self.ledger(),before)
         self.assertNotIn('PRIVATE_TRANSPORT_ERROR',''.join(p.read_text() for p in self.case.output.glob('independent-review-*.json')))
 
+    def test_received_empty_findings_remain_distinct_from_transport_failure(self):
+        self.setup_review();self.fake.side_effect=self.empty_response
+        result=review.goal_advisory_context(**self.kwargs())
+        resolved=resolve_context(self.sid,intake_root=self.intake,native_db=self.native)
+        state=review.review_state(resolved)
+        self.assertEqual(result['status'],'received')
+        self.assertEqual(state['findings'],[])
+        request_path=self.request_paths()[0]
+        response=review._read(request_path.with_name(request_path.name.replace('-request.json','-response.json')))
+        self.assertEqual(response['finish_reason'],'stop')
+        self.assertEqual(response['raw_advice'],'{"findings":[]}')
+        review.goal_advisory_context(**self.kwargs(turns_used=100))
+        self.assertEqual(self.fake.call_count,1)
+
     def test_opt_in_pause_validate_cancel_and_foreign_case_do_not_dispatch(self):
         self.setup_review()
         for changes in ({'enabled':False},{'phase':'validate'},{'phase':'compaction'},{'cancel_check':lambda:True},{'goal_id':'foreign'}):

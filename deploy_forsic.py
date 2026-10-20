@@ -23,12 +23,17 @@ from urllib.parse import urlsplit
 
 PIN = 'bafb42b431fca313471958fdf77f9c30e455f86b'
 DEPENDENCIES = {'python-docx': '1.2.0', 'lxml': '6.1.3', 'python-telegram-bot': '22.8'}
-ROOT_FILES = ('test_tenant_memory.py', 'test_tenant_ownership.py', 'test_tenant_boundaries.py',
+ROOT_FILES = ('test_initial_triage_context.py', 'test_linux_persistence.py',
+              'test_skill_proposals.py', 'test_skill_proposal_native.py', 'test_skill_proposal_api.py', 'test_task_focus.py',
+              'test_telegram_clarify_native.py',
+              'test_model_result_compaction.py', 'test_triage_target_contract.py',
+              'docs/extensions/workflow-skills.md', 'docs/notifications.md',
+              'test_tenant_memory.py', 'test_tenant_ownership.py', 'test_tenant_boundaries.py',
               'docs/tenant-architecture.md',
               'test_report_word_export.py', 'test_report_word_api.py', 'test_report_narrative.py', 'docs/report-authoring.md', 'test_reader_explanation.py', 'test_report_numbered_references.py', 'test_native_agent_options.py', 'test_repository_builder.py', 'test_management_api.py', 'test_environment_management.py', 'test_environment_support.py', 'test_extension_hub.py',
               'docs/environment-management.md', 'docs/extensions/format.md',
               'docs/extensions/repository-builder.md', 'docs/roadmap/skill-creator.md',
-              'test_filename_observations.py', 'test_multi_image_report.py', 'test_triage_query.py', 'test_acceptance_cases.py',
+              'test_filename_observations.py', 'test_numeric_source_citations.py', 'test_review_numeric_grounding.py', 'test_multi_image_report.py', 'test_triage_query.py', 'test_acceptance_cases.py',
               'tests/acceptance/manifest.json', 'tests/acceptance/README.md',
               'tests/acceptance/inputs/discriminating_clue/records.jsonl',
               'tests/acceptance/inputs/discriminating_clue/question.txt',
@@ -82,6 +87,9 @@ REQUIRED_PUBLIC = ('README.md', 'docs/ARCHITECTURE.md', 'docs/TOOLS_AND_SKILLS.m
 CONFIG_FILES = ('SOUL.md', 'AGENTS.md', 'skin.yaml', 'forsic-theme.yaml', 'config.example.yaml', 'bundled-skills/README.txt')
 FIXTURES = ('notes.txt', 'cron.log', 'change.txt')
 UPSTREAM_ADDITIONS = (
+    'web/src/components/ForsicWorkflowSkills.tsx', 'web/src/components/forsic-workflow-skills.css',
+    'web/src/components/ForsicMissionFocus.tsx', 'web/src/components/ForsicMissionFocus.test.tsx',
+    'web/src/components/forsic-mission-focus.css',
     'hermes_state_profile_guard.py',
     'web/src/components/ForsicMemoryReceipts.tsx', 'web/src/components/ForsicMemoryReceipts.test.tsx',
     'web/src/components/ForsicTenantGate.tsx', 'web/src/components/ForsicTenantGate.test.tsx',
@@ -127,6 +135,7 @@ UPSTREAM_ADDITIONS = (
     'tests/hermes_cli/test_chat_start_failure.py',
     'tests/test_plugin_execution_identity.py',
     'tests/tui_gateway/test_goal_guardrail_pause.py',
+    'tests/tui_gateway/test_goal_terminal_failure_pause.py',
     'hermes_cli/goals_turn_context.py',
     'agent/tool_loop_comparison.py',
     'tests/hermes_cli/test_custom_banner_branding.py', 'tests/tui_gateway/test_goal_display.py',
@@ -177,7 +186,7 @@ def initial_config(base_url, model, *, wizard=False):
                       'goal_judge': {**local, 'timeout': 600, 'max_tokens': 1024},
                       'title': dict(local), 'compression': {**local, 'timeout': 1200},
                       'title_generation': {'enabled': False, 'model_upgrade_enabled': False}},
-        'platform_toolsets': {name: ['forsic'] for name in ('cli', 'api', 'web', 'desktop', 'telegram')},
+        'platform_toolsets': {name: ['forsic', 'clarify'] for name in ('cli', 'api', 'web', 'desktop', 'telegram')},
         'agent': {'max_turns': 64, 'api_max_retries': 1, 'auto_recovery_cycles': 0,
                   'coding_context': 'off', 'execution_guidance': False,
                   'run_budget_seconds': 43200, 'local_stream_stale_timeout': 1800},
@@ -341,8 +350,8 @@ def doctor(root):
         add('initial_setup_completed', setup.get('setup_completed', True) is not False,
             'complete the browser setup and restart before investigation')
         add('fallback_disabled', not config.get('fallback_model'), 'no automatic external fallback')
-        add('forsic_only_tools', all(config.get('platform_toolsets', {}).get(name) == ['forsic']
-            for name in ('cli', 'web', 'telegram')), 'CLI/web/Telegram use only Forsic toolset')
+        add('forsic_only_tools', all(config.get('platform_toolsets', {}).get(name) in (['forsic'], ['forsic', 'clarify'])
+            for name in ('cli', 'web', 'telegram')), 'Forsic execution tools and optional native user clarification only')
         for name, role in config.get('auxiliary', {}).items():
             if isinstance(role, dict) and role.get('base_url'):
                 add('auxiliary_connection:' + name, role.get('base_url') == model.get('base_url') and

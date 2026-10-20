@@ -51,6 +51,35 @@ def project(tool, args, result=None):
                 # Shell presentation links point at this receipt, not new output.
                 view['result'].pop('source_ref',None)
                 view['result'].pop('raw_output_calls',None)
+                def navigation_selection(selection):
+                    if (not isinstance(selection, dict) or not isinstance(source_ref, dict)
+                            or not isinstance(selection.get('source_handle'), str)
+                            or handle_reference(selection.get('source_handle')) != source_ref
+                            or any(key in selection and selection[key] != source_ref[field]
+                                   for key, field in (('source_id', 'id'), ('source_version', 'version')))):
+                        return selection
+                    # Retain pointers, limits, kinds and every non-identity field.
+                    return {k: v for k, v in selection.items() if k != 'source_handle'}
+
+                def navigation_call(call):
+                    if (not isinstance(call, dict) or call.get('tool') != 'forsic_reporting'
+                            or not isinstance(call.get('arguments'), dict)
+                            or call['arguments'].get('action') != 'source'):
+                        return call
+                    return {**call, 'arguments': navigation_selection(call['arguments'])}
+
+                details = body.get('policy_details_calls')
+                if isinstance(details, dict):
+                    view['result']['policy_details_calls'] = {key: navigation_call(call)
+                        for key, call in details.items()}
+                for key in ('command_call', 'stdout_call'):
+                    if key in body:
+                        view['result'][key] = navigation_call(body[key])
+                if 'retained_export_target' in body:
+                    view['result']['retained_export_target'] = navigation_selection(body['retained_export_target'])
+                if isinstance(body.get('retained_export_targets'), list):
+                    view['result']['retained_export_targets'] = [navigation_selection(selection)
+                        for selection in body['retained_export_targets']]
             if body.get('continuation_kind') == 'retained_search' and body.get('source_ref', {}).get('id') == body.get('evidence_id'):
                 view['result'].pop('source_ref', None)
                 view['result'].pop('next_call', None)

@@ -5,12 +5,23 @@ export interface ManagedEnvironment {id: string; status?: string; platform?: str
 export interface ManagedPackEntry {name: string; description?: string; requires_tools?: string[]; availability?: unknown}
 export interface ManagedPack {id: string; version: string; sha256: string; name?: string; description?: string; kind?: string; tools?: ManagedPackEntry[]; skills?: ManagedPackEntry[]; dependencies?: unknown; validation?: unknown; builtin?: boolean; referenced?: boolean; source?: unknown; status?: string; functional_status?: string; environment_id?: string; availability?: unknown}
 export interface PackChoice {version: string; sha256: string; enabled: boolean; tools?: Record<string, boolean>; skills?: Record<string, boolean>}
+export interface WorkflowSkillDraft {pack_id: string; version: string; name: string; description: string; skill_md: string; requires_tools: string[]}
+export interface WorkflowSkillProposal {
+  id: string; revision: number; status: string; draft_sha256: string; draft: WorkflowSkillDraft;
+  reason: string; applicability: string; limitations: string; diff: string;
+  target: {builtin?: string; pack_id?: string; version?: string; sha256: string; skill_name?: string} | null;
+  origin: {case_id: string; receipts: {evidence_id: string; sha256: string; tool: string}[]};
+  validation: {structure: string; functional: string; lint?: {severity: string; rule: string; message: string}[]};
+  publication: {status: string; limitation?: string; pack_id?: string; version?: string; sha256?: string};
+  activation: {status: string; scope?: string};
+}
 export interface ManagementJob {id: string; kind?: string; status: string; stage?: string; error?: unknown; log_tail?: string | string[]; can_retry?: boolean; operation_id?: string; stages?: unknown; plan?: unknown; source?: unknown; support?: unknown; native_session_id?: string; fixture_test?: unknown; artifact_id?: string; [key: string]: unknown}
 export interface ManagementSnapshot {
   revision: string; local_admin: boolean; runtime_pending?: boolean;
   environments: {items: ManagedEnvironment[]; default_environment_id?: string; default_revision?: string; case?: {revision?: string | number; environment_id?: string; extensions?: Record<string, PackChoice>; pending?: unknown}; updates?: unknown[]};
   packs: {items: ManagedPack[]; selection: {revision?: string; packs: Record<string, PackChoice>}};
   builder: {jobs: ManagementJob[]}; jobs: ManagementJob[];
+  skill_proposals?: {items: WorkflowSkillProposal[]};
 }
 export interface ManagementResult {status?: string; snapshot?: ManagementSnapshot; preview?: unknown; artifact_id?: string; job?: ManagementJob; [key: string]: unknown}
 export interface ManagementUpload {upload_id: string; sha256: string; bytes: number; name: string}

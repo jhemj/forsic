@@ -308,7 +308,7 @@ def _report_changes(saved, now, manifest):
     return changes[:MAX_QUESTIONS],max(0,len(changes)-MAX_QUESTIONS)
 
 
-def _reports(case, case_id, result, counts):
+def _reports(case, case_id, result, counts, *, current_basis=None):
     """Bound metadata reads; build local case-bound URLs without trusting saved URLs."""
     candidates = []
     counts['reports'] = 0
@@ -327,7 +327,7 @@ def _reports(case, case_id, result, counts):
             if len(candidates)>MAX_REPORTS:
                 heapq.heappop(candidates)
     query = '?'+urlencode({'case_id':case_id})
-    current_basis=[]
+    current_basis=[] if current_basis is None else [current_basis]
     def basis():
         if not current_basis:
             try:current_basis.append(_report_current_basis(case))
@@ -686,9 +686,19 @@ def project_view(resolved, *, profile=''):
             observation.update(observation_display(observation,sources.get(observation.get('source_ref',{}).get('id'))))
         _review_questions(resolved,notes,result,counts)
         _sessions(db,result,counts)
-    _reports(case,resolved['case_id'],result,counts)
+    from .task_focus import retained_task_state
+    basis = retained_task_state(case)
+    if basis is None:
+        result['task_focus'] = {'status':'unavailable','tasks':[], 'omitted_tasks':None}
+    else:
+        from .task_focus import project_tasks
+        versions = {(q['id'],q['version']) for q in result['questions']}
+        matching = [q for q in basis['questions'] if (q['id'],str(q['revision'])) in versions]
+        result['task_focus'] = project_tasks(basis,matching)
+        result['task_focus']['omitted_tasks'] += max(0, counts['questions']-len(matching))
+    _reports(case,resolved['case_id'],result,counts,current_basis=basis)
     kept = {key: [] for key in counts}
-    budget = 0
+    budget = len(json.dumps(result['task_focus'],ensure_ascii=False).encode())
     for key, limit in [('questions',MAX_QUESTIONS),('sources',MAX_SOURCES),
                        ('observations',MAX_OBSERVATIONS),('timeline',MAX_TIMES),
                        ('reports',MAX_REPORTS),('sessions',MAX_SESSIONS),

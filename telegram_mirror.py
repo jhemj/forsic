@@ -1,4 +1,4 @@
-"""Conversation mirror with opt-in case mentions/final report delivery. No agent loop."""
+"""Important case notifications with existing mentions/report delivery. No agent loop."""
 from __future__ import annotations
 
 import argparse
@@ -7,10 +7,46 @@ import fcntl
 import hashlib
 import json
 from pathlib import Path
+import sqlite3
 import time
 
 from forsic_plugin.intake import write_json
 from forsic_plugin.investigations import Investigations, readonly
+
+POLICY = 'important-only-v1'
+
+
+def record_clarification(case, phase, tool_name, args=None, result=None, tool_call_id='', session_id='', **kwargs):
+    """Observe the native user-input tool; investigation notes are not requests.
+
+    This hook never approves, changes a tool call, answers a form or starts work.
+    The terminal observer resolves even blocked/cancelled requests.
+    """
+    if tool_name != 'clarify' or phase not in ('requested', 'resolved') or not tool_call_id or not session_id:
+        return
+    native = {key: kwargs.get(key, '') for key in ('turn_id', 'api_request_id')}
+    native.update(tool_call_id=tool_call_id, session_id=session_id)
+    identity = hashlib.sha256(json.dumps(native, sort_keys=True).encode()).hexdigest()
+    value = {'request_id': identity, 'native_call': native}
+    if phase == 'requested':
+        from tools.clarify_tool import _normalize_questions
+        questions, error = _normalize_questions((args or {}).get('questions'))
+        if error: return
+        value['questions'] = [{key: item[key] for key in ('question', 'choices')} for item in questions]
+    case.record('user_input_' + phase, value, session_id)
+
+
+def important_judgment(current, previous):
+    """Explicit adopted, material answer changes; never an internal question prompt."""
+    investigation = current.get('investigation') or {}
+    old = (previous or {}).get('investigation') or {}
+    if (investigation.get('priority') not in ('decision_critical', 'material')
+            or not investigation.get('claim_refs') or investigation.get('judgment_review_required')
+            or not current.get('answer') or not current.get('correction_reason')):
+        return ''
+    if previous and current['answer'] == previous.get('answer') and investigation.get('assessment') == old.get('assessment'):
+        return ''
+    return '📌 중요한 판단 변경\n' + current['answer'] + '\n\n이유: ' + current['correction_reason']
 
 
 def public_text(content):
@@ -150,7 +186,7 @@ class Mirror:
     def sessions(self):
         if self.case_id:
             item = Investigations(self.home, self.intake).get(case_id=self.case_id)
-            if not item or item['session_id'] != self.session:
+            if not item or self.session not in item['sessions']:
                 raise ValueError('사건과 대표 대화 연결을 확인해주세요.')
             return item['sessions']
         with readonly(self.home / 'state.db') as db:
@@ -181,32 +217,69 @@ class Mirror:
         if self.state:
             return
         self.state = dict(session=self.session, chat_id=self.chat_id, since=time.time(),
-                          delivered=[], pending=None, status='ready')
+                          delivered=[], pending=None, status='ready', notification_policy=POLICY,
+                          important_since=time.time(), goal_states={})
         write_json(self.path, self.state)
+
+    def _goals(self, db, sessions, *, baseline=False):
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_meta'").fetchone(): return []
+        known = self.state.setdefault('goal_states', {})
+        items = []
+        for sid in sessions:
+            row = db.execute('SELECT value FROM state_meta WHERE key=?', ('goal:' + sid,)).fetchone()
+            if not row: continue
+            goal = json.loads(row['value'])
+            identity = {'created_at': goal.get('created_at'), 'status': goal.get('status')}
+            old = known.get(sid)
+            same = old is not None and all(old.get(key) == value for key, value in identity.items())
+            transition = (old or {}).get('transition', 0) + (0 if same or old is None else 1)
+            known[sid] = {**identity, 'transition': transition}
+            if baseline or same: continue
+            # Newly discovered historical/compressed goal rows are baselines.
+            if old is None and max(goal.get('last_turn_at') or 0, goal.get('created_at') or 0) < self.state['important_since']: continue
+            status = goal.get('status')
+            if status not in ('done', 'paused'): continue
+            text = ('✅ 조사 목표 완료\n완료 판단과 보고서는 웹에서 확인해주세요.' if status == 'done' else
+                    '⏸ 조사가 중단되었습니다.\n중단 사유와 재개 여부를 웹에서 확인해주세요.')
+            key = 'goal:' + hashlib.sha256(json.dumps({'conversation': self.session, 'session': sid,
+                **identity, 'transition': transition}, sort_keys=True).encode()).hexdigest()
+            items.append((goal.get('last_turn_at') or time.time(), key, text))
+        return items
 
     def batch(self):
         sessions = self.sessions()
         placeholders = ','.join('?' for _ in sessions)
         items = []
-        # Deliberately do not select reasoning, tool_calls or tool-result bodies.
+        # Policy cutover starts now. Preserve all old delivered/unknown receipts,
+        # but never reinterpret the old transcript as an important-message backlog.
+        migrated = self.state.get('notification_policy') != POLICY
+        if migrated:
+            self.state.update(notification_policy=POLICY, important_since=time.time(), goal_states={})
         with readonly(self.home / 'state.db') as db:
-            rows = db.execute(f'SELECT id, role, content, display_kind, _compressed_summary, active, compacted, timestamp '
-                              f'FROM messages WHERE session_id IN ({placeholders}) AND timestamp>=? ORDER BY id',
-                              (*sessions, self.state['since'])).fetchall()
-            # A participant's question already exists in Telegram. Keep its native
-            # web turn visible, but do not echo it through the separate user bot.
-            from forsic_plugin.telegram_bridge import is_telegram_input
-            items += [(r['timestamp'], 'message:' + str(r['id']), message_text(r)) for r in rows
-                      if not (r['role'] == 'user' and is_telegram_input(self.home, message_text(r)))]
-            self.user_message_keys = {'message:' + str(r['id']) for r in rows if r['role'] == 'user'}
+            items.extend(self._goals(db, sessions, baseline=migrated))
         for path in self.activity(sessions).values():
             with readonly(path) as db:
-                rows = db.execute(f'SELECT id,time,kind,data FROM events WHERE session IN ({placeholders}) '
-                                  'AND time>=? AND kind IN (\'tool_start\',\'tool_result\') ORDER BY time',
-                                  (*sessions, self.state['since'])).fetchall()
-                items += [(r['time'], 'event:' + r['id'], progress_text(r)) for r in rows]
+                rows = db.execute("SELECT rowid,id,time,kind,session,data FROM events WHERE time>=? "
+                    "AND kind IN ('user_input_requested','note') ORDER BY rowid", (self.state['important_since'],)).fetchall()
+                for row in rows:
+                    data = json.loads(row['data'])
+                    if row['kind'] == 'user_input_requested':
+                        if row['session'] not in sessions: continue
+                        resolved = db.execute("SELECT 1 FROM events WHERE kind='user_input_resolved' "
+                            "AND json_extract(data,'$.request_id')=? LIMIT 1", (data['request_id'],)).fetchone()
+                        if resolved: continue
+                        questions = data.get('questions') or []
+                        text = '\n\n'.join(q['question'] + ('\n' + '\n'.join('• ' + c for c in q['choices']) if q.get('choices') else '') for q in questions)
+                        if text: items.append((row['time'], 'clarify:' + data['request_id'], '❓ 답변이 필요합니다\n' + text + '\n\n웹의 확인 요청에서 답해주세요.'))
+                    else:
+                        old = db.execute("SELECT data FROM events WHERE kind='note' AND rowid<? "
+                            "AND json_extract(data,'$.note_id')=? ORDER BY rowid DESC LIMIT 1", (row['rowid'], data['note_id'])).fetchone()
+                        text = important_judgment(data, json.loads(old['data']) if old else None)
+                        if text: items.append((row['time'], 'judgment:' + row['id'], text))
+        if migrated: write_json(self.path, self.state)
         delivered = set(self.state['delivered'])
-        return [(key, text) for _, key, text in sorted(items) if text and key not in delivered]
+        unique = {key: (stamp, key, text) for stamp, key, text in items}
+        return [(key, text) for _, key, text in sorted(unique.values()) if text and key not in delivered]
 
     def isolate_progress_failure(self):
         pending = self.state.get('pending') or {}
@@ -220,77 +293,36 @@ class Mirror:
             write_json(self.path, self.state)
 
     async def tick(self, send, update_progress=None, send_user=None):
-        self.isolate_progress_failure()
-        if self.state['pending'] or self.state['status'] != 'ready':
-            raise RuntimeError('전송 상태 확인이 필요합니다. 불확실한 메시지는 자동 재전송하지 않습니다.')
+        # The old mirror's unknown message attempt remains untouched. Important
+        # notifications have a separate transport receipt, never a retry of it.
+        delivery = self.state.setdefault('important_delivery', {'pending': None, 'status': 'ready'})
+        if delivery['pending'] or delivery['status'] != 'ready':
+            raise RuntimeError('중요 알림 전송 상태 확인이 필요합니다. 불확실한 전송은 자동 재전송하지 않습니다.')
         from gateway.platforms.base import BasePlatformAdapter, utf16_len
         from agent.redact import redact_sensitive_text
         batch = self.batch()
-        progress_keys = [key for key, _ in batch if key.startswith('event:')] if update_progress else []
-        if update_progress and not self.state.get('progress_paused') and not self.state.get('progress_message_id') and not progress_keys:
-            # Connection status only, not a fabricated investigation event or old result replay.
-            key = 'mirror:progress-ready'
-            batch.insert(0, (key, '🔗 연결 완료\n새 작업이 생기면 이 진행판이 갱신됩니다. 대화와 조사 결과는 별도 메시지로 보내드려요.'))
-            progress_keys = [key]
         for key, text in batch:
-            progress = key in progress_keys
-            user_message = key in self.user_message_keys
-            if user_message and send_user is None:
-                continue  # Keep it unsent; never impersonate the user through the assistant bot.
-            if progress and key != progress_keys[-1]:
-                continue  # The web retains every step; Telegram shows the newest progress.
-            if progress and self.state.get('progress_paused'):
-                self.state['delivered'].extend(progress_keys)
-                write_json(self.path, self.state)
-                continue  # No blind re-creation of an uncertain progress card.
-            # Native Hermes redaction/chunking; always plain text, never MEDIA attachments.
-            text = redact_sensitive_text(text)
-            if key.startswith('message:') and not user_message:
-                text = assistant_plain_text(text)
-                if not text.strip():
-                    self.state['delivered'].append(key)
-                    write_json(self.path, self.state)
-                    continue
-            if progress:
-                text = '진행 현황\n' + text
-                if len(text) > 1800:
-                    text = text[:1800] + '\n… 작업 상세는 웹에서 확인하세요.'
-                if text == self.state.get('progress_text'):
-                    self.state['delivered'].extend(progress_keys)
-                    write_json(self.path, self.state)
-                    continue
+            text = assistant_plain_text(redact_sensitive_text(text, force=True))
+            if not text.strip():
+                self.state['delivered'].append(key)
+                continue
             chunks = BasePlatformAdapter.truncate_message(text, 4000, len_fn=utf16_len)
             for index, chunk in enumerate(chunks):
-                self.state['pending'] = {'key': key, 'chunk': index, 'began': time.time(),
-                                         'channel': 'progress' if progress else 'message',
-                                         'sender': 'user_bot' if user_message else 'assistant_bot'}
+                delivery['pending'] = {'key': key, 'chunk': index, 'began': time.time(), 'channel': 'important'}
                 write_json(self.path, self.state)
                 try:
-                    receipt = (await update_progress(self.state.get('progress_message_id'), chunk)
-                               if progress else await (send_user if user_message else send)(chunk))
+                    receipt = await send(chunk)
                 except Exception as exc:
-                    if progress:
-                        self.state['progress_failure'] = {**self.state['pending'], 'error_type': type(exc).__name__,
-                            'status': 'rejected' if type(exc).__name__ == 'BadRequest' else 'delivery_unconfirmed'}
-                        self.state.update(progress_paused=True, pending=None, status='ready')
-                        self.state['delivered'].extend(progress_keys)
-                        write_json(self.path, self.state)
-                        break
-                    self.state.update(status='delivery_unconfirmed', error_type=type(exc).__name__)
+                    delivery.update(status='delivery_unconfirmed', error_type=type(exc).__name__)
                     write_json(self.path, self.state)
-                    raise RuntimeError('Telegram 전송 결과 미확인. 자동 재전송하지 않습니다.') from None
+                    raise RuntimeError('Telegram 중요 알림 전송 결과 미확인. 자동 재전송하지 않습니다.') from None
                 self.state['last_message_id'] = receipt
-                self.state['last_sender'] = self.state['pending']['sender']
-            if progress and self.state.get('progress_paused'):
-                continue
-            if progress:
-                self.state['progress_message_id'] = receipt
-                self.state['progress_text'] = text
-                self.state['delivered'].extend(progress_keys)
-            else:
-                self.state['delivered'].append(key)
-            self.state['pending'] = None
+                self.state['last_sender'] = 'assistant_bot'
+            self.state['delivered'].append(key)
+            delivery['pending'] = None
             write_json(self.path, self.state)
+        # Persist active goal baselines even when there is nothing to send.
+        write_json(self.path, self.state)
 
 
 class TopicRouter:
@@ -320,18 +352,25 @@ class TopicRouter:
             if route['status'] == 'topic_unconfirmed':
                 continue  # An uncertain create must not silently create a duplicate topic.
             cursor = self.path.parent / 'telegram-cases' / (hashlib.sha256(cid.encode()).hexdigest() + '.json')
-            if not cursor.exists():
-                if seed and self.legacy_path.exists():
-                    old = json.loads(self.legacy_path.read_text())
-                    if old['session'] != item['session_id'] or old['chat_id'] != self.chat_id:
-                        raise ValueError('이전 미러링 연결을 확인해주세요.')
-                    write_json(cursor, old)  # Preserve delivered keys, timestamp and unknown state.
-                else:
-                    write_json(cursor, dict(session=item['session_id'], chat_id=self.chat_id,
-                        since=self.state['since'], delivered=[], pending=None, status='ready'))
-            mirror = Mirror(self.home, self.intake, cursor, item['session_id'], self.chat_id, cid)
-            mirror.initialize()
-            mirror.isolate_progress_failure()
+            # Cursor migration and binding failures are isolated per route too.
+            # Never reset its cursor/unknown attempt to repair a changed identity.
+            try:
+                if not cursor.exists():
+                    if seed and self.legacy_path.exists():
+                        old = json.loads(self.legacy_path.read_text())
+                        if old['session'] != item['session_id'] or old['chat_id'] != self.chat_id:
+                            raise ValueError('이전 미러링 연결을 확인해주세요.')
+                        write_json(cursor, old)  # Preserve delivered keys, timestamp and unknown state.
+                    else:
+                        write_json(cursor, dict(session=item['session_id'], chat_id=self.chat_id,
+                            since=self.state['since'], delivered=[], pending=None, status='ready'))
+                mirror = Mirror(self.home, self.intake, cursor, route['session'], self.chat_id, cid)
+                mirror.initialize()
+            except (ValueError, OSError, KeyError, sqlite3.Error) as exc:
+                route['notification_delivery_status'] = 'binding_unavailable'
+                route['error_type'] = type(exc).__name__
+                write_json(self.path, self.state)
+                continue
             if send_document and route['status'] == 'ready':
                 from telegram_reports import ReportDelivery
                 report_path = self.path.parent / 'telegram-reports' / (hashlib.sha256(cid.encode()).hexdigest() + '.json')
@@ -346,8 +385,9 @@ class TopicRouter:
                     # Report failures must not stop conversation or mention delivery.
                     route['report_error_type'] = type(exc).__name__
                 write_json(self.path, self.state)
-            if mirror.state['pending'] or mirror.state['status'] != 'ready':
-                route['delivery_status'] = 'delivery_unconfirmed'
+            important = mirror.state.get('important_delivery') or {}
+            if important.get('pending') or important.get('status', 'ready') != 'ready':
+                route['notification_delivery_status'] = 'delivery_unconfirmed'
                 write_json(self.path, self.state)
                 continue
             if route['status'] == 'new':
@@ -359,7 +399,7 @@ class TopicRouter:
                 except Exception as exc:
                     route['error_type'] = type(exc).__name__
                     write_json(self.path, self.state)
-                    raise RuntimeError('토픽 생성 결과 미확인. 자동 중복 생성하지 않습니다.') from None
+                    continue  # Keep this uncertain topic, without stopping other routes or mention polling.
                 route['status'] = 'ready'
                 write_json(self.path, self.state)
             async def to_topic(text):
@@ -373,9 +413,12 @@ class TopicRouter:
                 await mirror.tick(to_topic, progress_to_topic if update_progress else None,
                                   user_to_topic if send_user else None)
             except RuntimeError:
-                route['delivery_status'] = 'delivery_unconfirmed'
+                route['notification_delivery_status'] = 'delivery_unconfirmed'
+            except (ValueError, OSError, KeyError, sqlite3.Error) as exc:
+                route['notification_delivery_status'] = 'source_unavailable'
+                route['error_type'] = type(exc).__name__
             else:
-                route['delivery_status'] = 'ready'
+                route['notification_delivery_status'] = 'ready'
                 if mirror.state.get('last_message_id') != previous_message:
                     route['last_message_id'] = mirror.state['last_message_id']
             write_json(self.path, self.state)
@@ -405,33 +448,24 @@ async def main(args):
     from tools.send_message_senders import _telegram_bot
     secrets = dotenv_values(Path(args.home) / '.env')
     token = secrets.get('TELEGRAM_BOT_TOKEN')
-    user_token = secrets.get('FORSIC_USER_TELEGRAM_BOT_TOKEN')
-    if not token or not user_token or token == user_token:
-        raise ValueError('포식이 연결 설정에 서로 다른 두 Telegram 봇 토큰이 필요합니다.')
+    if not token:
+        raise ValueError('포식이 연결 설정에 Telegram 봇 토큰이 필요합니다.')
     state_path = Path(args.state)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     with state_path.with_suffix('.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        async with _telegram_bot(token) as bot, _telegram_bot(user_token) as user_bot:
+        async with _telegram_bot(token) as bot:
             chat = await bot.get_chat(target)
             if chat.type not in ('group', 'supergroup') or (args.group and chat.title != args.group):
                 raise ValueError('지정한 그룹 ID와 이름이 일치하지 않습니다.')
-            user_identity = await user_bot.get_me()
-            user_member = await user_bot.get_chat_member(chat.id, user_identity.id)
-            if user_member.status in ('left', 'kicked') or getattr(user_member, 'can_send_messages', None) is False:
-                raise ValueError('질문 전용 봇을 같은 그룹에 추가하고 메시지 전송을 허용해주세요.')
-            async def send_user(text, thread_id=None):
-                result = await user_bot.send_message(chat_id=chat.id, message_thread_id=thread_id,
-                    text=text, parse_mode=None, disable_web_page_preview=True, disable_notification=True)
-                return result.message_id
             if args.cases:
                 identity = await bot.get_me()
                 member = await bot.get_chat_member(chat.id, identity.id)
                 if not chat.is_forum or not getattr(member, 'can_manage_topics', False):
                     raise ValueError('그룹 토픽과 봇의 토픽 관리 권한을 켜주세요.')
                 router = TopicRouter(args.home, args.intake, args.state, chat.id, args.session, args.legacy_state)
-                from telegram_actions import ChatActions, working_topics
-                actions = ChatActions(bot, chat.id, lambda: working_topics(router))
+                from telegram_actions import ChatActions
+                actions = ChatActions(bot, chat.id, lambda: set())
                 mentions = None
                 if args.mentions:
                     from telegram_mentions import Mentions
@@ -448,8 +482,6 @@ async def main(args):
                                                     parse_mode=None, disable_web_page_preview=True,
                                                     disable_notification=False)
                     return result.message_id
-                async def send_user_topic(thread_id, text):
-                    return await send_user(text, thread_id)
                 async def send_report(thread_id, name, payload, caption):
                     from telegram import InputFile
                     async with actions.upload_document(thread_id):
@@ -470,7 +502,7 @@ async def main(args):
                     result = await bot.send_message(chat_id=chat.id, message_thread_id=thread_id, text=text,
                         parse_mode=None, disable_web_page_preview=True, disable_notification=True)
                     return result.message_id
-                print('Mirroring case conversations; finalized report delivery ' + ('enabled.' if args.reports else 'disabled.'), flush=True)
+                print('Important case notifications enabled; finalized report delivery ' + ('enabled.' if args.reports else 'disabled.'), flush=True)
                 actions.start()
                 try:
                     while True:
@@ -485,8 +517,7 @@ async def main(args):
                             else:
                                 if mentions.state.pop('poll_error_type', None):
                                     mentions.save()
-                        await router.tick(create_topic, send_topic, update_progress, send_user_topic,
-                                          send_report if args.reports else None)
+                        await router.tick(create_topic, send_topic, send_document=send_report if args.reports else None)
                         if args.once:
                             return
                         await asyncio.sleep(2)
@@ -498,9 +529,9 @@ async def main(args):
                 result = await bot.send_message(chat_id=chat.id, text=text, parse_mode=None,
                                                 disable_web_page_preview=True)
                 return result.message_id
-            print(f'Mirroring selected conversation to {chat.title}; text only.', flush=True)
+            print('Important notifications enabled for the selected conversation.', flush=True)
             while True:
-                await mirror.tick(send, send_user=send_user)
+                await mirror.tick(send)
                 if args.once:
                     return
                 await asyncio.sleep(2)

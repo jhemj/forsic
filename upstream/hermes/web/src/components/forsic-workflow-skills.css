@@ -1,0 +1,10 @@
+.forsic-workflow-skill header { align-items: start; gap: 1rem; }
+.forsic-workflow-skill header h3 { margin: .3rem 0; }
+.forsic-workflow-skill dl { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: .65rem 1rem; }
+.forsic-workflow-skill dt { font-weight: 600; color: var(--text-secondary, #777); }
+.forsic-workflow-skill dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.forsic-workflow-skill textarea { width: 100%; min-height: 18rem; font-family: ui-monospace, monospace; line-height: 1.6; }
+.forsic-workflow-skill details { margin: .8rem 0; }
+.forsic-workflow-skill details summary { cursor: pointer; }
+.forsic-workflow-skill pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .forsic-workflow-skill dl { grid-template-columns: 1fr; gap: .3rem; } .forsic-workflow-skill dd { margin-bottom: .7rem; } }

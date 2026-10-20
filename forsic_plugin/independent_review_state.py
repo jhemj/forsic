@@ -145,8 +145,11 @@ def review_state(resolved,state=None):
         result['requires_followup']=bool(result['pending_findings'] or result['inflight_review_ids'] or result['judgment_review_questions'])
         if executive:
             complete=len(executive)==review.EXECUTIVE_ROUNDS and all(r['complete'] for r in executive)
+            blocked=next((r for r in executive if r['status'] not in ('received','in_progress')),None)
             result['executive_followup']={'round_limit':review.EXECUTIVE_ROUNDS,'questions_per_round':review.EXECUTIVE_QUESTIONS,
-                'rounds':executive,'complete':complete,'semantic_approval':False}
+                'rounds':executive,'complete':complete,'semantic_approval':False,
+                'status':'complete' if complete else 'blocked' if blocked else 'pending',
+                'blocked_status':blocked['status'] if blocked else None}
             # The requested dialogue ends after the main investigator answers
             # round three. Requiring its pre-answer fingerprint would force a
             # fourth review forever; current validated dispositions are the fence.
@@ -172,7 +175,7 @@ def final_grounding(resolved,questions,max_chars=7000):
     from .notes import EVIDENCE_TOOLS
     from .report_driven.host import source_record
     from .report_driven.model_pages import select
-    from .report_driven.measurement import acquisition_context
+    from .report_driven.retained_scalar import NUMBER_COORDINATES, citation_context, number_literal
     result={'role':'analyst_claim_linkage_not_semantic_approval','claims':[],
             'observations':[],'unmet_expectations':[],'omitted':{'claims':0,'observations':0,'source_fields':0}}
     fields=[];remaining_claims=8;remaining_observations=12
@@ -240,14 +243,18 @@ def final_grounding(resolved,questions,max_chars=7000):
                             if metadata['version']!=origin.get('version'):raise ValueError('Retained source version does not match the selected observation.')
                             actual=select(event['data'],observation['field_pointer'])
                             literal=observation['literal'];start=observation['byte_start'];end=observation['byte_end']
-                            if (not isinstance(actual,str) or not isinstance(literal,str) or not literal or len(literal)>1200
+                            numeric=not isinstance(actual,str)
+                            raw=(number_literal(actual) if numeric else actual).encode()
+                            if (not isinstance(literal,str) or not literal or len(literal)>1200
                                     or type(start) is not int or type(end) is not int or start<0
-                                    or end!=start+len(literal.encode()) or actual.encode()[start:end]!=literal.encode()
+                                    or numeric and (start!=0 or literal.encode()!=raw)
+                                    or end!=start+len(literal.encode()) or raw[start:end]!=literal.encode()
                                     or hashlib.sha256(literal.encode()).hexdigest()!=observation.get('canonical_sha256')):
                                 raise ValueError('Literal/byte coordinates do not match the retained source field, or excerpt exceeds its bound.')
                             field={'source_id':origin['id'],'source_version':metadata['version'],'pointer':observation['field_pointer'],
-                                   'value':literal,'byte_start':start,'byte_end':end,'presented_view':'exact_excerpt'}
-                            coordinate.update(literal=literal,source_role=metadata['source_role'],acquisition_context=acquisition_context(event['data'],observation['field_pointer']),
+                                   'value':literal,'byte_start':start,'byte_end':end,'presented_view':'metadata' if numeric else 'exact_excerpt'}
+                            if numeric:coordinate.update(presented_view='metadata',coordinate_basis=NUMBER_COORDINATES)
+                            coordinate.update(literal=literal,source_role=metadata['source_role'],acquisition_context=citation_context(event['data'],observation['field_pointer']),
                                               coordinate_validation='retained_source_version_and_exact_utf8_span_only',semantic_validation=False)
                             fields.append(field)
                             if not retain('observations',coordinate):

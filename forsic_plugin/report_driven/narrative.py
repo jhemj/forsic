@@ -94,6 +94,7 @@ def material(state):
             "key": f"Q{index}", "kind": "question", "id": q["id"], "question_ids": [q["id"]],
             "question": q["question"], "answer": q["answer"], "scope": q["scope"],
             "work_state": q["work_state"], "assessment": q["assessment"],
+            "judgment_review_required": q.get("judgment_review_required", False),
             "reader_explanation": q.get("reader_explanation", {}),
             "alternatives": q.get("alternatives", []), "next_checks": q.get("next_checks", []),
             "remaining_gap_ids": q["remaining_gap_ids"],
@@ -143,10 +144,14 @@ def status(state, ids=None):
                     if item["kind"] == "gap" and item.get("impact") in ("material", "decision_critical")
                     and item["key"] not in used]
     missing_sections = [key for key, _, _ in SECTIONS if key not in sections]
+    pending = [{"question_id": q["id"], "revision": q["revision"],
+                "read_call": {"tool": "forsic_reporting", "arguments": {"action": "state", "question_id": q["id"]}}}
+               for q in selected["questions"] if q.get("judgment_review_required")]
     return {
         "basis_id": identity, "question_ids": ids,
         "revision": latest["revision"] if latest else 0,
-        "ready": not missing_sections and not missing_gaps and set(ids) <= covered,
+        "ready": not pending and not missing_sections and not missing_gaps and set(ids) <= covered,
+        "judgment_review_questions": pending,
         "stale": bool(latest and latest["basis_id"] != identity),
         "missing_sections": missing_sections, "missing_material_gap_keys": missing_gaps,
         "unrepresented_question_ids": [qid for qid in ids if qid not in covered],
@@ -186,10 +191,12 @@ def prepare(state, args):
         used += len(json.dumps(item, ensure_ascii=False))
     next_offset = offset + len(page)
     output = {
-        "status": "editorial_ready" if progress["ready"] else "authoring_required",
+        "status": ("judgment_review_required" if progress["judgment_review_questions"] else
+                   "editorial_ready" if progress["ready"] else "authoring_required"),
         "role": "editorial_projection_not_evidence_or_new_judgment",
         **{k: progress[k] for k in ("basis_id", "question_ids", "revision", "stale",
-                                   "missing_sections", "missing_material_gap_keys", "unrepresented_question_ids")},
+                                   "missing_sections", "missing_material_gap_keys", "unrepresented_question_ids",
+                                   "judgment_review_questions")},
         "section": section, "instruction": dict((k, instruction) for k, _, instruction in SECTIONS)[section],
         "writing": (
             "Write fresh connected Korean prose for the reader, not pasted question answers, IDs, tool logs or empty tables. "
@@ -217,6 +224,10 @@ def prepare(state, args):
         output["next_call"] = {"tool": "forsic_reporting", "arguments": {
             "action": "compose", "section": section, "question_ids": ids,
             "basis_id": identity, "offset": next_offset}}
+    if progress["judgment_review_questions"]:
+        output["next_call"] = progress["judgment_review_questions"][0]["read_call"]
+        output["instruction"] = "Read the indicated current question and explicitly reassess its answer/assessment or selected judgment through forsic_question before authoring report prose. Scope closure and prose edits do not clear an invalidated judgment."
+        output.pop("save_contract")
     return output
 
 
@@ -243,6 +254,8 @@ def save(case, state, args):
         if ids != selection(now, args):
             raise ValueError("Report scope changed; read compose again")
         progress = status(now, ids)
+        if progress["judgment_review_questions"]:
+            raise ValueError("Current judgment requires review; read compose and reassess the indicated question before saving report prose")
         if args.get("basis_id") != progress["basis_id"]:
             raise ValueError("Report judgments changed; read compose again and revise the affected prose")
         if type(args.get("expected_revision")) is not int or args["expected_revision"] != progress["revision"]:

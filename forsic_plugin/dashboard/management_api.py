@@ -161,6 +161,8 @@ def public_job(record, store=None):
 def snapshot(request, case_id=''):
     from forsic_plugin.setup import local_admin
     home, store, manager = scope(request)
+    from forsic_plugin.skill_proposals import WorkflowSkillProposals
+    proposals = WorkflowSkillProposals(home, store).catalog(case_id)
     catalog = manager.catalog()
     selection = hub.selection_snapshot(home)
     case = selected_case(case_id, home)
@@ -211,6 +213,7 @@ def snapshot(request, case_id=''):
                 'packs_revision': selection['revision'], 'case_id': case_id, 'case_state': case_state,
                 'packs': [(item['id'], item['version'], item['sha256']) for item in packs],
                 'environments': [(item['environment_id'], item.get('state')) for item in catalog['environments']]}
+    identity['skill_proposals'] = [(item['id'], item['revision']) for item in proposals]
     current = (case_state or {}).get('current') or {}
     from forsic_plugin.tenants import current_scope
     tenant=current_scope()
@@ -224,6 +227,7 @@ def snapshot(request, case_id=''):
                 'legacy_history': current.get('legacy_history', 'not retroactively pinned')},
             'updates': [clean(item['result']) for item in catalog['operations'] if item.get('kind') == 'check_updates' and item.get('result')]},
         'packs': {'items': packs, 'selection': {'revision': selection['revision'], 'packs': selection['selection']['packs']}},
+        'skill_proposals': {'items': proposals},
         'builder': {'jobs': [public_job(item) for item in builder_jobs]}, 'jobs': jobs}
 
 
@@ -266,6 +270,12 @@ def refresh_runtime(home, store):
 
 
 FIELDS = {
+    'skill.propose': {'proposal'},
+    'skill.draft': {'proposal_id', 'draft', 'proposal_revision'},
+    'skill.publish': {'proposal_id', 'reviewed_sha256', 'proposal_revision'},
+    'skill.activate': {'proposal_id', 'proposal_revision', 'scope'},
+    'skill.reject': {'proposal_id', 'proposal_revision'},
+    'skill.withdraw': {'proposal_id', 'proposal_revision'},
     'env.register': set(), 'env.inventory': {'environment_id'}, 'env.check_updates': {'environment_id'},
     'env.prepare': {'plan'}, 'env.plan_dependencies': {'base_environment_id', 'id', 'version', 'expected_sha256'}, 'env.set_default': {'environment_id'},
     'env.apply': {'environment_id', 'extensions', 'reason'}, 'env.rollback': {'environment_id', 'reason'},
@@ -281,6 +291,48 @@ FIELDS = {
 def execute(body, request, home, store, manager, fields):
     action, op = body.action, body.operation_id
     case = selected_case(body.case_id, home)
+    if action.startswith('skill.'):
+        from forsic_plugin.skill_proposals import WorkflowSkillProposals
+        proposals = WorkflowSkillProposals(home, store)
+        if action == 'skill.propose':
+            if case is None: raise ValueError('제안 근거가 있는 현재 사건을 선택해주세요.')
+            proposal = proposals.propose(case, fields['proposal'], operation_id=op)
+        else:
+            current = proposals.get(fields['proposal_id'])
+            if case is None or current['origin']['case_id'] != body.case_id:
+                raise ValueError('제안의 원래 사건을 선택해주세요.')
+            args = {'expected_revision': fields['proposal_revision'], 'operation_id': op}
+            if action == 'skill.draft': proposal = proposals.update(fields['proposal_id'], fields['draft'], **args)
+            elif action == 'skill.publish':
+                proposal = proposals.publish(fields['proposal_id'], fields['reviewed_sha256'], **args)
+            elif action in ('skill.reject', 'skill.withdraw'):
+                proposal = proposals.decide(fields['proposal_id'], action.split('.')[1], **args)
+            elif action == 'skill.activate':
+                if current['revision'] != fields['proposal_revision'] or current['status'] != 'published':
+                    raise ValueError('게시된 현재 제안 버전을 선택해주세요.')
+                publication = current['publication']
+                pack = hub.load_pack(publication['pack_id'], publication['version'], home, publication['sha256'])
+                choice = {'version': publication['version'], 'sha256': publication['sha256'], 'enabled': True,
+                          'tools': {}, 'skills': {s['name']: True for s in pack['manifest']['skills']}}
+                with idle_scope(home) as safe:
+                    if fields['scope'] == 'default':
+                        selection = hub.selection_snapshot(home)
+                        selected = selection['selection']
+                        selected['packs'][publication['pack_id']] = choice
+                        hub.save_selection(selected, selection['revision'], op, home)
+                    elif fields['scope'] == 'case':
+                        state = manager.case_state(case)
+                        selected = ((state.get('current') or {}).get('extensions') or {'packs': {}})
+                        selected['packs'][publication['pack_id']] = choice
+                        manager.select_case(case, extensions=selected, expected_revision=state['revision'],
+                            operation_id=op, reason='사용자가 검토·게시한 절차 스킬을 사건에 활성화함', sessions_safe=lambda: safe)
+                    else: raise ValueError('default 또는 case 활성화 범위를 선택해주세요.')
+                    applied = refresh_runtime(home, store) if safe else False
+                    if not safe: store.write(store.root / 'runtime.json', {'pending': True})
+                    proposal = proposals.record_activation(fields['proposal_id'], scope=fields['scope'],
+                        status='applied' if applied else 'pending', operation_id=op)
+            else: raise ValueError('지원하지 않는 스킬 관리 작업입니다.')
+        return {'status': proposal['status'], 'proposal': proposal}
     if action == 'env.plan_dependencies':
         pack = hub.load_pack(fields['id'], fields['version'], home, fields['expected_sha256'])
         plan = manager.plan_dependencies(fields['base_environment_id'], pack['manifest'].get('dependencies', []))
