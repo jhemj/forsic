@@ -117,6 +117,14 @@ def finish_text_response(
     # empty-response warnings on the final response path.
     agent._mute_post_response = False
 
+    # A completed in-flight response is retained verbatim; a user pause must not
+    # trigger empty/stall recovery, length continuation or auxiliary stop gates.
+    from agent.goal_pause import SAFE_PAUSE_REASON, settle_requested_goal_pause
+    if settle_requested_goal_pause(agent):
+        append_message(messages, agent._build_assistant_message(assistant_message, finish_reason))
+        _turn_exit_reason = SAFE_PAUSE_REASON
+        return _verdict("break")
+
     # Think-block-only / empty content: recovery path.
     if not agent._has_content_after_think_block(final_response):
         _ev = recover_empty_response(

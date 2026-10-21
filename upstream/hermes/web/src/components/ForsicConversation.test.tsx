@@ -315,3 +315,36 @@ it('shows review elapsed time only from a real recorded start', async () => {
   expect(container.querySelector('.fc-review-elapsed')).toBeNull()
  } finally {vi.useRealTimers()}
 })
+
+it('labels safe pause and shows a disabled draining state before resume', async () => {
+ const onToggle = vi.fn()
+ await render({running: true, control: {paused: false, pending: false, onToggle}})
+ expect(container.querySelector('.fc-control')?.textContent).toBe('안전하게 일시정지')
+ expect(container.querySelector('.fc-control')?.getAttribute('aria-label')).toBe('안전하게 일시정지')
+ await render({running: true, control: {paused: false, pausing: true, pending: false, onToggle}})
+ const button = container.querySelector<HTMLButtonElement>('.fc-control')!
+ expect(button.textContent).toBe('작업 마무리 중')
+ expect(button.disabled).toBe(true)
+ await act(async () => {button.click()})
+ expect(onToggle).not.toHaveBeenCalled()
+ await render({control: {paused: true, pending: false, onToggle}})
+ expect(container.querySelector('.fc-control')?.textContent).toBe('재개')
+})
+
+
+it('renders compact recent request speed with an accessible explanation only for valid connected readings', async () => {
+ await render({recentAvgTps: 12.34})
+ const speed = container.querySelector<HTMLElement>('.fc-compose-meta .fc-recent-speed')!
+ expect(speed.textContent).toBe('최근 평균 12.3 토큰/초')
+ expect(speed.tabIndex).toBe(0)
+ expect(speed.getAttribute('aria-label')).toContain('최근 평균 12.3 토큰/초')
+ expect(speed.title).toContain('최대 10회')
+ expect(speed.title).toContain('입력 처리와 대기 시간')
+ expect(speed.title).toContain('세션 전체 평균이 아닙니다')
+ for (const recentAvgTps of [undefined, null, 0, -1, Infinity, NaN]) {
+   await render({recentAvgTps})
+   expect(container.querySelector('.fc-recent-speed')).toBeNull()
+ }
+ await render({recentAvgTps: 12.34, connected: false})
+ expect(container.querySelector('.fc-recent-speed')).toBeNull()
+})

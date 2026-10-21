@@ -4,12 +4,30 @@ import {createRoot, type Root} from 'react-dom/client'
 import {afterEach, beforeEach, expect, it} from 'vitest'
 import {ForsicToolCall} from './ForsicToolCall'
 import type {InspectorToolCall} from '../lib/forsic-inspector'
+import {fullSavedCalls} from '../lib/forsic-conversation'
 
 let container: HTMLDivElement, root: Root
 beforeEach(() => {Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true}); container = document.createElement('div'); document.body.append(container); root = createRoot(container)})
 afterEach(async () => {await act(async () => root.unmount()); container.remove()})
 const shell = (patch: Partial<InspectorToolCall> = {}): InspectorToolCall => ({id: 'shell', name: 'forsic_shell', arguments: '{}', status: 'completed', source: 'saved', ...patch})
 async function render(call: InspectorToolCall) {await act(async () => root.render(<ForsicToolCall call={call} />))}
+
+it('renders saved native bridge purpose first and preserves submitted wrapper in raw details', async () => {
+  const submitted = {calls: [{name: 'forsic_shell', arguments: {command: 'python inspect.py', reason: 'Compare authentication records'}}]}
+  const [call] = fullSavedCalls([
+    {role: 'assistant', tool_calls: [{id: 'a', function: {name: 'tool_call', arguments: JSON.stringify(submitted)}}]},
+    {role: 'tool', tool_call_id: 'a', tool_name: 'forsic_shell', content: '{"error":"Command failed","command_outcome":{"status":"failed"}}'},
+  ])
+  await render(call)
+  expect(container.querySelector('.fc-tool-heading > :first-child')?.textContent).toBe('Compare authentication records')
+  expect(container.querySelector('.fc-tool-kind')?.textContent).toBe('분석 터미널')
+  expect(container.querySelector('.fc-tool-badge')?.textContent).toBe('실행 실패')
+  expect(container.querySelector('.fc-tool-call > summary')?.textContent).not.toContain('tool_call')
+  const raw = container.querySelector<HTMLDetailsElement>('.fc-tool-raw')!
+  await act(async () => {raw.open = true; raw.dispatchEvent(new Event('toggle', {bubbles: true}))})
+  expect(raw.textContent).toContain('제출된 요청 · tool_call')
+  expect(Array.from(raw.querySelectorAll('pre')).some(pre => pre.textContent === JSON.stringify(submitted, null, 2))).toBe(true)
+})
 
 it.each(['live', 'saved'] as const)('shows the explicit purpose before the command for %s shell calls and keeps failure details', async source => {
   const reason = '선택한 로그에서 실행 흔적을 확인합니다. ' + '확인 범위를 구분합니다. '.repeat(20)

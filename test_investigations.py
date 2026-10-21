@@ -123,6 +123,7 @@ class InvestigationTests(unittest.TestCase):
     def test_admission_uses_native_lifecycle_without_heartbeat_expiry(self):
         self.case('one', 'old', created=time.time() - 86400)
         self.goal('old', 'active')
+        self.case('reserved', 'reserved'); self.goal('reserved', 'paused')
         result = self.catalog.new_investigation()
         self.assertFalse(result['allowed'])
         self.assertEqual(result['active_case'], dict(case_id='one', label='same name',
@@ -133,7 +134,8 @@ class InvestigationTests(unittest.TestCase):
         self.assertEqual(paused['active_case']['status'], 'paused')
         self.assertIn('일시 중지', paused['reason'])
         self.goal('old', 'done')
-        self.assertEqual(self.catalog.new_investigation(), dict(allowed=True, reason=None, active_case=None))
+        self.assertTrue(self.catalog.new_investigation()['allowed'])
+        self.assertEqual(self.catalog.new_investigation()['active_count'], 1)
         self.goal('old', 'cleared')
         final_before = (self.root / 'state.db').read_bytes()
         self.assertTrue(self.catalog.new_investigation()['allowed'])
@@ -152,6 +154,7 @@ class InvestigationTests(unittest.TestCase):
             db.execute('DELETE FROM sessions WHERE id=?', ('deleted',))
         # Native deletion preserves Forsic intake/ledger and may retain goal meta.
         self.assertTrue(self.catalog.new_investigation()['allowed'])
+        self.case('other', 'other'); self.goal('other', 'paused')
         self.case('current', 'current')
         self.goal('current', 'active')
         result = self.catalog.new_investigation()
@@ -169,6 +172,7 @@ class InvestigationTests(unittest.TestCase):
                 db.execute('INSERT INTO state_meta VALUES (?,?)', ('goal:first', raw))
             result = self.catalog.new_investigation()
             self.assertFalse(result['allowed'])
+            self.assertIsNone(result['active_count']); self.assertIsNone(result['available_slots'])
             self.assertIn('확인', result['reason'])
         self.goal('first', 'done')
         manifest.write_text('broken manifest')
@@ -348,6 +352,49 @@ class NativeConversationCreationTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_two_intakes_reserve_capacity_and_completion_releases_one_slot(self):
+        from forsic_plugin.investigations import InvestigationUnavailable
+        first = self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
+        self.assertTrue(self.catalog.new_investigation()['allowed'])
+        second = self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
+        full = self.catalog.new_investigation()
+        self.assertEqual((full['active_count'], full['limit'], full['available_slots']), (2, 2, 0))
+        with self.assertRaises(InvestigationUnavailable):
+            self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
+        with closing(sqlite3.connect(self.home / 'state.db')) as db, db:
+            db.execute('INSERT INTO state_meta(key,value) VALUES (?,?)',
+                       ('goal:' + first['session_id'], json.dumps({'status': 'paused'})))
+        self.assertFalse(self.catalog.new_investigation()['allowed'])
+        with closing(sqlite3.connect(self.home / 'state.db')) as db, db:
+            db.execute('UPDATE state_meta SET value=? WHERE key=?',
+                       (json.dumps({'status': 'done'}), 'goal:' + first['session_id']))
+        self.assertEqual(self.catalog.new_investigation()['available_slots'], 1)
+        third = self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
+        self.assertEqual(len({first['case_id'], second['case_id'], third['case_id']}), 3)
+
+    def test_native_active_registry_keeps_two_session_owners_distinct(self):
+        from hermes_state import SessionDB
+        from hermes_cli.active_sessions import try_acquire_active_session, SESSION_NOT_OWNED
+        first = self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
+        second = self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
+        leases=[]
+        native=SessionDB(self.home / 'state.db')
+        try:
+            for item in (first, second):
+                lease, refusal = try_acquire_active_session(session_id=item['session_id'], surface='desktop',
+                    config={}, registry_home=self.home, metadata={'live_session_id':item['session_id']})
+                self.assertIsNone(refusal);self.assertIsNotNone(lease);leases.append(lease)
+            self.assertTrue(native.try_acquire_session_turn_lease(first['session_id'],'owner-a'))
+            self.assertTrue(native.try_acquire_session_turn_lease(second['session_id'],'owner-b'))
+            self.assertFalse(native.try_acquire_session_turn_lease(first['session_id'],'another-owner'))
+            self.assertEqual(self.catalog.new_investigation()['active_count'], 2)
+            duplicate, refusal = try_acquire_active_session(session_id=first['session_id'], surface='desktop',
+                config={}, registry_home=self.home, metadata={'live_session_id':'different-runtime'})
+            self.assertIsNone(duplicate);self.assertEqual(refusal.reason, SESSION_NOT_OWNED)
+        finally:
+            for lease in leases:lease.release()
+            native.close()
+
     def test_explicit_intake_and_empty_case_conversation_are_idempotent(self):
         from hermes_state import SessionDB
         from forsic_plugin.intake import Intake
@@ -421,6 +468,7 @@ class NativeConversationCreationTests(unittest.TestCase):
         request = api.InvestigationInput(path=str(self.evidence), request_id=uuid.uuid4())
         with patch.object(api, 'directory', return_value=self.catalog):
             first = api.investigation_create(request)
+            api.investigation_create(api.InvestigationInput(path=str(self.evidence), request_id=uuid.uuid4()))
             availability = api.investigations()['new_investigation']
             self.assertFalse(availability['allowed'])
             self.assertEqual(availability['active_case']['status'], 'waiting')
@@ -439,21 +487,21 @@ class NativeConversationCreationTests(unittest.TestCase):
         self.assertNotEqual(first['case_id'], second['case_id'])
         self.assertEqual(fresh['case_id'], first['case_id'])
 
-    def test_concurrent_different_requests_create_only_one_case(self):
+    def test_concurrent_different_requests_create_only_two_cases(self):
         from forsic_plugin.investigations import InvestigationUnavailable
-        start = threading.Barrier(2)
+        start = threading.Barrier(4)
         def create(_):
             start.wait(timeout=10)
             try:
                 return self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
             except InvestigationUnavailable:
                 return None
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            results = list(pool.map(create, range(2)))
-        self.assertEqual(sum(result is not None for result in results), 1)
-        self.assertEqual(len(list((self.intake / 'cases').iterdir())), 1)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(create, range(4)))
+        self.assertEqual(sum(result is not None for result in results), 2)
+        self.assertEqual(len(list((self.intake / 'cases').iterdir())), 2)
         with closing(sqlite3.connect(self.home / 'state.db')) as db:
-            self.assertEqual(db.execute('SELECT count(*) FROM sessions').fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT count(*) FROM sessions').fetchone()[0], 2)
 
     def test_concurrent_same_request_replays_one_receipt(self):
         request = uuid.uuid4()
@@ -468,18 +516,22 @@ class NativeConversationCreationTests(unittest.TestCase):
         with closing(sqlite3.connect(self.home / 'state.db')) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM sessions').fetchone()[0], 1)
 
-    def test_incomplete_receipt_blocks_different_request_but_allows_recovery(self):
+    def test_incomplete_receipt_reserves_one_slot_and_allows_recovery(self):
         from hermes_state import SessionDB
         from forsic_plugin.investigations import InvestigationUnavailable
         request = uuid.uuid4()
         with patch.object(SessionDB, 'create_session', side_effect=RuntimeError('synthetic failure')):
             with self.assertRaises(RuntimeError):
                 self.catalog.create_conversation(request, path=str(self.evidence))
+        self.assertTrue(self.catalog.new_investigation()['allowed'])
+        self.assertEqual(self.catalog.new_investigation()['active_count'], 1)
+        self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
         self.assertFalse(self.catalog.new_investigation()['allowed'])
         with self.assertRaises(InvestigationUnavailable):
             self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
         result = self.catalog.create_conversation(request, path=str(self.evidence))
-        self.assertEqual(len(list((self.intake / 'cases').iterdir())), 1)
+        self.assertEqual(len(list((self.intake / 'cases').iterdir())), 2)
+        self.assertEqual(self.catalog.new_investigation()['active_count'], 2)
         self.assertEqual(self.catalog.create_conversation(request, path=str(self.evidence)), result)
 
     def test_completed_manual_turn_releases_but_new_turn_and_intake_reserve(self):
@@ -487,6 +539,7 @@ class NativeConversationCreationTests(unittest.TestCase):
         from forsic_plugin.evidence import Case
         request = uuid.uuid4()
         result = self.catalog.create_conversation(request, path=str(self.evidence))
+        self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
         sid = result['session_id']
         intake = Intake(self.intake)
         state = intake.state(sid)

@@ -221,5 +221,29 @@ class ExecutionOutcomePruningTests(unittest.TestCase):
         self.assertFalse(view['returned_scope']['verified'])
         self.assertEqual(view['returned_scope']['status'],'running')
 
+    def test_citation_repair_keeps_exact_lookup_and_rejection_through_native_pruning(self):
+        from forsic_plugin.report_driven.grounded_judgment import CitationSelectionError
+        source = {'id': 'a' * 32, 'version': 'b' * 64}
+        lookup = {'tool': 'forsic_reporting', 'arguments': {'action': 'source',
+            'source_id': source['id'], 'source_version': source['version'], 'pointer': '/stdout', 'offset': 0}}
+        error = CitationSelectionError('judgment.claims[1].citation_refs[1]',
+            'Failed or pending execution is not a body observation',
+            {'source_ref': source, 'read_call': lookup,
+             'meaning': 'Retained partial output; command completion remains failed.'})
+        body = {'error': str(error), **error.details, 'write_applied': False,
+                'unneeded_detail': 'x' * 4000}
+        for tail in (False, True):
+            with self.subTest(tail=tail):
+                view, _, content = self.prune('forsic_question', {}, json.dumps(body), tail=tail)
+                self.assertEqual(view['error_code'], 'invalid_citation_selection')
+                self.assertEqual(view['failure_stage'], 'citation_validation')
+                self.assertEqual(view['invalid_fields'], body['invalid_fields'])
+                self.assertEqual(view['recovery']['read_call'], lookup)
+                self.assertFalse(view['write_applied'])
+                self.assertTrue(view['error_present'])
+                self.assertNotIn('returned_records', view)
+                self.assertNotIn('citation_ref', view['recovery'])
+                self.assertLessEqual(len(content), 2048)
+
 
 if __name__ == "__main__": unittest.main()

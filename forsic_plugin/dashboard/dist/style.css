@@ -356,6 +356,7 @@
 .forsic-global-nav{display:grid;grid-template-columns:1fr;gap:8px}
 .forsic-global-nav .forsic-action-secondary{justify-content:flex-start;padding-left:14px;background:var(--forsic-primary);border-color:var(--forsic-primary);color:var(--forsic-primary-text);min-height:42px;font-weight:600}
 .forsic-global-nav .forsic-action-secondary:hover{background:var(--forsic-primary-hover);color:var(--forsic-primary-text)}
+.forsic-action-secondary>small{font-size:12px;font-weight:500;margin-left:auto;white-space:nowrap;opacity:.85}
 .forsic-shell .forsic-action-secondary:disabled{opacity:.52;cursor:not-allowed;background:var(--forsic-inset);border-color:var(--forsic-border);color:var(--forsic-muted)}
 .forsic-admission-notice{padding:10px 12px;margin:8px 0 14px;border:1px solid var(--forsic-border);border-radius:10px;background:var(--forsic-inset);color:var(--forsic-muted);font-size:var(--forsic-font-control, 14px);line-height:1.65}
 .forsic-admission-notice p{margin:0!important;font-size:inherit!important}
@@ -461,3 +462,26 @@
 .forsic-close-investigation{margin-top:8px}
 .forsic-close-investigation p{margin-top:8px!important;color:var(--forsic-muted);font-size:var(--forsic-font-control,14px);line-height:1.65}
 .forsic-close-investigation button:disabled{opacity:.5;cursor:wait}
+
+/* Connections use the settings page categories, with persistent form values. */
+.forsic-shell .forsic-connections-embedded{position:static;inset:auto;margin:0;width:100%;max-width:900px;max-height:none;overflow:visible;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;font-size:16px;line-height:1.65}
+.forsic-shell .forsic-connections .forsic-connection-group{padding:24px;margin:0 0 20px;border-radius:14px;background:var(--forsic-surface)}
+.forsic-shell .forsic-connections .forsic-connection-group h2{font-size:20px;line-height:1.4;margin:0 0 20px;font-weight:650}
+.forsic-shell .forsic-connections .forsic-connection-field{margin:18px 0;gap:8px}
+.forsic-shell .forsic-connections .forsic-connection-field span,.forsic-shell .forsic-connections .forsic-connection-hint{font-size:14px;line-height:1.7}
+.forsic-shell .forsic-connections .forsic-connection-field input{font-size:16px;min-height:46px;padding:11px 13px}
+.forsic-shell .forsic-connections .forsic-connection-check{font-size:16px;line-height:1.65;margin:16px 0}
+.forsic-connection-runtime{padding:16px 18px;margin:20px 0 12px;background:var(--forsic-inset);border:1px solid var(--forsic-border);border-radius:10px;overflow-wrap:anywhere;font-size:14px}
+.forsic-connection-runtime p{margin:4px 0}
+.forsic-connection-advanced{margin:20px 0;color:var(--forsic-muted);font-size:14px}
+.forsic-connection-advanced summary{cursor:pointer;padding:8px 0;min-height:36px}
+.forsic-shell .forsic-connections .forsic-connection-actions{position:sticky;bottom:0;margin:0;padding:16px 0;background:var(--forsic-canvas);border-top:1px solid var(--forsic-border);font-size:14px;color:var(--forsic-muted);z-index:1}
+.forsic-shell .forsic-connections .forsic-connection-save{min-height:46px;padding:10px 22px;white-space:nowrap;font-size:16px}
+@media(max-width:600px){.forsic-shell .forsic-connections .forsic-connection-group{padding:18px}.forsic-shell .forsic-connections .forsic-connection-actions{align-items:stretch;flex-direction:column;gap:10px}}
+
+/* Explicit model connection check; independent from saving the draft. */
+.forsic-model-test{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1rem;padding:.85rem 0}
+.forsic-model-test>button{flex:none;font-weight:600}
+.forsic-model-test>small{flex:1;min-width:15rem;color:var(--text-muted,#888);line-height:1.6}
+.forsic-model-test>p{flex-basis:100%;margin:.15rem 0;line-height:1.6}
+.forsic-model-test-ok{color:inherit;font-weight:600}

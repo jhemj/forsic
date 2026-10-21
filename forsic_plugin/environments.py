@@ -348,13 +348,49 @@ class EnvironmentManager:
                 subprocess.run(['docker', 'rm', '-f', name], capture_output=True, timeout=15, check=False)
         return receipts
 
+    def _mount_smoke(self, images, operation, helper_directory):
+        """Qualify exact preserved helper binds and an owning-scope work leaf."""
+        from .image_process import bind_mount
+        expected = {name: _file_sha(helper_directory / name) for name in HELPERS}
+        script = """import hashlib,json,os,sys
+from pathlib import Path
+expected=json.loads(sys.argv[1])
+for name,digest in expected.items():
+    path=Path('/opt/forsic')/name
+    assert os.statvfs(path).f_flag & os.ST_RDONLY, 'Helper bind is not read-only: '+name
+    assert hashlib.sha256(path.read_bytes()).hexdigest()==digest, 'Helper bind content mismatch: '+name
+path=Path('/work')/('mount-check-'+sys.argv[2])
+try:
+    with path.open('xb') as stream: stream.write(sys.argv[2].encode())
+    assert path.read_bytes()==sys.argv[2].encode(), 'Workspace write/read mismatch'
+finally:
+    path.unlink(missing_ok=True)
+print(json.dumps({'helper_sha256':expected,'helpers_readonly':True,'workspace_write_read':True}))
+"""
+        receipts = {}
+        wanted = {'helper_sha256': expected, 'helpers_readonly': True, 'workspace_write_read': True}
+        with tempfile.TemporaryDirectory(prefix='.mount-check-', dir=self.root) as temporary:
+            for role, image in images.items():
+                name = 'forsic-env-' + _sha(str(self.root.resolve()).encode())[:12] + '-' + operation + '-mount-' + role
+                argv = ['docker', 'run', '--rm', '--name', name, '--pull=never', '--network=none',
+                    '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+                    '--user', f'{os.getuid()}:{os.getgid()}', '--memory=1g', '--pids-limit=64']
+                for helper in HELPERS:
+                    argv.extend(['--mount', bind_mount(helper_directory / helper, '/opt/forsic/' + helper, True)])
+                argv.extend(['--mount', bind_mount(temporary, '/work', False), image['image_id'],
+                             'python', '-B', '-c', script, json.dumps(expected), uuid.uuid4().hex])
+                receipt = json.loads(self._run(operation, argv, timeout=120, output_limit=16384))
+                if receipt != wanted:
+                    raise ValueError('Preserved helper/workspace bind verification failed: ' + role)
+                receipts[role] = receipt
+        return receipts
+
     def _register(self, images, operation, *, plan=None, source_helpers=None, validation=None, lock_sha256=None):
         self._stage(operation, 'verification')
         for image in images.values():
             if image['platform'] != 'linux/amd64':
                 raise ValueError('Platform not functionally qualified: ' + image['platform'])
         smoke = self._smoke(images, operation)
-        self._stage(operation, 'registration')
         helpers = source_helpers or {name: SOURCE / 'forsic_plugin' / name for name in HELPERS}
         helper_identity = {name: {'sha256': _file_sha(path), 'bytes': Path(path).stat().st_size}
                            for name, path in helpers.items()}
@@ -370,16 +406,33 @@ class EnvironmentManager:
             'declared_lock_sha256': lock_sha256 or _file_sha(SOURCE / 'tools' / 'forensic-tools.lock.json')}
         environment_id = 'env-' + _sha(_json(identity))
         directory = self.root / 'environments' / environment_id
-        with _lock(self.root / '.lock'):
-            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-            (directory / 'helpers').mkdir(exist_ok=True, mode=0o700)
-            for name, path in helpers.items():
-                if name not in HELPERS:
-                    raise ValueError('Unrecognized helper')
-                shutil.copyfile(path, directory / 'helpers' / name)
-                (directory / 'helpers' / name).chmod(0o400)
-            manifest = {**identity, 'environment_id': environment_id}
-            _write(directory / 'manifest.json', manifest)
+        created, published = False, False
+        try:
+            with _lock(self.root / '.lock'):
+                directory.mkdir(parents=True, mode=0o700)
+                created = True
+                (directory / 'helpers').mkdir(mode=0o700)
+                for name, path in helpers.items():
+                    if name not in HELPERS:
+                        raise ValueError('Unrecognized helper')
+                    shutil.copyfile(path, directory / 'helpers' / name)
+                    (directory / 'helpers' / name).chmod(0o400)
+                    if _file_sha(directory / 'helpers' / name) != helper_identity[name]['sha256']:
+                        raise ValueError('Preserved helper copy integrity mismatch: ' + name)
+            self._stage(operation, 'mount_verification')
+            mounts = self._mount_smoke(images, operation, directory / 'helpers')
+            self._change_operation(operation, mount_checks=mounts,
+                checks_scope='Exact preserved helper binds and disposable management workspace; future case workspace paths are not certified')
+            self._stage(operation, 'registration')
+            with _lock(self.root / '.lock'):
+                if self.operation(operation).get('cancel_requested'):
+                    raise InterruptedError('Management operation cancelled')
+                manifest = {**identity, 'environment_id': environment_id}
+                _write(directory / 'manifest.json', manifest)
+                published = True
+        finally:
+            if created and not published:
+                shutil.rmtree(directory)
         return manifest
 
     def register(self, images=None, *, operation_id, background=True):
@@ -886,8 +939,8 @@ def _host_utilities():
     return result
 
 
-def _management_run(image_id, argv, *, network=False, readonly=True):
-    return ['docker', 'run', '--rm', '--pull=never', '--network=' + ('bridge' if network else 'none'),
+def _management_run(image_id, argv, *, network=False, readonly=True, auto_remove=True):
+    return ['docker', 'run', *(['--rm'] if auto_remove else []), '--pull=never', '--network=' + ('bridge' if network else 'none'),
             *(['--read-only'] if readonly else []), '--cap-drop=ALL', '--security-opt=no-new-privileges',
             '--memory=2g', '--pids-limit=128', image_id, *argv]
 
@@ -1081,7 +1134,7 @@ def run_fixture(environment_id, pack_path, argv, fixture_path, expected, *, oper
         record = manager.operation(op)
         record.update(process=None, container=name)
         _write(manager.root/'operations'/(op+'.json'), record)
-        command = _management_run(manifest['images']['analysis']['image_id'], [])
+        command = _management_run(manifest['images']['analysis']['image_id'], [], auto_remove=False)
         index = command.index(manifest['images']['analysis']['image_id'])
         command[index:index] = ['--name', name, '--user', f'{os.getuid()}:{os.getgid()}',
             '--tmpfs','/tmp:rw,nosuid,nodev,size=128m', '--workdir','/work',
@@ -1089,7 +1142,7 @@ def run_fixture(environment_id, pack_path, argv, fixture_path, expected, *, oper
             '--mount',bind_mount(workdir,'/work',False)]
         command += argv
         result = run_container(command,name,Cancel(),timeout_seconds=timeout_seconds,
-            max_output_bytes=max_output_bytes,cleanup_on_return=True,
+            max_output_bytes=max_output_bytes,cleanup_on_return=True,retained_container=True,
             process_observer=lambda pid: manager._change_operation(op,process=_process_identity(pid)))
         manager._change_operation(op,process=None)
         stdout,stderr=result['stdout'],result['stderr']

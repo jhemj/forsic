@@ -1,7 +1,7 @@
 import {useTenant} from '@/contexts/tenant-context'
 import {useCallback, useEffect, useRef, useState} from 'react'
 import type {ServerRequest} from '@hermes/shared'
-import {readContextUsage, type ContextUsage} from '@/lib/forsic-context'
+import {readContextUsage, readRecentAvgTps, type ContextUsage} from '@/lib/forsic-context'
 import {fetchJSON} from '@/lib/api'
 import {GatewayClient, type GatewayEvent} from '@/lib/gatewayClient'
 import {type InspectorEvent} from '@/lib/forsic-inspector'
@@ -10,16 +10,16 @@ export type {ConversationRow} from '@/lib/forsic-conversation'
 export type {ServerRequest} from '@hermes/shared'
 
 interface Options {sessionId: string; profile: string; active: boolean; onEvent?: (event: InspectorEvent) => void}
-interface Control {goal?: {status?: string; paused_reason?: string} | null; revision?: string}
+interface Control {goal?: {status?: string; paused_reason?: string; pause_requested?: boolean} | null; revision?: string}
 interface Live {available: boolean; requested_session_id: string; stored_session_id: string; runtime_session_id: string | null; profile_name: string; running: boolean | null; control: Control}
 interface History {session_id: string; messages: unknown[]}
 interface Snapshot {
   scope: string; conversation: PublicConversation; running: boolean; connected: boolean; loading: boolean; reconnecting: boolean
   error: string | null; submissionNotice?: string; statusText: string; turnStartedAt?: number; turnTimeObserved?: boolean; hasMore: boolean; requests: ServerRequest[]; control: Control | null
   reviewItems: ReviewChatItem[]; reviewCaseId?: string; reviewFresh: boolean; reviewError: string | null; reviewOmitted: number
-  contextUsage: ContextUsage | null; verified: boolean; pending: boolean; uncertain: boolean; runtimeId?: string; storedId?: string
+  contextUsage: ContextUsage | null; recentAvgTps: number | null; verified: boolean; pending: boolean; uncertain: boolean; runtimeId?: string; storedId?: string
 }
-const empty = (scope: string): Snapshot => ({scope, reviewFresh: false, reviewItems: [], reviewError: null, reviewOmitted: 0, conversation: emptyConversation(), running: false, connected: false, loading: false, reconnecting: false, error: null, statusText: '', hasMore: false, requests: [], control: null, contextUsage: null, verified: false, pending: false, uncertain: false})
+const empty = (scope: string): Snapshot => ({scope, reviewFresh: false, reviewItems: [], reviewError: null, reviewOmitted: 0, conversation: emptyConversation(), running: false, connected: false, loading: false, reconnecting: false, error: null, statusText: '', hasMore: false, requests: [], control: null, contextUsage: null, recentAvgTps: null, verified: false, pending: false, uncertain: false})
 interface Owner {send: (text: string) => Promise<boolean>; toggle: () => Promise<void>; refresh: () => Promise<void>; earlier: () => Promise<void>; approval: (choice: string) => Promise<void>}
 const authFailure = (error: unknown) => /4401|4403|401|403|auth|token|ticket/i.test(error instanceof Error ? error.message : String(error))
 const supportedRequests = new Set(['approval', 'clarify', 'sudo', 'secret', 'vault.unlock_prompt'])
@@ -49,6 +49,7 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
         patch = {...patch, reviewFresh: false}
       }
       if (patch.reviewFresh && (paused || !(patch.connected ?? state.connected) || !(patch.verified ?? state.verified))) patch = {...patch, reviewFresh: false}
+      if (patch.connected === false || patch.verified === false) patch = {...patch, recentAvgTps: null}
       state = {...state, ...patch}; setSnapshot(state)
     }
     const readReviews = async () => {
@@ -82,7 +83,7 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
       runtimeId = response.session_id
       retries = 0; clearTimeout(retryTimer); retryTimer = undefined
       const startedAt = response.turn_started_at ?? info.turn_started_at ?? asRecord(response.inflight).started_at
-      publish({...(typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0 ? {turnStartedAt: startedAt, turnTimeObserved: false} : {}), runtimeId, storedId: live.stored_session_id, contextUsage: readContextUsage(info.usage), verified: true, reconnecting: false, running: response.running === true || info.running === true, statusText: '', conversation: hydrateConversation(state.conversation, response.inflight)})
+      publish({...(typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0 ? {turnStartedAt: startedAt, turnTimeObserved: false} : {}), runtimeId, storedId: live.stored_session_id, contextUsage: readContextUsage(info.usage), recentAvgTps: readRecentAvgTps(info.usage), verified: true, reconnecting: false, running: response.running === true || info.running === true, statusText: '', conversation: hydrateConversation(state.conversation, response.inflight)})
       // Cold resume's lightweight info omits stored identity; the verified response envelope owns it.
       callback.current?.({type: 'session.info', session_id: runtimeId, payload: {...info, stored_session_id: stored, profile_name: profile, running: state.running}})
       return runtimeId
@@ -120,6 +121,7 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
       const payload = asRecord(event.payload)
       const patch: Partial<Snapshot> = {conversation: project ? applyConversationEvent(state.conversation, event) : state.conversation}
       if (['session.info', 'session.usage', 'message.complete'].includes(event.type) && payload.usage !== undefined) patch.contextUsage = readContextUsage(payload.usage)
+      if (['session.info', 'session.usage', 'message.complete'].includes(event.type)) patch.recentAvgTps = readRecentAvgTps(payload.usage)
       if (event.type === 'message.start' && state.turnStartedAt === undefined && !state.reconnecting && !event.replayed) {patch.turnStartedAt = Date.now() / 1000; patch.turnTimeObserved = true}
       if (event.type === 'session.info' && typeof payload.turn_started_at === 'number' && Number.isFinite(payload.turn_started_at) && payload.turn_started_at > 0) {patch.turnStartedAt = payload.turn_started_at; patch.turnTimeObserved = false}
       if (event.type === 'message.start' || event.type === 'message.delta' || event.type === 'tool.start') patch.running = true
@@ -135,7 +137,16 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
     const stopRequests = gateway.onRequest(request => {
       if (disposed || request.params.session_id !== runtimeId) {request.decline?.('This conversation does not display this request'); return true}
       if (!supportedRequests.has(request.method)) {publish({error: '이 요청은 대화 화면에서 지원하지 않습니다.'}); request.decline?.('This conversation does not display this request'); return true}
-      publish({requests: [...state.requests.filter(item => item.id !== request.id && !(request.method === 'approval' && item.id.startsWith('legacy:'))), request]})
+      // Successful responses do not emit request.cancel. Settle the local form just as approvals do;
+      // the saved conversation owns the historical question and answer.
+      let answered = false
+      const displayed: ServerRequest = request.method === 'clarify' ? {...request, respond: result => {
+        if (answered) return
+        request.respond(result)
+        answered = true
+        publish({requests: state.requests.filter(item => item.id !== request.id)})
+      }} : request
+      publish({requests: [...state.requests.filter(item => item.id !== request.id && !(request.method === 'approval' && item.id.startsWith('legacy:'))), displayed]})
       return true
     })
     const stopEvents = gateway.onAny(event => {if (attaching && event.type !== 'session.reclaimed') buffered.push(event); else applyEvent(event)})
@@ -257,15 +268,14 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
       } finally {operation = false; publish({pending: false})}
     }
     const toggle = async () => {
-      if (disposed || operation || state.loading || state.uncertain || !state.control?.goal) return
+      if (disposed || operation || state.loading || state.uncertain || !state.control?.goal || state.running && (state.control.goal.pause_requested || state.control.goal.status === 'paused')) return
       operation = true; publish({pending: true, error: null})
       try {
-        const paused = state.control.goal.status === 'paused'
+        const paused = state.control.goal.status === 'paused' || state.control.goal.pause_requested === true
         await ensureRuntime()
-        const result = await gateway.request<{control: Control; dispatch?: {type?: string; message?: string; display?: string}}>('session.control', {...nativeParams(), action: paused ? 'goal.resume' : 'goal.pause'})
+        const result = await gateway.request<{control: Control; dispatch?: {type?: string; message?: string; display?: string}}>('session.control', {...nativeParams(), action: paused ? 'goal.resume' : 'goal.pause_safe'})
         publish({control: result.control})
-        if (!paused) await gateway.request('session.interrupt', nativeParams())
-        else if (result.dispatch?.type === 'send' && result.dispatch.message?.trim()) {
+        if (paused && result.dispatch?.type === 'send' && result.dispatch.message?.trim()) {
           // The control returns the native continuation; the TUI submits this same dispatch.
           // A lost acknowledgement must never cause a second submit.
           publish({uncertain: true})
@@ -305,7 +315,10 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
   const pendingApproval = visible.requests.find(request => request.method === 'approval') ?? null
   const onApproval = useCallback((choice: string) => owner.current?.approval(choice) ?? Promise.resolve(), [])
   const connected = visible.connected && visible.verified
-  const connectionText = visible.control?.goal?.status === 'paused' ? '조사가 일시 중지되어 있어요. 재개하면 같은 대화를 이어갑니다.'
+  const pausing = visible.running && (visible.control?.goal?.pause_requested === true || visible.control?.goal?.status === 'paused' && visible.control.goal.paused_reason === 'user-safe-paused')
+  const paused = visible.control?.goal?.status === 'paused' || visible.control?.goal?.pause_requested === true && !visible.running
+  const connectionText = pausing ? '현재 응답과 도구 작업을 마친 뒤 안전하게 일시정지합니다.'
+    : paused ? '조사가 일시 중지되어 있어요. 재개하면 같은 대화를 이어갑니다.'
     : visible.reconnecting ? '저장된 대화를 표시하고 있어요. 현재 연결을 다시 확인하고 있어요.'
     : visible.loading ? '저장된 대화와 현재 연결을 확인하고 있어요.'
     : !connected ? '저장된 대화를 표시하고 있어요. 현재 조사 실행 상태는 확인되지 않았습니다.'
@@ -315,10 +328,10 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
   if (visible.submissionNotice) displayed.push({id: 'native:submission-status', role: 'assistant', speaker: 'system', kind: 'notice', text: visible.submissionNotice})
   if (visible.reviewError || visible.reviewOmitted) displayed.push({id: 'review:coverage', role: 'assistant', speaker: 'system', kind: 'notice', text: visible.reviewError ?? `검토 이력 표시 범위: 영수증 ${visible.reviewOmitted}건은 표시되지 않았거나 확인하지 못했습니다.`})
   return {rows: displayed, reviewActivity, reviewCaseId: visible.reviewCaseId, running: connected && visible.running, connected, connectionText, reconnecting: visible.reconnecting, loading: visible.loading,
-    contextUsage: visible.contextUsage, statusText, error: visible.error, inputDisabled: !active || !sessionId.trim() || !profile.trim() || !visible.storedId || visible.loading || visible.pending || visible.uncertain || visible.requests.length > 0 || visible.control?.goal?.status === 'paused',
+    contextUsage: visible.contextUsage, recentAvgTps: connected ? visible.recentAvgTps : null, statusText, error: visible.error, inputDisabled: !active || !sessionId.trim() || !profile.trim() || !visible.storedId || visible.loading || visible.pending || visible.uncertain || visible.requests.length > 0 || paused || pausing,
     hasMore: visible.hasMore, onLoadEarlier: useCallback(() => {void owner.current?.earlier().catch(() => {})}, []),
     send: useCallback((text: string) => owner.current?.send(text) ?? Promise.resolve(false), []), pendingRequests: visible.requests, pendingApproval, onApproval,
     reconnect: useCallback(() => {void owner.current?.refresh().catch(() => {})}, []), runtimeId: visible.runtimeId, storedId: visible.storedId,
-    control: {paused: visible.control?.goal?.status === 'paused', pending: visible.pending, disabled: !active || visible.loading || visible.uncertain || !visible.control?.goal,
+    control: {paused, pausing, pending: visible.pending, disabled: !active || visible.loading || visible.uncertain || !visible.control?.goal || pausing || paused && visible.running,
       onToggle: useCallback(() => {void owner.current?.toggle()}, [])}}
 }

@@ -1,6 +1,6 @@
 /** Forsic shell. ChatPage presents the native session through the shared RPC client. */
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
-import { Link, Navigate, Route, Routes, useLocation } from "react-router";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { Menu, Settings2, X } from "lucide-react";
 import { ForsicSetupGate } from "@/components/ForsicSetup";
 import { ForsicEvidenceLocation } from "@/components/ForsicEvidenceLocation";
@@ -58,16 +58,29 @@ function EntryScreen({mode = "start"}: {mode?: "start" | "new"}) {
   return <ForsicEntry mode={mode} />;
 }
 
-function WorkspaceShell() {
+function WorkspaceShell({ loading }: { loading: boolean }) {
   const { pathname, search } = useLocation();
+  const navigate = useNavigate();
   const tenant = useTenant();
   const params = new URLSearchParams(search);
   const resume = params.get("resume") || "";
   const caseId = params.get("case") || "";
-  const managementRoute = pathname.replace(/\/$/, "") === "/management";
+  const managementRoute = ["/management", "/settings"].includes(pathname.replace(/\/$/, ""));
   const managementQuery = new URLSearchParams({profile: tenant!.profile_name,tenant_id: tenant!.tenant_id});
   if (caseId) managementQuery.set("case", caseId);
   if (resume) managementQuery.set("resume", resume);
+  useEffect(() => {
+    const open = () => {
+      const query = new URLSearchParams(search);
+      query.set('tenant_id', tenant!.tenant_id);
+      query.set('profile', tenant!.profile_name);
+      query.set('section', 'models');
+      query.delete('view'); query.delete('panel');
+      void navigate(`/settings?${query}`);
+    };
+    window.addEventListener('forsic:open-connection-settings', open);
+    return () => window.removeEventListener('forsic:open-connection-settings', open);
+  }, [search, tenant, navigate]);
   const chatRoute = pathname.replace(/\/$/, "") === "/chat";
   const needsIntake = chatRoute && (!resume || params.get("fresh") === "1");
   const isChat = chatRoute && !needsIntake;
@@ -93,7 +106,6 @@ function WorkspaceShell() {
   const navigation = useForsicPaneWidth({storageKey: "forsic.navigation-width", defaultWidth: 432, min: 240, max: Math.min(640, (shellWidth || window.innerWidth) - 676), storedMin: 240, storedMax: 640});
   const menuButton = useRef<HTMLButtonElement>(null);
   const content = useRef<HTMLElement>(null);
-  const { loading } = usePlugins();
   const status = useSidebarStatus();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [chatNavigation, setChatNavigation] = useState<HTMLDivElement | null>(null);
@@ -147,7 +159,7 @@ function WorkspaceShell() {
         <div className="forsic-navigation-scroll">
           <PluginSlot name="sidebar" fallback={<NavigationFallback loading={loading} />} />
         </div>
-        <Link className="forsic-management-link" aria-current={managementRoute ? "page" : undefined} to={`/management?${managementQuery}`}><Settings2 size={17} aria-hidden="true"/><span>관리 설정</span></Link>
+        <Link className="forsic-management-link" aria-current={managementRoute ? "page" : undefined} to={`/settings?${managementQuery}`}><Settings2 size={17} aria-hidden="true"/><span>설정</span></Link>
         <Link className="forsic-management-link" to={`/memory?${new URLSearchParams({tenant_id:tenant!.tenant_id,profile:tenant!.profile_name})}`}>운영기억</Link>
         <AuthWidget />
       </aside>
@@ -155,14 +167,15 @@ function WorkspaceShell() {
       <section ref={content} className="forsic-app-content">
         <MemoryPressureBanner status={status} />
         <ForsicMemoryReceipts/>
-        <PageHeaderProvider pluginTabs={[{ path: "/forsic", label: workspaceTitle }, {path:"/management",label:"관리 설정"}]}>
+        <PageHeaderProvider pluginTabs={[{ path: "/forsic", label: workspaceTitle }, {path:"/settings",label:"설정"}]}>
           {!isChat && !managementRoute && pathname!=="/memory" && <ForsicEvidenceLocation />}
           <ProfileKeyedRoutes>
             <Suspense fallback={<Loading />}>
               <Routes>
                 <Route path="/" element={<EntryScreen />} />
                 <Route path="/chat" element={needsIntake ? <EntryScreen mode={resume ? "new" : "start"} /> : null} />
-                <Route path="/management" element={<ForsicManagementPage />} />
+                <Route path="/settings" element={<ForsicManagementPage />} />
+                <Route path="/management" element={<Navigate to={`/settings?${new URLSearchParams({...Object.fromEntries(params),section:params.get('section')||'environments'})}`} replace />} />
                 <Route path="/memory" element={<ForsicMemoryPage />} />
                 <Route path="/sessions" element={<Navigate key={search} to="/forsic?view=history" replace />} />
                 <Route path="/forsic" element={entryView ? <EntryScreen /> : params.get("view") === "new" ? <ForsicEntry mode="new" /> : loading ? <Loading /> : <PluginPage name="forsic" />} />
@@ -189,6 +202,12 @@ function WorkspaceShell() {
   );
 }
 
+function TenantWorkspace() {
+  // Load presentation assets once, including the idle mascot before tenant selection.
+  const { loading } = usePlugins();
+  return <ForsicTenantGate><WorkspaceShell loading={loading} /></ForsicTenantGate>;
+}
+
 export default function App() {
-  return <ForsicSetupGate><ForsicTenantGate><WorkspaceShell /></ForsicTenantGate></ForsicSetupGate>;
+  return <ForsicSetupGate><TenantWorkspace /></ForsicSetupGate>;
 }

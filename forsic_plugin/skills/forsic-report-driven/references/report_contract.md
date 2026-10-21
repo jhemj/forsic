@@ -48,6 +48,55 @@ program's exact references through basis_keys. An older evidence version remains
 silently substituted with the current record. Canonical technical tables appear once with linked references
 from repeated appendix sections; their important limits and quotations remain available.
 
+## IOC list and GTI cross-check appendix
+
+The final integrated report must include selected IOCs and their GTI cross-check results in its own appendix.
+Use the existing organize-indicators and threat-intelligence procedures; no new IOC ledger, report action or
+GTI submission is needed. Complete one existing-report lookup or reuse a retained exact-indicator result for
+every supported, authorized selected IOC before final rendering, within native budgets and any manual stop.
+Preserve incomplete rows with their reasons and remaining verification when checks cannot complete. Do not
+block all reporting on GTI availability or label an incomplete cross-check complete.
+
+For each IOC preserve:
+- Exact original observed value, type and canonical value when different; deduplicated identity must retain
+  all relevant local discovery sources, original path/coordinates and actual evidence links.
+- Case relevance/current interpretation separately from external reputation, with uncertainty and withdrawn
+  status preserved. Reputation is neither an automatic blocklist nor proof of execution, communication or attribution.
+- Exact GTI query value/type, returned lookup_at (with explicit timezone when formatted), retrieval/reuse status,
+  outcome and delivery/http_status when available, plus the retained GTI evidence reference. Reused lookup_at
+  remains the original query time; last_analysis_date is provider analysis time, not retrieval or case-event time.
+- Only returned detection counts (malicious/suspicious/harmless/undetected) and relevant classification or
+  gti_assessment; missing fields stay unknown. State stale results, mismatches and other important limits.
+- An explicit non-query or failure reason for unsupported, not-permitted, disabled/not-configured, quota,
+  authentication/permission, connection/timeout, malformed or otherwise unavailable checks. A verified 404
+  not_found means queried with no report; it is distinct from no query or failed/unknown delivery. None of
+  these states, nor zero detections, establishes benignness. Do not invent a lookup timestamp when absent.
+
+The current appendix reads `forsic_indicators` summary, limitations and source_refs. Save each GTI result or
+non-query reason there through upsert using the current revision; keep source_refs tied to actual retained
+scalar values and byte spans. A returned GTI /indicator scalar can add an external_reference source for that
+same IOC, but an error or disabled result without that scalar cannot: preserve its actual returned error/status, evidence_id or execution receipt in summary/limitations as
+lookup-coverage text, retaining the IOC's existing local observation provenance. Failed/error tool results
+may be refused by source/citation validation, so do not adopt them as successful case evidence or invent C1/C2
+citations. Preserve their verification gap in the owning question's limits without citing a rejected result;
+an ID written in text does not promise an automatic clickable link.
+These are ordinary text fields, not new schema keys or automatic enrichment columns. Preserve original
+observed spellings in summary when the renderer's canonical value alone would omit them.
+
+Report selection includes only indicators with a source_ref selected by the reported questions. Select the
+relevant local observation in the owning question through actual returned citations; select retained GTI results
+for any reputation claims. After those saves, refresh compose and render, then verify each selected row's
+summary, limitations and source/evidence links in the same snapshot's IOC appendix. No raw_response or
+GTI-only field is automatically appended merely because a tool was called. If a row/reference is absent,
+correct selection/saved content and regenerate; do not claim inclusion based on export(json/csv) alone.
+When no IOCs were identified, state the selected examined scope and limits in the report's authored limits
+section; an empty local register does not prove absence across unexamined evidence.
+
+Only existing MD5/SHA1/SHA256 file reports and separately permitted public IP/domain reports are supported.
+The reporting requirement leaves public-network opt-in unchanged. Keep private/sensitive indicators, paths,
+accounts, credentials, URLs, original logs and binaries local; do not upload files, scan/rescan URLs, request
+reanalysis or change connection settings. Publish the remaining verification reason in the report instead.
+
 Word generation is an explicit local derived export. Its inputs are private, hash-bound render data in the
 immutable HTML bundle, not downloadable evidence or copied executable code. A separate verified cache
 records the input identity and renderer contract. Creating or reusing Word does not modify the bundle ID,

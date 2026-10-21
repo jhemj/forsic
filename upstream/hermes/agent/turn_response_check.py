@@ -129,7 +129,21 @@ def check_api_response(
         logging.debug(f"API Response received - Model: {resp_model}, Usage: {response.usage if hasattr(response, 'usage') else 'N/A'}")
 
     response_invalid, error_details = validate_response_shape(agent, response)
+    from agent.goal_pause import goal_pause_requested
+    pause_pending = goal_pause_requested(agent)
     if response_invalid:
+        if pause_pending:
+            from agent.goal_pause import settle_requested_goal_pause
+            from agent.turn_recovery import describe_invalid_response
+            error_msg, _provider_name, failure_hint = describe_invalid_response(agent, response, api_duration)
+            summary = "Invalid provider response: " + agent._clean_error_message(error_msg) + " (" + failure_hint + ")"
+            settle_requested_goal_pause(agent, reason="provider response failed before safe pause")
+            agent._persist_session(messages, conversation_history)
+            return _verdict("return", stamp_failure({
+                "final_response": summary, "messages": messages, "api_calls": api_call_count,
+                "completed": False, "failed": True, "interrupted": False, "error": summary,
+                "turn_exit_reason": "invalid_response_during_safe_pause",
+            }, invalid_response_failure_reason(response), True))
         _iv = retry_invalid_response(
             agent, response=response, error_details=error_details, _retry=_retry,
             thinking_spinner=thinking_spinner, messages=messages, api_messages=api_messages,
@@ -153,7 +167,7 @@ def check_api_response(
     record_reply_finish(agent, response, finish_reason)
 
     # HTTP-200 refusals are deterministic: one fallback try, else return the refusal.
-    if finish_reason == "content_filter":
+    if finish_reason == "content_filter" and not pause_pending:
         _rv = handle_content_policy_refusal(
             agent, response, _retry, thinking_spinner=thinking_spinner, messages=messages,
             api_messages=api_messages, api_kwargs=api_kwargs,
@@ -170,7 +184,7 @@ def check_api_response(
         compression_attempts = 0
         return _verdict("break")
 
-    if finish_reason == "length":
+    if finish_reason == "length" and not pause_pending:
         _tv = recover_from_truncation(
             agent, response, finish_reason, _retry, messages=messages,
             conversation_history=conversation_history, api_kwargs=api_kwargs,

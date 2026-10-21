@@ -26,6 +26,7 @@ class EnvironmentTests(unittest.TestCase):
                       'os':'linux','architecture':'amd64','platform':'linux/amd64'}
         self.inspect = patch.object(self.manager,'_inspect',return_value=self.image).start()
         self.smoke = patch.object(self.manager,'_smoke',return_value={'analysis':{'ok':True},'parser':{'ok':True}}).start()
+        self.mount_smoke = patch.object(self.manager,'_mount_smoke',return_value={'analysis':{'ok':True},'parser':{'ok':True}}).start()
         self.runner=patch.object(self.manager,'_run',return_value=b'{"apt":{},"python":{},"rules":{}}')
         self.runner.start();self.addCleanup(self.runner.stop)
         self.host=patch.object(env,'_host_utilities',return_value={});self.host.start();self.addCleanup(self.host.stop)
@@ -137,6 +138,84 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(operation['retry_stage'],'verification')
         self.assertEqual(self.manager.catalog()['default_environment_id'],identity)
         self.assertEqual(len(self.manager.catalog()['environments']),1)
+
+    def test_failed_real_bind_check_does_not_publish_or_change_default(self):
+        identity=self.register();self.default(identity)
+        for failure in ('helper bind source unavailable', 'workspace write denied'):
+            self.mount_smoke.side_effect=ValueError(failure)
+            operation=self.manager.register(operation_id='bind-failure-'+str(len(failure)),background=False)
+            self.assertEqual(operation['state'],'failed',operation)
+            self.assertEqual(operation['retry_stage'],'mount_verification')
+            self.assertEqual(self.manager.catalog()['default_environment_id'],identity)
+            self.assertEqual([p.name for p in (self.manager.root/'environments').iterdir()],[identity])
+
+    def test_first_bind_failure_cannot_bootstrap_default_or_case_snapshot(self):
+        self.mount_smoke.side_effect=ValueError('helper bind source unavailable')
+        with self.assertRaisesRegex(ValueError,'Cannot preserve the installed runtime'):
+            self.manager.execution_snapshot(self.case)
+        self.assertIsNone(self.manager.catalog()['default_environment_id'])
+        self.assertEqual(self.manager.catalog()['environments'],[])
+        self.assertIsNone(self.manager.case_state(self.case)['current'])
+
+    def test_registration_checks_final_helper_paths_before_publication(self):
+        def check(images,operation,directory):
+            self.assertEqual(directory.parent.parent,self.manager.root/'environments')
+            self.assertFalse((directory.parent/'manifest.json').exists())
+            self.assertEqual(set(p.name for p in directory.iterdir()),set(env.HELPERS))
+            self.assertTrue(all(env._file_sha(directory/name)==env._file_sha(env.SOURCE/'forsic_plugin'/name)
+                                for name in env.HELPERS))
+            return {'analysis':{'synthetic':True},'parser':{'synthetic':True}}
+        self.mount_smoke.side_effect=check
+        identity=self.register()
+        operation=self.manager.operation('register')
+        self.assertEqual(operation['mount_checks']['analysis'],{'synthetic':True})
+        self.assertIn('future case workspace paths are not certified',operation['checks_scope'])
+        # Existing manifests have no new required field and keep their identity.
+        self.assertNotIn('mount_checks',self.manager.manifest(identity))
+
+    def test_cancel_after_bind_check_does_not_publish(self):
+        def cancel(images,operation,directory):
+            self.manager._change_operation(operation,cancel_requested=True)
+            return {}
+        self.mount_smoke.side_effect=cancel
+        operation=self.manager.register(operation_id='cancel-mounts',background=False)
+        self.assertEqual(operation['state'],'cancelled')
+        self.assertEqual(self.manager.catalog()['environments'],[])
+
+    def test_mount_check_uses_only_exact_helpers_and_disposable_owned_workspace(self):
+        patch.stopall()
+        helper_directory=self.root/'helpers';helper_directory.mkdir()
+        for name in env.HELPERS:(helper_directory/name).write_text('synthetic helper '+name)
+        self.manager.root.mkdir()
+        seen=[]
+        def run(operation,argv,**limits):
+            import csv
+            mounts=[next(csv.reader([argv[i+1]])) for i,value in enumerate(argv) if value=='--mount']
+            self.assertEqual(len(mounts),len(env.HELPERS)+1)
+            for name,fields in zip(env.HELPERS,mounts[:-1]):
+                self.assertEqual(fields,['type=bind','src='+str(helper_directory/name),
+                    'dst=/opt/forsic/'+name,'readonly'])
+            work=Path(mounts[-1][1].removeprefix('src='))
+            self.assertEqual(work.parent,self.manager.root)
+            self.assertEqual(mounts[-1][2],'dst=/work')
+            self.assertNotIn('readonly',mounts[-1])
+            self.assertTrue(work.is_dir())
+            self.assertEqual(argv[argv.index('--user')+1],f'{os.getuid()}:{os.getgid()}')
+            for flag in ('--pull=never','--network=none','--read-only','--cap-drop=ALL'):
+                self.assertIn(flag,argv)
+            self.assertEqual(limits,{'timeout':120,'output_limit':16384})
+            seen.append(work)
+            return json.dumps({'helper_sha256':json.loads(argv[-2]),
+                'helpers_readonly':True,'workspace_write_read':True}).encode()
+        with patch.object(self.manager,'_run',side_effect=run):
+            receipt=self.manager._mount_smoke({'analysis':self.image,'parser':self.image},'mounts',helper_directory)
+        self.assertEqual(set(receipt),{'analysis','parser'})
+        self.assertEqual(len(seen),2)
+        self.assertTrue(all(not path.exists() for path in seen))
+        with patch.object(self.manager,'_run',return_value=b'{"helpers_readonly":true}'):
+            with self.assertRaisesRegex(ValueError,'bind verification failed'):
+                self.manager._mount_smoke({'analysis':self.image},'bad-mounts',helper_directory)
+        self.assertEqual(list(self.manager.root.iterdir()),[])
 
     def test_registration_retry_preserves_resolved_ids_after_tag_changes(self):
         self.smoke.side_effect=ValueError('synthetic validation failure')
@@ -274,15 +353,61 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_management_commands_never_mount_evidence_or_enable_host_privileges(self):
         argv=env._management_run(self.image['image_id'],['python','-c','print(1)'])
+        self.assertIn('--rm',argv)
         self.assertIn('--network=none',argv)
         self.assertIn('--read-only',argv)
         self.assertNotIn('--mount',argv)
         self.assertNotIn('--privileged',argv)
         self.assertNotIn('/var/run/docker.sock',argv)
 
+    def test_fixture_retains_container_until_explicit_cleanup(self):
+        identity=self.register()
+        pack=self.root/'pack';pack.mkdir()
+        fixture=self.root/'fixture';fixture.mkdir()
+        returned={'stdout':b'passed\n','stderr':b'',
+            'execution':{'state':'returned','exit_code':0,'termination_confirmed':True}}
+        with patch('forsic_plugin.image_process.run_container',return_value=returned) as execute:
+            operation=env.run_fixture(identity,pack,['python','-c','print("passed")'],fixture,
+                {'contains':'passed'},operation_id='retained-fixture',manager=self.manager,background=False)
+        self.assertEqual(operation['state'],'succeeded',operation)
+        command=execute.call_args.args[0]
+        self.assertNotIn('--rm',command[:command.index(self.image['image_id'])])
+        self.assertTrue(execute.call_args.kwargs['cleanup_on_return'])
+        self.assertTrue(execute.call_args.kwargs['retained_container'])
+        self.assertEqual(command[command.index('--name')+1],execute.call_args.args[1])
+
 
 @unittest.skipUnless(os.environ.get('FORSIC_TEST_DOCKER_ENVIRONMENTS')=='1','Opt-in existing local image Docker integration')
 class DockerEnvironmentTests(unittest.TestCase):
+    def test_real_preserved_helper_and_workspace_binds_before_registration(self):
+        (env.SOURCE/'artifacts').mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='forsic-bind-docker-',dir=env.SOURCE/'artifacts') as temporary:
+            manager=env.EnvironmentManager(Path(temporary)/'management')
+            images={'analysis':os.environ.get('FORSIC_TEST_ANALYSIS_IMAGE','forsic-analysis:1'),
+                    'parser':os.environ.get('FORSIC_TEST_PARSER_IMAGE','forsic-dissect:3.25.1')}
+            operation=manager.register(images,operation_id='register-binds',background=False)
+            self.assertEqual(operation['state'],'succeeded',operation)
+            self.assertIsNone(manager.catalog()['default_environment_id'])
+            for role,receipt in operation['mount_checks'].items():
+                self.assertTrue(receipt['helpers_readonly'],role)
+                self.assertTrue(receipt['workspace_write_read'],role)
+                self.assertEqual(receipt['helper_sha256'],{name:entry['sha256']
+                    for name,entry in operation['result']['helpers'].items()})
+            self.assertFalse(list(manager.root.glob('.mount-check-*')))
+            from forsic_plugin.image_process import bind_mount
+            def unavailable(source,destination,readonly,**kwargs):
+                if Path(source).name=='image_reader.py':
+                    source=str(source)+'.synthetic-missing'
+                return bind_mount(source,destination,readonly,**kwargs)
+            with patch('forsic_plugin.image_process.bind_mount',side_effect=unavailable):
+                failed=manager.register(images,operation_id='unavailable-bind',background=False)
+            self.assertEqual(failed['state'],'failed',failed)
+            self.assertEqual(failed['retry_stage'],'mount_verification')
+            self.assertIsNone(manager.catalog()['default_environment_id'])
+            self.assertEqual([p.name for p in (manager.root/'environments').iterdir()],
+                [operation['result']['environment_id']])
+            self.assertFalse(list(manager.root.glob('.mount-check-*')))
+
     def test_real_prepare_pin_helper_rollback_fixture_and_offline_roundtrip(self):
         (env.SOURCE/'artifacts').mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='forsic-env-docker-',dir=env.SOURCE/'artifacts') as temporary:

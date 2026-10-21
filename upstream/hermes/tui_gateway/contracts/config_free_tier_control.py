@@ -542,6 +542,7 @@ class GoalSnapshot(Result):
     created_at: float | None = None
     updated_at: float | None = None
     paused_reason: str | None = None
+    pause_requested: bool = False
     last_verdict: str | None = None
     last_reason: str | None = None
     wait_barrier: WaitBarrierUntil | WaitBarrierTarget | None = Field(default=None, discriminator="type")
@@ -602,6 +603,7 @@ method("session.control.read", params=SessionControlReadParams, result=SessionCo
 
 class SessionControlAction(WireEnum):
     goal_pause = "goal.pause"
+    goal_pause_safe = "goal.pause_safe"
     goal_resume = "goal.resume"
     goal_clear = "goal.clear"
     goal_unwait = "goal.unwait"

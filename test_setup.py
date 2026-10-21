@@ -60,7 +60,7 @@ class SetupTests(SetupFixture, unittest.TestCase):
         network.assert_not_called()
         process.assert_not_called()
 
-    def test_fresh_marker_requires_setup_and_pending_does_not_apply_live(self):
+    def test_model_default_publishes_while_hosting_requires_launch(self):
         from hermes_cli.config import save_config
         cfg = self.cfg()
         s.settings(cfg)['setup_completed'] = False
@@ -71,7 +71,7 @@ class SetupTests(SetupFixture, unittest.TestCase):
         self.assertTrue(result['pending'])
         self.assertFalse(result['required'])
         self.assertFalse(result['completed'])
-        self.assertEqual(self.cfg()['model']['default'], 'old')
+        self.assertEqual(self.cfg()['model']['default'], 'new')
         self.assertNotIn('evidence_directory', s.settings(self.cfg()))
         network.assert_not_called()
         process.assert_not_called()
@@ -81,20 +81,21 @@ class SetupTests(SetupFixture, unittest.TestCase):
         self.assertTrue(s.settings(self.cfg())['setup_completed'])
         self.assertFalse(self.client.get('/api/plugins/forsic/setup').json()['pending'])
 
-    def test_secrets_not_returned_and_only_rotated_at_launch(self):
+    def test_secrets_publish_without_retiring_previously_bound_slots(self):
         from hermes_cli.config import save_env_value, load_env, get_env_path
         save_env_value(s.LLM_KEY, 'old-api-secret')
         result = self.save({**self.body, 'llm_api_key': 'new-api-secret'})
         self.assertNotIn('new-api-secret', json.dumps(result))
         self.assertNotIn('new-api-secret', (self.home/'config.yaml').read_text())
         self.assertEqual(load_env()[s.LLM_KEY], 'old-api-secret')
-        self.assertEqual(load_env()[s.LLM_PENDING_KEY], 'new-api-secret')
+        pending_slot = self.cfg()['model']['key_env']
+        self.assertEqual(load_env()[pending_slot], 'new-api-secret')
         self.assertEqual(get_env_path().stat().st_mode & 0o777, 0o600)
         connections.apply_pending_llm()
         s.apply_pending_setup()
-        self.assertEqual(load_env()[s.LLM_KEY], 'new-api-secret')
+        self.assertEqual(load_env()[self.cfg()['model']['key_env']], 'new-api-secret')
         self.assertNotIn(s.LLM_PENDING_KEY, load_env())
-        self.assertEqual(self.cfg()['model']['key_env'], s.LLM_KEY)
+        self.assertEqual(self.cfg()['model']['key_env'], pending_slot)
 
     def test_invalid_folder_or_host_is_rejected_before_any_secret_write(self):
         before = (self.home/'config.yaml').read_bytes()
@@ -210,6 +211,157 @@ class SetupTests(SetupFixture, unittest.TestCase):
                 self.assertFalse(result['reachable'])
                 self.assertEqual(len(seen), 1)
                 self.assertNotIn('provider-sensitive-secret', json.dumps(result))
+
+
+class OptionalLlmKeyTests(SetupFixture, unittest.TestCase):
+    def active_key(self):
+        from hermes_cli.config import save_config, save_env_value
+        cfg = self.cfg()
+        cfg['model']['key_env'] = s.LLM_KEY
+        cfg['auxiliary'] = {
+            'title': {'provider': 'custom', 'base_url': self.body['llm_base_url'], 'key_env': s.LLM_KEY},
+            'other': {'provider': 'custom', 'base_url': 'https://other.example/v1', 'key_env': 'OTHER_KEY'},
+        }
+        save_env_value(s.LLM_KEY, 'SYNTHETIC_ACTIVE_SECRET')
+        save_config(cfg)
+
+    def connection_save(self, **extra):
+        response = self.client.put('/api/plugins/forsic/connections', json={
+            'llm_base_url': self.body['llm_base_url'], 'llm_model': 'new', **extra})
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def launch(self):
+        s.validate_pending_setup()
+        connections.apply_pending_llm()
+        s.apply_pending_setup()
+
+    def test_both_forms_publish_once_and_omission_preserves_selected_key(self):
+        from hermes_cli.config import load_env
+        self.active_key()
+        with patch('socket.socket.connect', side_effect=AssertionError('offline settings test')):
+            result = self.connection_save(llm_api_key='  SYNTHETIC_NEXT_SECRET  ')
+            self.assertFalse(result['llm_pending'])
+            slot = self.cfg()['model']['key_env']
+            self.assertEqual(connections.model_credential(self.cfg()), 'SYNTHETIC_NEXT_SECRET')
+            self.connection_save()
+            self.save()
+            self.assertEqual(self.cfg()['model']['key_env'], slot)
+            self.launch()
+        cfg = self.cfg()
+        self.assertEqual(cfg['auxiliary']['title']['key_env'], slot)
+        self.assertEqual(cfg['auxiliary']['other']['key_env'], 'OTHER_KEY')
+        self.assertEqual(load_env()[s.LLM_KEY], 'SYNTHETIC_ACTIVE_SECRET')
+        self.assertNotIn('SYNTHETIC_', (self.home / 'config.yaml').read_text())
+        self.assertNotIn('SYNTHETIC_', json.dumps(result))
+
+    def test_explicit_blank_whitespace_and_clear_publish_keyless_retain_bound_slot(self):
+        from hermes_cli.config import load_env
+        for extra in ({'llm_api_key': ''}, {'llm_api_key': ' \t\n '}, {'clear_llm_key': True}):
+            with self.subTest(extra=extra):
+                self.active_key()
+                result = self.connection_save(**extra)
+                self.assertFalse(result['llm']['key_configured'])
+                self.assertFalse(result['llm_pending'])
+                self.assertEqual(load_env()[s.LLM_KEY], 'SYNTHETIC_ACTIVE_SECRET')
+                setup = self.client.get('/api/plugins/forsic/setup').json()
+                self.assertFalse(setup['llm_key_configured'])
+                self.launch()
+                self.assertEqual(self.cfg()['model']['api_key'], 'no-key-required')
+                self.assertNotIn('key_env', self.cfg()['model'])
+                self.assertEqual(self.cfg()['auxiliary']['title']['api_key'], 'no-key-required')
+                self.assertEqual(connections.model_credential(self.cfg()), 'no-key-required')
+                self.assertIn(s.LLM_KEY, load_env())
+        self.active_key()
+        self.save({**self.body, 'llm_api_key': ' \n '})
+        self.assertFalse(self.client.get('/api/plugins/forsic/setup').json()['llm_key_configured'])
+        self.launch()
+        self.assertEqual(self.cfg()['model']['api_key'], 'no-key-required')
+
+    def test_new_endpoint_requires_explicit_choice_for_active_and_pending_credentials(self):
+        self.active_key()
+        changed = {'llm_base_url': 'https://changed.example/v1', 'llm_model': 'new'}
+        for url, body in (('/api/plugins/forsic/connections', changed),
+                          ('/api/plugins/forsic/setup', {**self.body, **changed})):
+            self.assertEqual(self.client.put(url, json=body).status_code, 400)
+        self.connection_save(llm_api_key='SYNTHETIC_PENDING_SECRET')
+        for url, body in (('/api/plugins/forsic/connections', changed),
+                          ('/api/plugins/forsic/setup', {**self.body, **changed})):
+            self.assertEqual(self.client.put(url, json=body).status_code, 400)
+        self.connection_save(**changed, llm_api_key='')
+        self.launch()
+        self.assertEqual(self.cfg()['model']['base_url'], changed['llm_base_url'])
+        self.assertEqual(self.cfg()['model']['api_key'], 'no-key-required')
+
+    def test_failed_live_publication_keeps_config_and_bound_credentials(self):
+        from hermes_cli.config import load_env
+        self.active_key()
+        config_before = (self.home / 'config.yaml').read_bytes()
+        with patch('hermes_cli.config.save_config', side_effect=OSError('synthetic write failure')):
+            with self.assertRaises(OSError):
+                connections.save({'llm_base_url': self.body['llm_base_url'], 'llm_model': 'new',
+                                  'llm_api_key': 'SYNTHETIC_FAILED_SECRET'})
+        self.assertEqual((self.home / 'config.yaml').read_bytes(), config_before)
+        self.assertEqual(connections.model_credential(self.cfg()), 'SYNTHETIC_ACTIVE_SECRET')
+        self.connection_save(llm_api_key='SYNTHETIC_NEXT_SECRET')
+        self.assertEqual(connections.model_credential(self.cfg()), 'SYNTHETIC_NEXT_SECRET')
+        self.assertEqual(load_env()[s.LLM_KEY], 'SYNTHETIC_ACTIVE_SECRET')
+
+    def test_connection_key_choice_preserves_pending_hosting_and_password_through_launch(self):
+        from hermes_cli.config import load_env
+        self.save({**self.body, 'hosting_mode': 'private_lan', 'private_lan_host': '192.168.10.2',
+                   'llm_api_key': 'SYNTHETIC_STAGED_SECRET', 'login_password': 'synthetic-long-passphrase'})
+        self.connection_save(llm_api_key='')
+        pending = s.settings(self.cfg())['setup_pending'].copy()
+        self.assertTrue(pending['password_pending'])
+        s.validate_pending_setup()
+        connections.apply_pending_llm()
+        remaining = s.settings(self.cfg())['setup_pending']
+        self.assertEqual(remaining, {k: v for k, v in pending.items() if not k.startswith('llm_key_')})
+        s.apply_pending_setup()
+        cfg = self.cfg()
+        self.assertTrue(cfg['dashboard']['trusted_private_lan_no_login'])
+        self.assertEqual(cfg['dashboard']['private_lan_host'], '192.168.10.2')
+        self.assertIn('HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH', load_env())
+        self.assertNotIn('setup_pending', s.settings(cfg))
+
+    def test_malformed_secret_requests_do_not_echo_values_or_write(self):
+        self.active_key()
+        routes = [('/api/plugins/forsic/connections', {'llm_base_url': self.body['llm_base_url'], 'llm_model': 'new'}),
+                  ('/api/plugins/forsic/setup', self.body),
+                  ('/api/plugins/forsic/setup/check-model', {'llm_base_url': self.body['llm_base_url'], 'llm_model': 'new'})]
+        for url, body in routes:
+            for value in (None, ['SYNTHETIC_PRIVATE'], {'SYNTHETIC_PRIVATE': 'SYNTHETIC_PRIVATE'}, 'SYNTHETIC_PRIVATE\ninside'):
+                with self.subTest(url=url, value=value), patch('hermes_cli.config.save_config') as config_write, \
+                        patch('hermes_cli.config.save_env_value') as env_write:
+                    response = self.client.request('POST' if url.endswith('check-model') else 'PUT', url,
+                                                   json={**body, 'llm_api_key': value})
+                    self.assertIn(response.status_code, (400, 422), response.text)
+                    self.assertNotIn('SYNTHETIC_PRIVATE', response.text)
+                    config_write.assert_not_called()
+                    env_write.assert_not_called()
+
+    def test_catalog_check_omitted_resolves_only_matching_selected_key_and_blank_is_anonymous(self):
+        self.active_key()
+        seen = []
+        original = httpx.Client
+        def handler(request):
+            seen.append(request)
+            return httpx.Response(200, json={'data': [{'id': 'new'}]})
+        with patch.object(httpx, 'Client', side_effect=lambda **kw: original(transport=httpx.MockTransport(handler), **kw)):
+            body = {'llm_base_url': self.body['llm_base_url'], 'llm_model': 'new'}
+            for extra, expected in (({}, 'Bearer SYNTHETIC_ACTIVE_SECRET'), ({'llm_api_key': ''}, None),
+                                    ({'llm_api_key': ' \t '}, None),
+                                    ({'llm_base_url': 'https://unselected.example/v1'}, None)):
+                response = self.client.post('/api/plugins/forsic/setup/check-model', json={**body, **extra})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(seen[-1].headers.get('authorization'), expected)
+            self.connection_save(llm_model='old', llm_api_key='SYNTHETIC_STAGED_SECRET')
+            self.assertNotIn('llm_pending', connections.preferences(self.cfg()))
+            self.client.post('/api/plugins/forsic/setup/check-model', json=body)
+            self.assertEqual(seen[-1].headers.get('authorization'), 'Bearer SYNTHETIC_STAGED_SECRET')
+            self.client.post('/api/plugins/forsic/setup/check-model', json={**body, 'llm_api_key': ''})
+            self.assertNotIn('authorization', seen[-1].headers)
 
 
 if __name__ == '__main__':

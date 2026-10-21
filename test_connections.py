@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +14,11 @@ from forsic_plugin.report_driven.host import source_record
 
 class ConnectionTests(unittest.TestCase):
     def setUp(self):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        env = patch.dict(os.environ, {'HERMES_HOME': home.name})
+        env.start()
+        self.addCleanup(env.stop)
         self.cfg = {'model': {'provider':'custom','base_url':'http://localhost:11434/v1','default':'qwen'},
                     'plugins':{'entries':{'forsic':{'settings':{'synthetic_roots':['preserve']}}}},
                     'auxiliary': {'title':{'provider':'custom','base_url':'http://localhost:11434/v1','model':'qwen'},
@@ -28,12 +34,13 @@ class ConnectionTests(unittest.TestCase):
         self.assertFalse(value['jev']['enabled'])
         self.assertNotIn('secret',json.dumps(value))
 
-    def test_save_only_stages_llm_keeps_other_configuration_and_secret(self):
+    def test_save_publishes_default_keeps_other_configuration_and_secret(self):
         with patch.object(c,'config',return_value=self.cfg), patch.object(c,'key',return_value='secret'), \
              patch('hermes_cli.config.save_config') as save, patch('hermes_cli.config.save_env_value') as secret:
             value=c.save({**self.body,'llm_base_url':'https://model.example/v1','llm_model':'new','jev_base_url':'http://local:1234/v1'})
-        self.assertTrue(value['llm_pending'])
-        self.assertEqual(self.cfg['model']['default'],'qwen')
+        self.assertFalse(value['llm_pending'])
+        self.assertEqual(value['llm_apply_policy'], 'next_turn')
+        self.assertEqual(self.cfg['model']['default'],'new')
         self.assertEqual(self.cfg['agent']['max_turns'],20)
         self.assertEqual(self.cfg['plugins']['entries']['forsic']['settings']['synthetic_roots'],['preserve'])
         self.assertEqual(value['jev']['base_url'],'http://local:1234/v1')
@@ -64,18 +71,18 @@ class ConnectionTests(unittest.TestCase):
         self.assertNotIn('llm_pending', c.preferences(self.cfg))
         network.assert_not_called()
 
-    def test_context_default_is_staged_then_clears_both_overrides_on_launch(self):
+    def test_context_default_clears_both_saved_overrides_for_next_turn(self):
         self.cfg['model'].update(context_length=131072, ollama_num_ctx=131072)
         self.cfg['compression'] = {'threshold_tokens': 40000, 'threshold': 0.85}
         with patch.object(c, 'config', return_value=self.cfg), patch.object(c, 'key', return_value=''), \
              patch('hermes_cli.config.save_config'):
             result = c.save({**self.body, 'llm_context_length': None})
             self.assertIsNone(result['llm']['context_length'])
-            self.assertEqual(result['llm_current']['context_length'], 131072)
-            self.assertTrue(result['llm_pending'])
-            self.assertEqual(self.cfg['model']['context_length'], 131072)
+            self.assertIsNone(result['llm_saved_default']['context_length'])
+            self.assertFalse(result['llm_pending'])
+            self.assertNotIn('context_length', self.cfg['model'])
             c.save(self.body)  # Legacy/unrelated saves retain the staged reset.
-            self.assertIsNone(c.preferences(self.cfg)['llm_pending']['context_length'])
+            self.assertNotIn('llm_pending', c.preferences(self.cfg))
             c.apply_pending_llm()
         self.assertNotIn('context_length', self.cfg['model'])
         self.assertNotIn('ollama_num_ctx', self.cfg['model'])
@@ -92,7 +99,7 @@ class ConnectionTests(unittest.TestCase):
             saved.assert_not_called()
             result = c.save({**self.body, 'llm_context_length': MINIMUM_CONTEXT_LENGTH})
             self.assertEqual(result['llm']['context_length'], MINIMUM_CONTEXT_LENGTH)
-            self.assertEqual(self.cfg['model']['context_length'], 131072)
+            self.assertEqual(self.cfg['model']['context_length'], MINIMUM_CONTEXT_LENGTH)
             c.apply_pending_llm()
         self.assertEqual(self.cfg['model']['context_length'], MINIMUM_CONTEXT_LENGTH)
         self.assertEqual(self.cfg['model']['ollama_num_ctx'], MINIMUM_CONTEXT_LENGTH)
@@ -141,7 +148,7 @@ class ConnectionTests(unittest.TestCase):
             self.assertEqual(save.call_args.args[0]['gti_api_key'],'b'*64)
 
     def test_urls_no_embedded_secrets(self):
-        for url in ['file:///tmp/a','https://key@host/v1','https://host/v1?key=secret','http://a:bad/v1','https://a/#secret','http://a /v1']:
+        for url in ['file:///tmp/a','https://key@host/v1','https://host/v1?key=secret','http://a:bad/v1','https://a/#secret','http://a /v1','https://[PRIVATE_SECRET]/v1']:
             with self.subTest(url=url),self.assertRaises(ValueError):c.endpoint(url)
         self.assertEqual(c.endpoint('http://[::1]:11434/v1/'),'http://[::1]:11434/v1')
 

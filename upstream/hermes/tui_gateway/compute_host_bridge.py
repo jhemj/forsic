@@ -50,7 +50,7 @@ def _get_compute_host_supervisor(cfg: dict | None = None):
 def _compute_host_turn_frame(
     rid: str, sid: str, session: dict, text: Any, image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None, display_kind: str | None = None,
-    display_metadata: dict | None = None) -> dict:
+    display_metadata: dict | None = None, respect_goal_pause: bool = False) -> dict:
     with session["history_lock"]:
         history = list(session.get("history", []))
         history_version = int(session.get("history_version", 0))
@@ -77,6 +77,7 @@ def _compute_host_turn_frame(
         "source": _session_source(session), "attached_images": attached_images,
         "auth_user_id": _session_auth_user_id(session),
         "queued_prompt_generation": queued_prompt_generation,
+        "respect_goal_pause": respect_goal_pause,
         # #101416: vouch that this process already holds the registry lease for this session, so
         # the child adopts it as an inert token instead of re-claiming and being fenced out by
         # our own entry ("Session ... already has a live owner"). No lease held = no vouch, and
@@ -117,6 +118,9 @@ def _compute_host_adopt_frame_meta(session: dict, frame: dict) -> None:
             logger.warning("Compression session lease did not re-anchor: sid=%s old_session_id=%s new_session_id=%s",
                            frame.get("sid"), session.get("session_key"), new_key)
         session["session_key"] = new_key
+    if frame.get("queued_prompt_generation") is not None:
+        session["_queued_prompt_generation"] = max(int(session.get("_queued_prompt_generation", 0)),
+                                                   int(frame["queued_prompt_generation"]))
     if frame.get("history_version") is not None:
         with contextlib.suppress(Exception):
             session["history_version"] = max(int(session.get("history_version", 0)),
@@ -244,6 +248,10 @@ def _apply_compute_host_metadata_mirror(session: dict, frame: dict | None) -> No
 def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict) -> None:
     with session["history_lock"]:
         _compute_host_adopt_frame_meta(session, frame)
+        queued = session.pop("_compute_host_queued_prompt", None)
+        if queued is not None and frame.get("turn_admitted") is False:
+            advanced = session.get("queued_prompt")
+            _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])])
         session["running"] = False
         session["last_active"] = time.time()
         _clear_inflight_turn(session)
@@ -268,11 +276,12 @@ def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict) -
 def _submit_prompt_to_compute_host(
     rid: str, sid: str, session: dict, text: Any, image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None, display_kind: str | None = None,
-    display_metadata: dict | None = None) -> dict:
+    display_metadata: dict | None = None, respect_goal_pause: bool = False) -> dict:
     cfg = _load_dashboard_process_isolation_config()
     frame = _compute_host_turn_frame(rid, sid, session, text, image_paths=image_paths,
                                      queued_prompt_generation=queued_prompt_generation,
-                                     display_kind=display_kind, display_metadata=display_metadata)
+                                     display_kind=display_kind, display_metadata=display_metadata,
+                                     respect_goal_pause=respect_goal_pause)
     # Caller JSON-RPC ids may repeat across sockets and turns. Use an opaque
     # dispatch lifetime token, installed before a fast child can send activity.
     turn_id = frame["turn_id"] = frame["request_id"] = uuid.uuid4().hex

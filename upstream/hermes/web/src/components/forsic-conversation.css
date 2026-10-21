@@ -1,4 +1,5 @@
 .forsic-conversation {
+  container-type: inline-size;
   display: flex;
   flex: 1;
   min-width: 0;
@@ -88,7 +89,8 @@
   .forsic-conversation * {transition: none!important;}
 }
 
-.fc-compose-actions > .fc-compose-meta {align-items: flex-start; flex-direction: column; gap: 2px; min-width: 0;}
+.fc-compose-actions > .fc-compose-meta {align-items: center; flex-direction: row; gap: 6px; min-width: 0; max-width: 100%; overflow-x: auto; white-space: nowrap; scrollbar-width: thin;}
+.fc-compose-meta > .fc-context {flex-shrink: 0;}
 .fc-context {display: flex; align-items: center; gap: 6px; color: var(--forsic-muted); font-size: var(--forsic-font-meta, 12px); font-variant-numeric: tabular-nums; padding-left: 5px;}
 .fc-context svg {width: 20px; height: 20px; flex: none; fill: none; stroke-width: 2; transform: rotate(-90deg);}
 .fc-context circle:first-child {stroke: var(--forsic-border);}
@@ -146,3 +148,8 @@ button.fc-reply-quote:hover {background: var(--forsic-hover);}
 .fc-review-elapsed {font: inherit; color: var(--forsic-muted);}
 @keyframes fc-identity-enter {from {opacity: 0; transform: translateY(4px);} to {opacity: 1; transform: translateY(0);}}
 @media (prefers-reduced-motion: reduce) {.fc-pending-identity {animation: none;}}
+
+.fc-recent-speed {display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; color: var(--forsic-muted); font-size: var(--forsic-font-meta, 12px); font-variant-numeric: tabular-nums; white-space: nowrap;}
+.fc-recent-speed::before {content: '·';}
+.fc-recent-speed:focus-visible {outline: 1px solid var(--forsic-accent); outline-offset: 2px; border-radius: 3px;}
+@container (max-width: 480px) {.fc-compose-wrap {padding-inline: 12px;}}

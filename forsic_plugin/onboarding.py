@@ -109,27 +109,39 @@ def choices(value):
 
 
 def initial_triage(config, capabilities):
-    """Offer discovery at initial question admission, without selecting evidence.
+    """Carry comprehensive scan intent into initial native question admission.
 
     Wizard labels are user assertions, never inferred OS findings. This pure
     projection neither probes a runtime nor starts a scanner or persistent job.
     """
     selected = config.get('onboarding') or {}
-    if (not isinstance(selected, dict) or selected.get('purpose') != 'comprehensive'
-            or not capabilities.tool_enabled('forsic_shell')):
+    if not isinstance(selected, dict):
+        return None
+    comprehensive = (selected.get('purpose') == 'comprehensive' if selected else
+                     config.get('question') == PURPOSES['comprehensive'])
+    if not comprehensive:
         return None
     from .triage_policy import recommendations
     declared = selected.get('environment', 'unknown')
     target = declared if declared in ('windows', 'linux', 'macos') else 'unknown'
     recommendation = recommendations(target, 'quick')
-    value = {'role': 'optional_initial_plan', 'declared_environment': declared,
+    enabled = capabilities.tool_enabled('forsic_shell')
+    value = {'role': 'initial_scan_request', 'declared_environment': declared,
         'environment_basis': 'user_selection_not_observed',
-        'state': recommendation['state'], 'profiles': recommendation['profiles'],
-        'runtime_verified': False, 'execution_requested': False,
-        'lookup': {'tool': 'forsic_shell', 'arguments': {'action': 'capabilities'}},
-        'selection': 'Identify the evidence OS/format, then choose useful bounded profiles and explicit retained inputs. '
-            'No registered profile is not a clean result. Recheck candidates in source before adopting them; '
-            'choose further investigation by value, not scanner ranking alone.'}
+        'state': recommendation['state'] if enabled else 'tool_disabled',
+        'profiles': recommendation['profiles'] if enabled else [],
+        'runtime_verified': False, 'execution_requested': True,
+        'selection': 'Before a manual sweep, identify the actual OS/format and check capabilities, then run a useful '
+            'bounded initial scan on applicable complete retained inputs. Choose the profile and scope; this is not '
+            'an all-profile or all-file checklist. For an image, first export selected complete files, preserve the '
+            'returned export receipts and copy their retained target selectors into triage. Reuse an existing matching '
+            'completed scan. Recheck candidates in source before adopting them; no registered profile or zero hits '
+            'is not a clean result.',
+        'record': 'Use forsic_question to update the existing owned question with the actual scan scope/results or '
+            'the applicability, unsupported capability, missing input, failure or deferral reason and remaining scope. '
+            'Continue other useful authorized investigation; do not invent execution or a second scan ledger.'}
+    if enabled:
+        value['lookup'] = {'tool': 'forsic_shell', 'arguments': {'action': 'capabilities'}}
     if capabilities.skill_enabled('source-triage'):
         value['procedure'] = {'tool': 'forsic_skill', 'arguments': {'name': 'source-triage'}}
     return value

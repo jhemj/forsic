@@ -11,6 +11,9 @@ const ForsicOnboarding = lazy(() => import('./ForsicOnboarding'))
 interface Availability {
   allowed: boolean
   reason: string | null
+  active_count?: number | null
+  limit?: number
+  available_slots?: number | null
   active_case: {case_id: string; label: string; resume_session_id: string | null; resume_url?: string; status: string; goal_id?: string | null; closable?: boolean} | null
 }
 interface EntryState {status: 'loading' | 'ready' | 'error'; availability: Availability | null}
@@ -77,10 +80,11 @@ export default function ForsicEntry({mode = 'start'}: {mode?: 'start' | 'new'}) 
         <section className="fe-option"><span className="fe-icon"><FolderOpen size={24} /></span><h2>기존 조사</h2><p>사건 목록에서 진행하던 대화를 엽니다.</p><Link className="fe-secondary" to={link('/forsic?view=history')}>기존 조사<ArrowRight size={16} /></Link></section>
       </div>
       <div id="fe-availability" className="fe-availability" aria-live="polite"><div key={state.status} className="fe-state">
+        {state.status === 'ready' && typeof state.availability?.active_count === 'number' && typeof state.availability.limit === 'number' && <p>동시 조사 {state.availability.active_count} / {state.availability.limit} · 일시정지·대기 중인 조사 포함</p>}
         {conflict && <p role="alert">{conflict}</p>}
         {state.status === 'loading' && <p role="status">새 조사를 시작할 수 있는지 확인하고 있어요.</p>}
         {state.status === 'error' && <><p role="alert">조사 상태를 확인하지 못해 새 조사를 시작할 수 없습니다.</p><button type="button" onClick={() => refresh()}>조사 상태 다시 확인</button></>}
-        {state.status === 'ready' && !available && <><p>{state.availability?.reason || '진행 중인 조사가 있어 새 조사를 시작할 수 없습니다.'}</p>{current && <Link to={currentURL}>진행 중인 조사 열기{current.label ? ` · ${current.label}` : ''}<ArrowRight size={15} /></Link>}{current?.closable && current.goal_id && current.resume_session_id && <button type="button" onClick={() => void closeInvestigation()} disabled={closing}>{closing ? '종료 중…' : '종료'}</button>}<button type="button" disabled={closing} onClick={() => refresh()}>상태 다시 확인</button></>}
+        {state.status === 'ready' && (!available || current) && <>{!available && <p>{state.availability?.reason || '새 조사를 시작할 수 없습니다. 조사 상태를 다시 확인해 주세요.'}</p>}{current && <Link to={currentURL}>진행 중인 조사 열기{current.label ? ` · ${current.label}` : ''}<ArrowRight size={15} /></Link>}{current?.closable && current.goal_id && current.resume_session_id && <button type="button" onClick={() => void closeInvestigation()} disabled={closing}>{closing ? '종료 중…' : '종료'}</button>}<button type="button" disabled={closing} onClick={() => refresh()}>상태 다시 확인</button></>}
       </div></div>
     </section>
   </main>

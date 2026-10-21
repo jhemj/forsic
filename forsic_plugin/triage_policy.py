@@ -385,7 +385,8 @@ def invoke(case, submitted, session_id, native_execution=None):
                 from .environments import EnvironmentManager
                 with EnvironmentManager().execution(case,expected_snapshot=snapshot):
                     result = shell.run_container(command, container, native_execution,
-                        timeout_seconds=args['timeout_seconds'], max_output_bytes=65536, cleanup_on_return=True)
+                        timeout_seconds=args['timeout_seconds'], max_output_bytes=65536, cleanup_on_return=True,
+                        retained_container=True)
                 execution = _execution(result['execution'])
                 # Execution already happened. Any subsequent I/O/validation
                 # failure must retain that receipt, never claim not_started.

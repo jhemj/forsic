@@ -21,3 +21,9 @@ it('restores the default surface after the replacement plugin is removed', () =>
   expect(renderToStaticMarkup(<PluginSlot name="sidebar" fallback={<span>default navigation</span>} />))
     .toContain('default navigation');
 });
+
+it('passes page presentation state to a registered settings panel', () => {
+  registerSlot('test-brand', 'settings-connections', ({section}: {section?: string}) => <span>{section}</span>);
+  expect(renderToStaticMarkup(<PluginSlot name="settings-connections" componentProps={{section:'telegram'}} />)).toContain('telegram');
+  expect(renderToStaticMarkup(<PluginSlot name="settings-connections" componentProps={{section:'llm'}} />)).toContain('llm');
+});

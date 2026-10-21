@@ -271,7 +271,7 @@ class Case:
         if archive_selection is not None:
             parser_args['_archive_selection'] = archive_selection
         from .image_process import bind_mount
-        command = ['docker', 'run', '--pull=never', '--rm', '--name', container, '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+        command = ['docker', 'run', '--pull=never', '--name', container, '--network', 'none', '--read-only', '--cap-drop', 'ALL',
                    '--security-opt', 'no-new-privileges', '--user', f'{os.getuid()}:{os.getgid()}',
                    '--memory', '8g', '--pids-limit', '64',
                    '--mount', bind_mount(self.root, '/evidence', True),
@@ -281,7 +281,7 @@ class Case:
         from .image_process import run_parser
         from .environments import EnvironmentManager
         with EnvironmentManager().execution(self,expected_snapshot=snapshot):
-            data = run_parser(command, container, native_execution)
+            data = run_parser(command, container, native_execution, cleanup_on_return=True)
         data['execution_policy'] = {'environment': snapshot, 'image_id': snapshot['images']['parser']['image_id']}
         data.pop('_image_targets', None)
         if archive_action:
@@ -568,6 +568,9 @@ class Case:
             result = {"error": str(exc), "error_type": type(exc).__name__, "failure_stage": "admission" if admission_error else "execution", "next_step": "Explain the limitation; change the path/scope/tool if supported. Do not repeat the identical failed call."}
             from .report_driven.model_pages import RetainedSourceError
             if isinstance(exc,RetainedSourceError):
+                result.update(exc.details)
+            from .report_driven.grounded_judgment import CitationSelectionError
+            if isinstance(exc, CitationSelectionError):
                 result.update(exc.details)
             from .report_driven.report_reference import ReportReferenceError
             if isinstance(exc, ReportReferenceError):

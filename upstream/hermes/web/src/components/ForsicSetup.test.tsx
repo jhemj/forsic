@@ -42,12 +42,14 @@ it('navigates four steps, uses the existing confined picker, and saves only afte
   await click('설정 저장')
   const save=mocks.fetchJSON.mock.calls.find(call => call[1]?.method === 'PUT')!
   expect(save[0]).toBe('/api/plugins/forsic/setup')
-  expect(JSON.parse(save[1].body)).toMatchObject({evidence_directory:'/synthetic/evidence/folder',llm_api_key:'',clear_llm_key:false,login_password:'',llm_context_length:null})
+  expect(JSON.parse(save[1].body)).toMatchObject({evidence_directory:'/synthetic/evidence/folder',login_password:'',llm_context_length:null})
+  expect(JSON.parse(save[1].body)).not.toHaveProperty('llm_api_key')
   expect(onSaved).toHaveBeenCalledOnce()
 })
 
 it('retains unsaved inputs across back navigation, masks keys, and only checks model metadata on click',async () => {
   await render()
+  await click('API 키 변경')
   const secret=host.querySelector<HTMLInputElement>('input[type=password]')!
   expect(secret.value).toBe('')
   await input(secret,'synthetic-secret')
@@ -60,6 +62,30 @@ it('retains unsaved inputs across back navigation, masks keys, and only checks m
   await click('다음');await click('이전')
   expect(host.querySelectorAll<HTMLInputElement>('input')[1].value).toBe('synthetic-new-model')
   expect(host.querySelector<HTMLInputElement>('input[type=password]')?.value).toBe('synthetic-secret')
+})
+
+it('sends explicit keyless selection to catalog checks and setup save',async () => {
+  await render()
+  expect(host.querySelector('input[type=password]')).toBeNull()
+  await click('키 없이 사용')
+  expect(host.querySelector<HTMLInputElement>('input[type=password]')?.value).toBe('')
+  mocks.fetchJSON.mockResolvedValueOnce({reachable:true,model_found:true,detail:'ok'})
+  await click('모델 목록 확인')
+  expect(JSON.parse(mocks.fetchJSON.mock.calls[0][1].body).llm_api_key).toBe('')
+  await click('다음');await click('다음');await click('다음');await click('설정 저장')
+  const save=mocks.fetchJSON.mock.calls.find(call=>call[1]?.method==='PUT')!
+  expect(JSON.parse(save[1].body).llm_api_key).toBe('')
+})
+
+it('shows an empty optional key for a new server and preserves a saved key on catalog lookup',async () => {
+  await render()
+  mocks.fetchJSON.mockResolvedValueOnce({reachable:true,model_found:true,detail:'ok'})
+  await click('모델 목록 확인')
+  expect(JSON.parse(mocks.fetchJSON.mock.calls[0][1].body)).not.toHaveProperty('llm_api_key')
+  await click('API 키 변경')
+  await input(host.querySelector<HTMLInputElement>('input[type=password]')!,'unused-secret')
+  await click('기존 키 유지')
+  expect(host.querySelector('input[type=password]')).toBeNull()
 })
 
 it('requires online address and login and keeps edits after failed save for an explicit retry',async () => {
@@ -142,3 +168,11 @@ it('fetches a catalog on explicit request with URL only and selects an available
   expect(button('다음').disabled).toBe(false)
   expect(mocks.fetchJSON).toHaveBeenCalledTimes(1)
 })
+
+ it('embeds folder and hosting steps without a duplicate model editor and preserves latest saved model',async()=>{
+ const onSaved=vi.fn();await act(async()=>root.render(<MemoryRouter><ForsicSetup initial={{...initial,required:false,completed:true}} mode="hosting" onSaved={onSaved}/></MemoryRouter>));
+ expect(host.querySelector('#fs-title')?.textContent).toBe('자료 폴더');expect(host.querySelector('input[type=password]')).toBeNull();expect(host.querySelector('main')).toBeNull();expect(host.textContent).not.toContain('모델 연결');
+ await click('다음');await click('다음');expect(host.textContent).not.toContain('synthetic-model');
+ mocks.fetchJSON.mockResolvedValueOnce({...initial,values:{...initial.values!,llm_base_url:'https://synthetic.test/v1',llm_model:'new-saved-model',llm_context_length:131072}}).mockResolvedValueOnce({...initial,pending:true});
+ await click('설정 저장');const put=mocks.fetchJSON.mock.calls.find(call=>call[1]?.method==='PUT')!;const data=JSON.parse(put[1].body);expect(data).toMatchObject({llm_model:'new-saved-model',llm_base_url:'https://synthetic.test/v1',llm_context_length:131072,evidence_directory:'/synthetic/evidence'});expect(data).not.toHaveProperty('llm_api_key');expect(onSaved).toHaveBeenCalledOnce();
+ });

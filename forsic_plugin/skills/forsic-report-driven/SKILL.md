@@ -53,6 +53,21 @@ Once authorized checks with discriminating value are exhausted, preserve the rea
 and close with an unconfirmed answer if appropriate. Do not require 7/7 confirmation, a separate reviewer,
 or a new scheduler. Report generation or lookup does not clear a manual stop.
 
+## IOC appendix before final reporting
+
+Include the selected IOC list in the same report's appendix. Use organize-indicators for exact values, types,
+local sources/evidence links and deduplication, then threat-intelligence to cross-check every supported,
+authorized selected IOC against GTI existing reports. Preserve query time, actual result/status, evidence link
+and limitations per IOC, including not-found, failed, disabled, unsupported or not-permitted rows. No new
+external-transmission permission or operator setting change follows from this requirement. If checks cannot
+complete, disclose the reason and remaining verification; GTI success is not a prerequisite for an honest report.
+
+Before compose/render, read forsic_skill(name="forsic-report-driven", file_path="references/report_contract.md")
+for the existing summary/limitations/source_refs data path and selected-source inclusion rule. Verify the
+rendered IOC appendix and its links. A saved local IOC or successful render alone does not prove GTI coverage.
+If no IOCs were identified in the selected examined scope, state that bounded result and its limits rather than
+inventing rows or claiming the whole evidence population contains none.
+
 ## Generation and delivery
 
 During investigation, save meaningful changes with the optional `reader_explanation` of the existing

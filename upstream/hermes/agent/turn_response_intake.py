@@ -158,6 +158,12 @@ def normalize_model_response(
     if content and agent.tool_progress_callback:
         _relay_thinking(agent, content)
 
+    # Preserve the completed in-flight response/tool batch when a pause is pending;
+    # continuation guards must not discard it or enqueue more model work.
+    from agent.goal_pause import goal_pause_requested
+    if goal_pause_requested(agent):
+        return _verdict("fallthrough")
+
     # Incomplete <REASONING_SCRATCHPAD> (opened, never closed): the model ran out of
     # output tokens mid-reasoning — retry up to 2 times, then save as partial.
     if has_incomplete_scratchpad(content or ""):

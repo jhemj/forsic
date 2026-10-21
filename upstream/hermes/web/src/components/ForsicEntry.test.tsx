@@ -34,6 +34,24 @@ it('offers new and existing entry after a read-only availability check', async (
   expect(mocks.fetchJSON).toHaveBeenCalledExactlyOnceWith('/api/plugins/forsic/investigations')
 })
 
+it.each([1, 2])('shows capacity %i/2 and preserves explicit close while a slot remains', async count => {
+  mocks.fetchJSON.mockResolvedValue({new_investigation: {...paused.new_investigation, allowed: count < 2,
+    reason: count < 2 ? null : '동시 조사 한도에 도달했습니다.', active_count: count, limit: 2, available_slots: 2-count}})
+  await render()
+  expect(host.textContent).toContain(`동시 조사 ${count} / 2`)
+  expect(host.textContent).toContain('일시정지·대기 중인 조사 포함')
+  expect(button('종료')).toBeDefined()
+  expect(!!link('새 조사')).toBe(count < 2)
+  if (count === 2) expect(newButton()?.disabled).toBe(true)
+})
+
+it('does not display unknown capacity as zero', async () => {
+  mocks.fetchJSON.mockResolvedValue({new_investigation: {...blocked.new_investigation, active_count: null, limit: 2, available_slots: null}})
+  await render()
+  expect(host.textContent).not.toContain('동시 조사')
+  expect(newButton()?.disabled).toBe(true)
+})
+
 it('keeps new disabled while loading and when state fails, then supports retry', async () => {
   let reject!: (cause: Error) => void
   mocks.fetchJSON.mockReturnValue(new Promise((_, fail) => {reject = fail}))

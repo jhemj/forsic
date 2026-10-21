@@ -22,8 +22,8 @@ class SetupRoute(APIRoute):
                 return await handler(request)
             except RequestValidationError as exc:
                 # Pydantic's default response echoes invalid input values,
-                # including malformed secrets. Report locations without values.
-                return JSONResponse({'detail': [{'loc': error['loc'], 'msg': '입력값을 확인해주세요.', 'type': error['type']} for error in exc.errors()]}, status_code=422)
+                # including malformed secrets or caller-supplied extra field names.
+                return JSONResponse({'detail': [{'loc': error['loc'][:1], 'msg': '입력값을 확인해주세요.', 'type': error['type']} for error in exc.errors()]}, status_code=422)
         return private_validation
 
 
@@ -69,9 +69,10 @@ def setup_get(request: Request):
 def setup_save(body: SetupInput, request: Request):
     from forsic_plugin.setup import save
     require_setup_admin(request)
-    values = body.model_dump()
+    values = body.model_dump(exclude_unset=True)
     for field in ('llm_api_key', 'login_password'):
-        values[field] = getattr(body, field).get_secret_value()
+        if field in values:
+            values[field] = getattr(body, field).get_secret_value()
     try:
         return save(values, request)
     except ValueError as exc:
@@ -82,8 +83,9 @@ def setup_save(body: SetupInput, request: Request):
 def setup_check_model(body: ModelCheckInput, request: Request):
     from forsic_plugin.setup import check_model
     require_setup_admin(request)
-    values = body.model_dump()
-    values['llm_api_key'] = body.llm_api_key.get_secret_value()
+    values = body.model_dump(exclude_unset=True)
+    if 'llm_api_key' in values:
+        values['llm_api_key'] = body.llm_api_key.get_secret_value()
     try:
         return check_model(values)
     except ValueError as exc:
@@ -123,9 +125,16 @@ def capabilities_save(body: CapabilitiesInput, request: Request):
 
 
 class ConnectionInput(BaseModel):
+    llm_api_key: SecretStr = SecretStr('')
+    clear_llm_key: StrictBool = False
     llm_base_url: str = Field(max_length=2048)
     llm_model: str = Field(max_length=200)
     llm_context_length: int | None = Field(default=None, strict=True, ge=64000, le=2147483647)
+    ren_llm_enabled: StrictBool | None = None
+    ren_llm_base_url: str | None = Field(default=None, max_length=2048)
+    ren_llm_model: str | None = Field(default=None, max_length=200)
+    ren_llm_api_key: SecretStr = SecretStr('')
+    clear_ren_llm_key: StrictBool = False
     jev_base_url: str = Field(default='', max_length=2048)
     gti_enabled: bool = False
     gti_public_network: bool = False
@@ -138,22 +147,50 @@ class ConnectionInput(BaseModel):
     telegram_group: str | None = Field(default=None, max_length=256)
 
 
-@router.get('/connections')
+connection_router = APIRouter(route_class=SetupRoute)
+
+
+@connection_router.get('/connections')
 def connections_get():
     from forsic_plugin.connections import public
     return public()
 
 
-@router.put('/connections')
+@connection_router.put('/connections')
 def connections_save(body: ConnectionInput):
     from forsic_plugin.connections import save
     values = body.model_dump(exclude_unset=True)
-    for field in ('gti_api_key','telegram_assistant_key','telegram_user_key'):
-        values[field] = getattr(body,field).get_secret_value()
+    for field in ('llm_api_key','gti_api_key','telegram_assistant_key','telegram_user_key','ren_llm_api_key'):
+        if field in values:
+            values[field] = getattr(body,field).get_secret_value()
     try:
         return save(values)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
+
+
+class ConnectionTestInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    connection: Literal['main', 'ren']
+    base_url: str = Field(max_length=2048)
+    model: str = Field(max_length=200)
+    api_key: SecretStr = SecretStr('')
+
+
+@connection_router.post('/connections/test')
+def connections_test(body: ConnectionTestInput, request: Request):
+    from forsic_plugin.connections import test_connection
+    require_setup_admin(request)
+    values = body.model_dump(exclude_unset=True)
+    if 'api_key' in values:
+        values['api_key'] = body.api_key.get_secret_value()
+    try:
+        return test_connection(values)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+router.include_router(connection_router)
 
 
 @router.post('/connections/gti-check')
@@ -284,10 +321,16 @@ class InvestigationInput(ConversationInput):
 
 def evidence_access(request=None):
     from forsic_plugin.onboarding import EvidenceAccess
-    settings = load_config().get('plugins', {}).get('entries', {}).get('forsic', {}).get('settings', {})
+    # Restricted transport policy belongs to the server, independently of the
+    # selected tenant's fresh profile and its optional evidence preferences.
+    settings = getattr(request.state, 'forsic_remote_evidence_settings', None) if request is not None else None
+    force_remote = settings is not None
+    if settings is None:
+        settings = load_config().get('plugins', {}).get('entries', {}).get('forsic', {}).get('settings', {})
+    if not isinstance(settings, dict):
+        raise ValueError('설정된 자료 위치를 확인해주세요.')
     peer = request.client.host if request is not None and request.client else ''
-    force_remote = False
-    if settings.get('online_hosting'):
+    if not force_remote and settings.get('online_hosting'):
         from forsic_plugin.setup import local_admin
         force_remote = not local_admin(request)
     return EvidenceAccess(settings, peer, force_remote=force_remote)
@@ -361,12 +404,9 @@ def evidence_connection(request: Request = None, path: str = Query(..., min_leng
 @router.get('/evidence-sources')
 def evidence_sources(request: Request = None):
     from forsic_plugin.onboarding import configured_sources
-    settings = load_config()['plugins']['entries']['forsic']['settings']
     try:
-        if not isinstance(settings, dict):
-            raise ValueError('설정된 자료 위치를 확인해주세요.')
-        result = configured_sources(settings.get('evidence_directory'))
         access = evidence_access(request)
+        result = configured_sources(access.path)
         if access.described:
             result.update(access.metadata())
             if access.restricted and not result['available']:

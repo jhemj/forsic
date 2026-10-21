@@ -63,6 +63,35 @@ def _raw_output(stdout, stderr, *, complete, limit):
             'truncated':not complete, 'limit_bytes':limit}
 
 
+def _container_start(container):
+    """Inspect a retained container, never infer startup from a command's stderr.
+
+    Docker and a program inside Docker can both return 125. Call before removal;
+    unavailable daemon state is not evidence that a command never started.
+    """
+    try:
+        result = subprocess.run(['docker', 'inspect', '--type', 'container',
+                                 '--format', '{{json .State}}', container],
+                                capture_output=True, timeout=CLEANUP_TIMEOUT_SECONDS, check=False)
+        if result.returncode:
+            error = result.stderr.decode(errors='replace').strip()
+            if error in ('Error: No such object: '+container, 'Error: No such container: '+container,
+                         'Error response from daemon: No such container: '+container):
+                return {'started':False, 'basis':'retained_container_absent'}
+            return {'started':None, 'basis':'container_state_unavailable'}
+        state = json.loads(result.stdout)
+        started_at = state.get('StartedAt')
+        if isinstance(started_at, str) and started_at and not started_at.startswith('0001-01-01T00:00:00'):
+            return {'started':True, 'basis':'container_started_at', 'started_at':started_at}
+        if (state.get('Status') in ('created', 'dead', 'exited') and state.get('Running') is False
+                and state.get('Pid') == 0 and isinstance(started_at, str)
+                and started_at.startswith('0001-01-01T00:00:00')):
+            return {'started':False, 'basis':'container_never_started', 'status':state['Status']}
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
+        pass
+    return {'started':None, 'basis':'container_state_unavailable'}
+
+
 class _BoundedCapture:
     """Drain both pipes without retaining more than the combined byte ceiling."""
     def __init__(self, process, limit):
@@ -93,7 +122,8 @@ class _BoundedCapture:
 
 
 def run_container(command, container, native_execution=None, *, timeout_seconds=None,
-                  max_output_bytes=None, cleanup_on_return=False, process_observer=None):
+                  max_output_bytes=None, cleanup_on_return=False, process_observer=None,
+                  retained_container=False):
     """One native foreground attempt; raw bytes never assert execution metadata.
 
     Parsers keep their historical communicate/JSON contract. Arbitrary commands use
@@ -169,6 +199,28 @@ def run_container(command, container, native_execution=None, *, timeout_seconds=
     finally:
         if capture:
             capture.close()
+    # Only callers explicitly retaining their uniquely named container (no --rm)
+    # may use absence to distinguish admission from exit. Cleanup alone is not
+    # proof of retention: auto-removed containers can also need forced cleanup.
+    if process.returncode == 125 and retained_container and list(command[:2]) == ['docker', 'run']:
+        startup = _container_start(container)
+        if startup['started'] is not True:
+            cleanup = _cleanup(container, process)
+            not_started = startup['started'] is False
+            confirmed = cleanup['confirmed'] or startup['basis'] == 'retained_container_absent'
+            state = ('not_started' if not_started else 'failed') if confirmed else 'completion_unknown'
+            raise ExecutionFailure(
+                'Container could not start; the requested command or parser did not run.' if not_started else
+                'Docker returned 125, but container startup could not be verified.',
+                error_code='container_start_failed' if not_started else 'container_start_unverified',
+                failure_stage='launch', backend_started=startup['started'],
+                stderr=stderr.decode(errors='replace')[-2000:],
+                **({} if parser else {'raw_output':_raw_output(stdout,stderr,complete=True,limit=max_output_bytes)}),
+                next_step=('Check Docker access to the recorded helper and workspace mounts. Changing the evidence query '
+                           'does not repair a container startup failure. No command was automatically retried.' if not_started else
+                           'Inspect the existing execution record and Docker state before any explicit retry.'),
+                execution={'state':state, 'backend':'docker', 'container':container, 'exit_code':125,
+                           'termination_confirmed':confirmed, 'startup':startup, 'cleanup':cleanup})
     if parser and process.returncode:
         cleanup = _cleanup(container, process)
         raise ExecutionFailure('Read-only image parser process failed.', error_code='parser_process_failed',
@@ -189,9 +241,15 @@ def run_container(command, container, native_execution=None, *, timeout_seconds=
     return {'stdout':stdout, 'stderr':stderr, 'execution':execution}
 
 
-def run_parser(command, container, native_execution=None):
-    result = run_container(command, container, native_execution)
+def run_parser(command, container, native_execution=None, *, cleanup_on_return=False):
+    result = run_container(command, container, native_execution, cleanup_on_return=cleanup_on_return,
+                           retained_container=cleanup_on_return)
     stdout, stderr, execution = result['stdout'], result['stderr'], result['execution']
+    if execution['state'] == 'completion_unknown':
+        raise ExecutionFailure('Parser returned, but container cleanup was not confirmed.',
+            error_code='parser_cleanup_unknown', failure_stage='cleanup', execution=execution,
+            raw_output={'base64':base64.b64encode(stdout).decode(), 'bytes':len(stdout)},
+            stderr=stderr.decode(errors='replace')[-2000:])
     try:
         data = json.loads(stdout)
         if not isinstance(data, dict):

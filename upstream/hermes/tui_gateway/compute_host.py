@@ -241,12 +241,18 @@ class ComputeHost:
             with session["history_lock"]:
                 queued_gen = frame.get("queued_prompt_generation")
                 current_gen = int(session.get("_queued_prompt_generation", 0))
-                if queued_gen is not None and current_gen != int(queued_gen):
-                    self._reply("turn.end", sid, request_id, interrupted=True, ended_ns=now_ns())
+                if queued_gen is not None and current_gen > int(queued_gen):
+                    self._reply("turn.end", sid, request_id, interrupted=True, ended_ns=now_ns(),
+                                turn_admitted=False, **_history_meta(session))
                     return
                 if session.get("running"):
                     self._reply("turn.error", sid, request_id, message="session busy")
                     return
+                if queued_gen is not None:
+                    # A parent-side pause/rotation can advance admission without
+                    # sending an interrupt to this worker. Newer claims supersede
+                    # this idle counter; older ones remain fenced above.
+                    session["_queued_prompt_generation"] = int(queued_gen)
                 session.update(running=True, _turn_cancel_requested=False, last_active=time.time())
                 server._start_inflight_turn(session, inflight)
                 turn_started_at = time.time()
@@ -258,10 +264,12 @@ class ComputeHost:
                 hermes_undo.on_user_message_appended(session["session_key"])
             with contextlib.suppress(Exception):
                 server._persist_branch_seed(session)
-            server._run_prompt_submit(
+            turn_admitted = server._run_prompt_submit(
                 request_id, sid, session, text, display_kind=frame.get("display_kind") or None,
                 display_metadata=(frame.get("display_metadata")
-                                  if isinstance(frame.get("display_metadata"), dict) else None))
+                                  if isinstance(frame.get("display_metadata"), dict) else None),
+                respect_goal_pause=frame.get("respect_goal_pause") is True,
+                queued_prompt_generation=int(queued_gen) if queued_gen is not None else None)
             run_thread = session.get("_run_thread")
             if run_thread is not None and hasattr(run_thread, "join"):
                 while run_thread.is_alive():
@@ -270,13 +278,13 @@ class ComputeHost:
                         self._emit_turn_activity(sid, session, frame["turn_id"], turn_started_at)
             with session["history_lock"]:
                 meta = _history_meta(session)
-                interrupted = bool(session.get("_turn_cancel_requested"))
+                interrupted = turn_admitted is False or bool(session.get("_turn_cancel_requested"))
             session_info = server._session_info(session.get("agent"), session)
             with self._progress_lock:
                 self._progress_counter += 1
             self._reply(
                 "turn.end", sid, request_id, **meta, interrupted=interrupted, ended_ns=now_ns(),
-                session_info=session_info, session_info_emitted=True)
+                session_info=session_info, session_info_emitted=True, turn_admitted=turn_admitted is not False)
         except Exception as exc:
             with contextlib.suppress(Exception):
                 from tui_gateway import server
@@ -514,6 +522,7 @@ def _history_meta(session: dict) -> dict[str, Any]:
     return {
         "session_key": str(session.get("session_key") or ""),
         "history_version": int(session.get("history_version", 0)),
+        "queued_prompt_generation": int(session.get("_queued_prompt_generation", 0)),
         "message_count": len(session.get("history") or [])}
 
 

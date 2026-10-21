@@ -21,6 +21,12 @@ sweeping when the question can be answered.
 
 ## Bounded initial candidates
 
+For a comprehensive investigation, perform a useful bounded initial scan before a manual sweep after checking
+actual OS/format, capabilities and inputs. Choose applicable scope and profiles; this is not an all-file or
+all-profile checklist. Reuse a matching completed scan. If not applicable, unsupported, missing input, failed or
+deferred, update the existing question's answer/gaps with the actual reason and unreviewed scope, then continue
+other useful work. Focused questions still choose checks by their value to the requested question.
+
 When selected files match the question, prefer a bounded triage pass over repeated
 manual parsing: `forsic_shell(action="triage", profile="windows_evtx", targets=...)`
 for complete EVTX exports, or `profile="linux_login_parser"` with
@@ -30,7 +36,13 @@ pointer) or `kind="workspace_export"` (the exact returned pointer to a complete 
 receipt), plus `source_handle` or exact `source_id`/`source_version`. Copy a returned
 `retained_export_target` or one `retained_export_targets` entry, including its exact export_line when present;
 it selects a receipt, and admission still
-checks conversation ownership, complete-file status and file hash. `format="text"`
+checks conversation ownership, complete-file status and file hash. For image inputs, export selected complete
+files with the shared reader and preserve its returned JSON receipt streams. Copy the returned selector's exact
+/stdout or /stderr pointer; do not discard both receipt streams or replace them with ls/cat output. A file in
+/work alone is not a retained scan input. If its retained receipt is unavailable, re-export only the selected
+bounded complete file to a NEW destination and preserve the returned receipt; retain the existing export.
+Use the returned selector, not a guessed workspace path.
+An admitted export remains a derived copy, not verified original lineage. `format="text"`
 and `encoding="auto"` are byte-preserving defaults, including EVTX/login binary
 inputs; they are not assertions that the file is text. Do not invent paths, target
 kinds, profile formats or source versions. Image containers and directories are
@@ -44,7 +56,7 @@ are covered as text structure; values remain opaque. Unsupported syntax or
 encoding, limits and deadlines remain explicit unchecked scope. Configured text
 does not establish effective configuration, enablement, execution or maliciousness.
 `capabilities` describes OS/purpose recommendations and limits;
-unknown OS has no default profile. Recommendations are optional, not a scan checklist. Run one profile at
+unknown OS has no default profile. Recommendations guide profile selection, not a scan checklist. Run one profile at
 a time. Linux records are parsed observations, not anomaly detections. Discover
 installed image/login helpers through the capability menu and their `--help`
 before writing a parser; use `python /opt/forsic/image_access.py export` for a

@@ -63,7 +63,7 @@ class ManagementAPITests(unittest.TestCase):
 
     def register(self, operation_id='register'):
         image = {'image_id':'sha256:'+'1'*64,'repo_digests':[], 'os':'linux','architecture':'amd64','platform':'linux/amd64'}
-        with patch.object(self.manager,'_inspect',return_value=image), patch.object(self.manager,'_smoke',return_value={'synthetic':True}), patch.object(self.manager,'_run',return_value=b'{"apt":{},"python":{},"binaries":{},"rules":{}}'):
+        with patch.object(self.manager,'_inspect',return_value=image), patch.object(self.manager,'_smoke',return_value={'synthetic':True}), patch.object(self.manager,'_mount_smoke',return_value={'synthetic':True}), patch.object(self.manager,'_run',return_value=b'{"apt":{},"python":{},"binaries":{},"rules":{}}'):
             record = self.manager.register(operation_id=operation_id,background=False)
         self.assertEqual(record['state'],'succeeded',record)
         return record['result']['environment_id']

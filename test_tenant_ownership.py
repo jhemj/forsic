@@ -269,6 +269,8 @@ def test_global_admission_does_not_expose_other_tenant_details(registry, tmp_pat
     with bind_scope(a):
         result = Investigations(a['profile_home'], a['intake_root']).create_conversation(
             str(uuid.uuid4()), path=str(evidence))
+        Investigations(a['profile_home'], a['intake_root']).create_conversation(
+            str(uuid.uuid4()), path=str(evidence))
     assert result['profile_name'] == a['profile_name']
     assert a['tenant_id'] in result['resume_url']
     with bind_scope(b):
@@ -277,3 +279,54 @@ def test_global_admission_does_not_expose_other_tenant_details(registry, tmp_pat
         assert other.new_investigation()['active_case'] is None
         with pytest.raises(InvestigationUnavailable):
             other.create_conversation(str(uuid.uuid4()), path=str(evidence))
+
+
+def test_global_two_slot_capacity_keeps_other_tenants_private_and_releases(registry, tmp_path):
+    from forsic_plugin.investigations import Investigations, InvestigationUnavailable
+    a, b = create(registry, 'Private A'), create(registry, 'Private B')
+    evidence = tmp_path / 'evidence' / 'fixture.log'
+    evidence.parent.mkdir();evidence.write_text('synthetic')
+    catalogs={scope['tenant_id']:Investigations(scope['profile_home'],scope['intake_root']) for scope in (a,b)}
+    with bind_scope(a):
+        first=catalogs[a['tenant_id']].create_conversation(uuid.uuid4(),path=str(evidence))
+    with bind_scope(b):
+        other=catalogs[b['tenant_id']]
+        available=other.new_investigation()
+        assert available['allowed'] and available['active_count']==1 and available['active_case'] is None
+        second=other.create_conversation(uuid.uuid4(),path=str(evidence))
+        full=other.new_investigation()
+        assert full['active_count']==2 and full['available_slots']==0 and not full['allowed']
+        assert first['case_id'] not in json.dumps(full) and first['session_id'] not in json.dumps(full)
+        assert full['active_case']['case_id']==second['case_id']
+        with pytest.raises(InvestigationUnavailable):other.create_conversation(uuid.uuid4(),path=str(evidence))
+    with sqlite3.connect(a['native_db']) as db:
+        db.execute('INSERT OR REPLACE INTO state_meta(key,value) VALUES (?,?)',
+                   ('goal:'+first['session_id'],json.dumps({'status':'cleared'})))
+    with bind_scope(b):
+        assert other.new_investigation()['available_slots']==1
+        third=other.create_conversation(uuid.uuid4(),path=str(evidence))
+        assert third['tenant_id']==b['tenant_id']
+
+
+def test_simultaneous_tenant_admission_shares_atomic_two_slot_limit(registry, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    from forsic_plugin.investigations import Investigations, InvestigationUnavailable
+    scopes=[create(registry, 'Tenant '+str(index)) for index in range(3)]
+    evidence=tmp_path/'evidence'/'fixture.log';evidence.parent.mkdir();evidence.write_text('synthetic')
+    start=threading.Barrier(3)
+    def admit(scope):
+        with bind_scope(scope):
+            catalog=Investigations(scope['profile_home'],scope['intake_root'])
+            start.wait(timeout=10)
+            try:return catalog.create_conversation(uuid.uuid4(),path=str(evidence))
+            except InvestigationUnavailable:return None
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results=list(pool.map(admit,scopes))
+    assert sum(item is not None for item in results)==2
+    for scope in scopes:
+        with bind_scope(scope):
+            catalog=Investigations(scope['profile_home'],scope['intake_root'])
+            availability=catalog.new_investigation()
+            assert availability['active_count']==2 and not availability['allowed']
+            assert len(catalog.list())==sum(item is not None and item['tenant_id']==scope['tenant_id'] for item in results)

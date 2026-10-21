@@ -14268,6 +14268,11 @@
             "default": null,
             "title": "Paused Reason"
           },
+          "pause_requested": {
+            "default": false,
+            "title": "Pause Requested",
+            "type": "boolean"
+          },
           "last_verdict": {
             "anyOf": [
               {

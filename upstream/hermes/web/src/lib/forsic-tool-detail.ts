@@ -51,8 +51,12 @@ export function toolDetail(call: InspectorToolCall) {
   const path = value(args.path || result.path), file = value(args.file_path || result.file_path)
   const member = value(object(result.member).name || args.member_path)
   const command = value(args.command || result.command)
-  const purpose = copy.publicReason && typeof args.reason === 'string' ? args.reason.trim() : ''
-  const label = call.name === 'forsic_image_files' ? IMAGE_ACTIONS[value(args.action)] || copy.label : copy.label
+  const requested = call.requestedTools?.map(tool => ({name: tool.name, args: parse(tool.arguments)}))
+  const publicPurpose = (name: string, input: Data) => forsicToolCopy(name, value(input.action)).publicReason && typeof input.reason === 'string' ? input.reason.trim() : ''
+  const purpose = requested ? requested.map(tool => publicPurpose(tool.name, tool.args)).filter(Boolean).join(' · ') : publicPurpose(call.name, args)
+  const labelFor = (name: string, input: Data) => name === 'forsic_image_files' ? IMAGE_ACTIONS[value(input.action)] || forsicToolCopy(name).label : forsicToolCopy(name, value(input.action)).label
+  const label = requested ? requested.map(tool => labelFor(tool.name, tool.args)).join(' · ') : labelFor(call.name, args)
+  if (requested) add('요청 도구', requested.map(tool => tool.name).join(' · '))
   add('목적', purpose)
   add(file ? '이미지' : '대상', path)
   add('파일', file)

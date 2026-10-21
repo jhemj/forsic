@@ -348,6 +348,12 @@ def begin_iteration(
             _turn_exit_reason=_turn_exit_reason,
         )
 
+    from agent.goal_pause import SAFE_PAUSE_REASON, settle_requested_goal_pause
+    if settle_requested_goal_pause(agent):
+        interrupted = True
+        _turn_exit_reason = SAFE_PAUSE_REASON
+        return _verdict("break")
+
     _redirect_text = agent._drain_pending_redirect()
     if _redirect_text:
         _apply_active_turn_redirect(agent, messages, _redirect_text)

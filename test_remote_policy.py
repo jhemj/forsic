@@ -155,6 +155,7 @@ class RemotePolicyTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.policy.rpc_allowed({'method':'command.dispatch','params':{'session_id':'runtime','name':'config'}}))
             self.assertFalse(self.policy.rpc_allowed({'method':'session.control','params':{'session_id':'runtime','action':'goal.clear'}}))
             self.assertTrue(self.policy.rpc_allowed({'method':'session.control','params':{'session_id':'runtime','action':'goal.pause'}}))
+            self.assertTrue(self.policy.rpc_allowed({'method':'session.control','params':{'session_id':'runtime','action':'goal.pause_safe'}}))
             self.assertTrue(self.policy.rpc_allowed({'method':'session.control','params':{'session_id':'runtime','action':'goal.resume'}}))
 
     def test_binding_manifest_cannot_escape_the_managed_case_directory(self):

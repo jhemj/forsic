@@ -39,9 +39,10 @@ class ExecutionContractTests(unittest.TestCase):
     def call(self,tool,args):return self.x.x.call(tool,args)
     def parser(self, process, cleanup=None, clock=None):
         patches=[patch('forsic_plugin.image_process.subprocess.Popen',return_value=process)]
-        if cleanup is not None:
-            patches.append(patch('forsic_plugin.image_process.subprocess.run',
-                                 **({'side_effect':cleanup} if isinstance(cleanup,BaseException) else {'return_value':cleanup})))
+        if cleanup is None:
+            cleanup = subprocess.CompletedProcess([],0,b'',b'')
+        patches.append(patch('forsic_plugin.image_process.subprocess.run',
+                             **({'side_effect':cleanup} if isinstance(cleanup,BaseException) else {'return_value':cleanup})))
         if clock is not None:patches.append(patch('forsic_plugin.image_process.time.monotonic',side_effect=clock))
         for p in patches:
             result=p.start();self.addCleanup(p.stop)
@@ -139,13 +140,13 @@ class ExecutionContractTests(unittest.TestCase):
         self.assertEqual(out['failure_stage'],'launch')
         self.assertEqual(out['execution']['state'],'not_started')
         self.assertNotIn('retry_call',out)
-        for line,process,code in ((2,Process(returncode=125),'parser_process_failed'),
+        for line,process,code in ((2,Process(returncode=125),'container_start_unverified'),
                                   (3,Process(error=OSError('synthetic pipe failure')),'parser_communication_failed')):
             with self.subTest(code=code):
                 self.parser(process,subprocess.CompletedProcess([],1,b'',b'synthetic cleanup uncertainty'))
                 out=self.call('forsic_image_read',{**self.args,'start_line':line})
                 self.assertEqual(out['error_code'],code)
-                self.assertEqual(out['failure_stage'],'execution')
+                self.assertEqual(out['failure_stage'],'launch' if code=='container_start_unverified' else 'execution')
                 self.assertEqual(out['execution']['state'],'completion_unknown')
                 self.assertFalse(out['execution']['termination_confirmed'])
                 self.assertNotIn('retry_call',out)

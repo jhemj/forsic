@@ -10,6 +10,10 @@ platforms: [linux]
 
 Check the current case questions, evidence index, and acquisition limits. Reuse intake and verification results;
 run ongoing integrity checks alongside other investigation work. Refer to source-triage when first locating evidence.
+For comprehensive analysis, check actual format/capabilities and run a useful bounded initial scan before manual
+sweeping. Preserve complete export receipts when image files need preparation; reuse matching completed scans.
+Record scan scope/results or an applicability, capability, input, failure or deferral reason in the existing
+question, then continue useful investigation. Choose relevant checks; no all-file or all-profile checklist.
 The initial user question can have a provisional in-progress answer before evidence supports a judgment.
 Reuse that owned question; update it at meaningful new findings without waiting for a final conclusion.
 Choose the areas relevant to the user's question among entry, execution, persistence, accounts, communications,

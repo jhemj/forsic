@@ -44,6 +44,7 @@ export function ForsicEnvironmentPlan({sources,environmentId,planText,onPlanChan
       {rows.some(item=>!item.selectable)&&<details><summary>동일 버전·추가 검토 항목 {rows.filter(item=>!item.selectable).length}개</summary><div className="forsic-candidate-secondary">{rows.filter(item=>!item.selectable).map(candidateCard)}</div></details>}
       <button disabled={disabled||!picked.length} onClick={applySelection}>선택한 후보 {picked.length}개를 변경 계획에 반영</button>
     </fieldset>
+    <details className="forsic-functional-check-editor"><summary>기능 검사 만들기 · 고급 설정 · 등록된 검사 {checks.length}개</summary>
     <fieldset><legend>작은 합성 입력의 기능 검사</legend><p className="forsic-management-caption">버전·도움말 확인만으로 기능 검사를 대신하지 않습니다. 검사 명령은 증거 없는 새 환경에서 실행됩니다.</p>
       <label>검사 이름<input aria-label="기능 검사 이름" value={checkName} disabled={disabled} onChange={event=>setCheckName(event.target.value)}/></label>
       <label>실행 파일<input aria-label="기능 검사 실행 파일" value={executable} disabled={disabled} onChange={event=>setExecutable(event.target.value)} placeholder="컨테이너 안의 실행 파일"/></label>
@@ -52,6 +53,7 @@ export function ForsicEnvironmentPlan({sources,environmentId,planText,onPlanChan
       <button disabled={disabled||!checkName.trim()||!executable.trim()||!expected} onClick={addCheck}>이 기능 검사를 계획에 추가</button>
       <p>{checks.length}개 검사 등록</p>{checks.map((check,index)=><div key={index}><pre>{JSON.stringify(check,null,2)}</pre><button disabled={disabled} onClick={()=>savePlan(plan=>({...plan,checks:checks.filter((_,position)=>position!==index)}))}>검사 {index+1} 제거</button></div>)}
     </fieldset>
+    </details>
     {error&&<p role="alert">{error}</p>}
     <details><summary>고급 편집 · 전체 변경 계획 JSON</summary><label>선택한 변경 계획<textarea aria-label="환경 변경 계획" value={planText} disabled={disabled} onChange={event=>onPlanChange(event.target.value)} placeholder={'{"apt":{},"python":[],"checks":[]}'}/></label></details>
     <details><summary>선택한 변경 요약</summary><pre>{JSON.stringify(changes,null,2)}</pre></details>

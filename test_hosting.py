@@ -97,12 +97,12 @@ class HostingTests(SetupFixture, unittest.TestCase):
                 self.assertEqual(response.status_code, 403, response.text)
         catalog.create_conversation.assert_not_called()
 
-    def test_expired_pending_folder_preflight_prevents_model_mutation(self):
+    def test_expired_pending_folder_preflight_prevents_hosting_after_default_save(self):
         self.save(self.online_body())
         self.evidence.rmdir()
         with self.assertRaises(ValueError):
             s.validate_pending_setup()
-        self.assertEqual(self.cfg()['model']['default'], 'old')
+        self.assertEqual(self.cfg()['model']['default'], 'new')
         self.assertFalse(self.cfg()['dashboard'].get('public_url'))
 
     def test_endpoint_changes_require_explicit_existing_key_disposition(self):
@@ -118,7 +118,7 @@ class HostingTests(SetupFixture, unittest.TestCase):
         self.save({**changed, 'clear_llm_key': True})
         self.apply()
         self.assertNotIn('key_env', self.cfg()['model'])
-        self.assertFalse(connections.key(s.LLM_KEY))
+        self.assertEqual(connections.key(s.LLM_KEY), 'active-api-secret')
 
     def test_setup_validation_never_echoes_malformed_credentials(self):
         for secret in ('llm_api_key', 'login_password'):
@@ -139,11 +139,11 @@ class HostingTests(SetupFixture, unittest.TestCase):
         changed = {**self.body, 'llm_base_url': 'https://second.example/v1'}
         response = self.client.put('/api/plugins/forsic/setup', json=changed)
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(connections.preferences(self.cfg())['llm_pending']['base_url'], first['llm_base_url'])
-        self.assertEqual(connections.key(s.LLM_PENDING_KEY), first['llm_api_key'])
+        self.assertEqual(self.cfg()['model']['base_url'], first['llm_base_url'])
+        self.assertEqual(connections.model_credential(self.cfg()), first['llm_api_key'])
         self.save({**changed, 'llm_api_key': 'second-endpoint-secret'})
         self.apply()
-        self.assertEqual(connections.key(s.LLM_KEY), 'second-endpoint-secret')
+        self.assertEqual(connections.model_credential(self.cfg()), 'second-endpoint-secret')
         self.assertEqual(self.cfg()['model']['base_url'], changed['llm_base_url'])
 
     def test_clear_removes_legacy_main_and_matching_auxiliary_key_references(self):
@@ -156,6 +156,8 @@ class HostingTests(SetupFixture, unittest.TestCase):
         self.save({**self.body, 'llm_base_url': 'https://second.example/v1', 'clear_llm_key': True})
         self.apply()
         model, title = self.cfg()['model'], self.cfg()['auxiliary']['title']
-        for key in ('key_env', 'api_key_env', 'api_key', 'api'):
+        self.assertEqual(model.get('api_key'), 'no-key-required')
+        self.assertEqual(title.get('api_key'), 'no-key-required')
+        for key in ('key_env', 'api_key_env', 'api'):
             self.assertNotIn(key, model)
             self.assertNotIn(key, title)

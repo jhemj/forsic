@@ -87,10 +87,9 @@ def public(request):
               'login_username': (cfg.get('dashboard', {}).get('basic_auth') or {}).get('username', '')}
     values.update({k: v for k, v in pending.items() if k in values})
     restart = bool(pending or connections.preferences(cfg).get('llm_pending'))
-    key_action = pending.get('llm_key_action')
     return {'local_admin': True, 'required': not completed and not bool(pending), 'completed': completed,
             'pending': restart, 'restart_required': restart, 'values': values, 'hosting_current': current,
-            'llm_key_configured': key_action == 'replace' or (key_action != 'clear' and connections.has_model_key(cfg)),
+            'llm_key_configured': connections.selected_key_configured(cfg),
             'login_configured': bool(pending.get('password_pending') or login_configured(cfg))}
 
 
@@ -129,18 +128,7 @@ def validate(body, cfg):
     context = llm['context_length']
     if context is not None and (type(context) is not int or not 64000 <= context <= 2147483647):
         raise ValueError('문맥 길이는 64,000 이상의 정수 또는 모델 기본값으로 지정해주세요.')
-    choice = dict(body)
-    prior = settings(cfg).get('setup_pending') or {}
-    prior_url = prior.get('llm_key_base_url') or (connections.preferences(cfg).get('llm_pending') or {}).get('base_url')
-    if (prior.get('llm_key_action') == 'replace' and prior_url != llm['base_url']
-            and not body.get('llm_api_key') and not body.get('clear_llm_key')):
-        raise ValueError('LLM 서버 주소를 바꾸려면 새 API 키를 입력하거나 기존 키 삭제를 선택해주세요.')
-    if llm['base_url'] == prior_url:
-        if prior.get('llm_key_action') == 'replace' and connections.key(LLM_PENDING_KEY):
-            choice['llm_api_key'] = connections.key(LLM_PENDING_KEY)
-        elif prior.get('llm_key_action') == 'clear':
-            choice['clear_llm_key'] = True
-    connections.require_endpoint_key_choice(cfg, llm['base_url'], choice)
+    connections.require_endpoint_key_choice(cfg, llm['base_url'], body)
     evidence = folder(body['evidence_directory'], cfg)
     label = body.get('evidence_directory_label', '').strip()
     username = body.get('login_username', '').strip()
@@ -176,10 +164,8 @@ def validate(body, cfg):
             raise ValueError('온라인 접속에 사용할 로그인 아이디와 비밀번호를 입력해주세요.')
     else:
         url = ''
-    key = body.get('llm_api_key', '')
+    connections._key_choice(body)
     password = body.get('login_password', '')
-    if not isinstance(key, str) or len(key) > 8192 or any(ord(c) < 32 or ord(c) > 126 for c in key) or key and body.get('clear_llm_key'):
-        raise ValueError('LLM API 키 형식을 확인해주세요. 교체와 삭제는 동시에 할 수 없어요.')
     if password and (len(password) < 12 or len(password) > 1024 or '\x00' in password):
         raise ValueError('로그인 비밀번호는 12자 이상으로 입력해주세요.')
     return llm, {'evidence_directory': evidence, 'evidence_directory_label': label, 'hosting_mode': mode,
@@ -192,28 +178,23 @@ def save(body, request):
         cfg = connections.config()
         llm, pending = validate(body, cfg)
         old = settings(cfg).get('setup_pending') or {}
-        for field in ('llm_key_action', 'llm_key_base_url', 'password_pending'):
+        old_pending_slot = old.get('llm_key_env')
+        for field in ('llm_key_action', 'llm_key_base_url', 'llm_key_env', 'password_pending'):
             if field in old:
                 pending[field] = old[field]
-        # Secrets have separate pending slots: editing settings never rotates a
-        # key used by a live turn or the native login provider.
-        if body.get('llm_api_key'):
-            save_env_value(LLM_PENDING_KEY, body['llm_api_key'])
-            pending['llm_key_action'] = 'replace'
-            pending['llm_key_base_url'] = llm['base_url']
-        elif body.get('clear_llm_key'):
-            pending['llm_key_action'] = 'clear'
-            pending.pop('llm_key_base_url', None)
         if body.get('login_password'):
             from plugins.dashboard_auth.basic import hash_password
             save_env_value(PASSWORD_PENDING, hash_password(body['login_password']))
             pending['password_pending'] = True
-        if body.get('llm_api_key') or body.get('login_password'):
+        if body.get('login_password'):
             get_env_path().chmod(0o600)
         settings(cfg)['setup_pending'] = pending
+        connections.stage_llm_key(cfg, llm['base_url'], body)
         prefs = settings(cfg).setdefault('connections', {})
         prefs['llm_pending'] = llm
+        connections._promote_pending_llm(cfg)
         save_config(cfg)
+        connections.retire_llm_key(cfg, old_pending_slot)
     return public(request)
 
 
@@ -223,13 +204,14 @@ def validate_pending_setup():
     if not pending:
         return
     llm = {**connections.model_connection(cfg.get('model', {})), **(connections.preferences(cfg).get('llm_pending') or {})}
-    validate({**pending, 'llm_base_url': llm['base_url'], 'llm_model': llm['model'],
-              'llm_context_length': llm['context_length'],
-              'clear_llm_key': pending.get('llm_key_action') == 'clear',
-              'llm_api_key': connections.key(LLM_PENDING_KEY) if pending.get('llm_key_action') == 'replace' else ''}, cfg)
+    if 'hosting_mode' in pending:
+        values = {**pending, 'llm_base_url': llm['base_url'], 'llm_model': llm['model'],
+                  'llm_context_length': llm['context_length']}
+        validate(values, cfg)
+    connections.require_endpoint_key_choice(cfg, llm['base_url'], {})
     if pending.get('llm_key_action') == 'replace' and pending.get('llm_key_base_url') != llm['base_url']:
         raise ValueError('대기 중인 LLM API 키와 서버 주소가 일치하지 않습니다.')
-    if pending.get('llm_key_action') == 'replace' and not connections.key(LLM_PENDING_KEY):
+    if pending.get('llm_key_action') == 'replace' and not connections.pending_llm_credential(cfg):
         raise ValueError('대기 중인 LLM API 키를 확인할 수 없습니다.')
     if pending.get('password_pending') and not connections.key(PASSWORD_PENDING):
         raise ValueError('대기 중인 로그인 비밀번호를 확인할 수 없습니다.')
@@ -244,38 +226,13 @@ def apply_pending_setup():
         pending = opts.get('setup_pending')
         if not pending:
             return
+        if pending.get('llm_key_action'):
+            raise ValueError('LLM 연결 설정을 먼저 적용해주세요.')
         # Recheck directories/IP/TLS after time has passed before exposing them.
         values = {**pending, 'llm_base_url': cfg.get('model', {}).get('base_url', ''),
                   'llm_model': cfg.get('model', {}).get('default', ''),
                   'llm_context_length': cfg.get('model', {}).get('context_length')}
         _, verified = validate(values, cfg)
-        action = pending.get('llm_key_action')
-        if action == 'replace':
-            if pending.get('llm_key_base_url') != cfg.get('model', {}).get('base_url'):
-                raise ValueError('대기 중인 LLM API 키와 서버 주소가 일치하지 않습니다.')
-            value = connections.key(LLM_PENDING_KEY)
-            if not value:
-                raise ValueError('대기 중인 LLM API 키를 확인할 수 없습니다.')
-            save_env_value(LLM_KEY, value)
-            cfg.setdefault('model', {})['key_env'] = LLM_KEY
-            cfg['model'].pop('api_key', None)
-            cfg['model'].pop('api', None)
-            cfg['model'].pop('api_key_env', None)
-        elif action == 'clear':
-            remove_env_value(LLM_KEY)
-            cfg.setdefault('model', {}).pop('key_env', None)
-            cfg['model'].pop('api_key', None)
-            cfg['model'].pop('api', None)
-            cfg['model'].pop('api_key_env', None)
-        if action in ('replace', 'clear'):
-            for role in cfg.get('auxiliary', {}).values():
-                if isinstance(role, dict) and role.get('provider') == 'custom' and role.get('base_url') == cfg.get('model', {}).get('base_url'):
-                    role.pop('api_key', None)
-                    role.pop('api_key_env', None)
-                    if action == 'replace':
-                        role['key_env'] = LLM_KEY
-                    else:
-                        role.pop('key_env', None)
         if pending.get('password_pending'):
             value = connections.key(PASSWORD_PENDING)
             if not value:
@@ -311,19 +268,17 @@ def check_model(body):
     import httpx
     url = connections.endpoint(body['llm_base_url'])
     model = body['llm_model'].strip()
-    key = body.get('llm_api_key', '')
-    if len(key) > 8192 or any(ord(c) < 32 or ord(c) > 126 for c in key):
-        raise ValueError('LLM API 키 형식을 확인해주세요.')
-    if not key:
+    action, credential = connections._key_choice(body)
+    if action is None:
         cfg = connections.config()
-        pending = settings(cfg).get('setup_pending') or {}
-        selected = connections.preferences(cfg).get('llm_pending') or {}
-        # Keys are bound to their exact endpoint; a staged URL without a new
-        # key must never receive the active connection's existing secret.
+        pending = connections._llm_key_pending(cfg)
+        selected = {**connections.model_connection(cfg.get('model') or {}),
+                    **(connections.preferences(cfg).get('llm_pending') or {})}
         if pending.get('llm_key_action') == 'replace' and url == selected.get('base_url') and url == pending.get('llm_key_base_url'):
-            key = connections.key(LLM_PENDING_KEY)
+            credential = connections.pending_llm_credential(cfg)
         elif pending.get('llm_key_action') != 'clear' and url == cfg.get('model', {}).get('base_url'):
-            key = connections.key(LLM_KEY)
+            credential = connections.model_credential(cfg)
+    key = credential if credential not in ('ollama', 'no-key-required') else ''
     headers = {'Authorization': 'Bearer '+key} if key else {}
     try:
         deadline = time.monotonic() + 6

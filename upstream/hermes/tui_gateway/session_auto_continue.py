@@ -19,6 +19,23 @@ from .method_ctx import bind_module
 _AUTO_CONTINUE_FRESHNESS_MINUTES_DEFAULT = 15
 
 
+def _session_goal_paused(session: dict) -> bool:
+    """Automatic turns honor durable user control, including a crashed pending pause."""
+    from hermes_cli.goals import GoalState
+    from hermes_state import SessionDB
+    try:
+        path = _session_home(session) / "state.db"
+        if not path.exists():
+            return False  # a first-session store has no persisted goal control
+        with contextlib.closing(SessionDB(path, read_only=True)) as db:
+            raw = db.get_meta("goal:" + str(session.get("session_key") or ""))
+        goal = GoalState.from_json(raw) if raw else None
+        return bool(goal and (goal.status == "paused" or goal.status == "active" and goal.pause_requested))
+    except Exception:
+        logger.warning("automatic turn held back: saved goal state unreadable", exc_info=True)
+        return True
+
+
 def _auto_continue_config() -> tuple[bool, float, int]:
     """(enabled, freshness window in seconds, max attempts) from ``desktop.auto_continue`` in config.yaml."""
     desktop = _load_cfg().get("desktop")
@@ -80,7 +97,7 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
         # An unavailable store is not evidence that no durable pause exists.
         logger.warning("auto-continue for %s held back: saved goal state unreadable", session_key, exc_info=True)
         return None
-    if goal is not None and goal.status == "paused":
+    if goal is not None and (goal.status == "paused" or goal.status == "active" and goal.pause_requested):
         return None
     # Ownership, not forensics: a sibling backend sharing this HERMES_HOME can be mid-turn on this very session, so
     # its live marker says "someone is working on it", never "someone crashed". Leave the marker for its writer —
@@ -113,7 +130,7 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
             session["_auto_continue_scheduled"] = False
             return
         with session["history_lock"]:
-            if session.get("running") or session.get("_turn_cancel_requested") or session.get("_finalized"):
+            if session.get("running") or session.get("_turn_cancel_requested") or session.get("_finalized") or _session_goal_paused(session):
                 session["_auto_continue_scheduled"] = False  # a real user prompt beat us; it clears the marker
                 return
             session["running"] = True
@@ -140,7 +157,7 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
                     _emit("status.update", sid, {"kind": "process", "text": "Resuming interrupted turn…"})
                     _emit("message.start", sid)
                 render_notification(announce, platform="tui", diagnostic=diagnostic)
-                _run_prompt_submit(rid, sid, session, text, display_kind="auto_continue",
+                _run_prompt_submit(rid, sid, session, text, display_kind="auto_continue", respect_goal_pause=True,
                     **({"display_metadata": {"notification_category": "diagnostic"}} if diagnostic else {}))
         except Exception as exc:
             _notif_log_failure("auto-continue dispatch failed", exc)
@@ -469,7 +486,7 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     """Fire a queued next-turn prompt if one is waiting and the session is idle. True when dispatched: the caller
     skips lower-priority follow-ups this cycle (the user's message wins)."""
     with _session_turn_admission(session) as admitted:
-        if not admitted or session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running"):
+        if not admitted or session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running") or session.get("_turn_cancel_requested") or _session_goal_paused(session):
             return False
         queue_generation = int(session.get("_queued_prompt_generation", 0))
         _ac_set_queue(session, session.get("queued_prompts") or [])
@@ -491,7 +508,7 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
             _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])])
             session["running"] = False
             return True
-    kwargs: dict = {"queued_prompt_generation": queue_generation}
+    kwargs: dict = {"queued_prompt_generation": queue_generation, "respect_goal_pause": True}
     if queued.get("image_paths"):
         kwargs["image_paths"] = queued["image_paths"]
     # Re-place the accept-time rows (if any) at the transcript END before the turn's rows follow
@@ -517,11 +534,32 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     dispatch_failed = False
     try:
         if not use_compute_host:
-            _run_prompt_submit(rid, sid, session, queued["text"], **kwargs, **author_kwargs)
-        elif (resp := _submit_prompt_to_compute_host(rid, sid, session, queued["text"], **kwargs)).get("error"):
+            started = _run_prompt_submit(rid, sid, session, queued["text"], **kwargs, **author_kwargs)
+            if started is False:
+                with session["history_lock"]:
+                    if _session_goal_paused(session):
+                        # A pause raced after the claim/row move. Keep the accepted
+                        # envelope for explicit resume, with its existing durable row.
+                        advanced = session.get("queued_prompt")
+                        waiting = [*([advanced] if advanced else []), *(session.get("queued_prompts") or [])]
+                        _ac_set_queue(session, [queued, *waiting])
+                        session["running"] = False
+                        return True
+        else:
+            # Keep the exact accepted envelope until the isolated worker reports
+            # admission; a pause can race the parent-to-child dispatch.
+            with session["history_lock"]:
+                session["_compute_host_queued_prompt"] = queued
+            resp = _submit_prompt_to_compute_host(rid, sid, session, queued["text"], **kwargs)
+        if use_compute_host and resp.get("error"):
             with session["history_lock"]:
                 session["running"] = False
+                session.pop("_compute_host_queued_prompt", None)
                 _clear_inflight_turn(session)
+                if _session_goal_paused(session):
+                    advanced = session.get("queued_prompt")
+                    _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])])
+                    return True
             _emit("error", sid, {"message": str((resp.get("error") or {}).get("message") or "queued prompt failed")})
             dispatch_failed = True
     except Exception as exc:

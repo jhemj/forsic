@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const components = {};
+const entrySlots = {};
+let entryFetches = 0;
 const motionModule = {exports:{}};
 const data = {case: {label: '합성 시험'}, events: [], reports: [], notes: [{note_id: 'n1', question: '질문', answer: '답', gaps: ['첫 공백', '둘째 공백'], evidence_ids: ['e1'], timeline: [{display_time: '10:00 KST', description: '시도'}, {display_time: '10:01 KST', description: '결과'}]}]};
 let stateIndex = 0;
@@ -12,13 +14,27 @@ const React = {
   useRef(initial) {return {current:initial};},
 };
 vm.runInNewContext(fs.readFileSync('forsic_plugin/dashboard/dist/index.js', 'utf8'), {
-  window: {__HERMES_PLUGIN_SDK__: {React, fetchJSON: async () => data},
-    __HERMES_PLUGINS__: {register(name, view) { components[name] = view; }, registerSlot() {}}},
+  window: {__HERMES_PLUGIN_SDK__: {React, fetchJSON: async () => {entryFetches++;return data;}},
+    __HERMES_PLUGINS__: {register(name, view) { components[name] = view; }, registerSlot(plugin,slot,component) {entrySlots[slot]=component;}}},
   document: {},
   module: motionModule,
   URLSearchParams,
   crypto: {getRandomValues: bytes => require('node:crypto').webcrypto.getRandomValues(bytes)},
 });
+const connectionSlot=entrySlots['settings-connections']({section:'telegram'});
+assert.equal(connectionSlot.type,motionModule.exports.ConnectionSettings);
+assert.equal(connectionSlot.props.embedded,true);
+assert.equal(connectionSlot.props.section,'telegram');
+const hookCountBeforeEntry=stateIndex;
+const entry=entrySlots['tenant-entry']();
+assert.equal(entry.type,motionModule.exports.Lens);
+const entryLens=entry.type(entry.props);
+assert.equal(entryLens.props['data-mood'],'idle');
+assert.equal(entryLens.props['data-working'],false);
+assert.equal(entryLens.children[0].props['aria-label'],'포식이 · 대기');
+assert.equal(stateIndex,hookCountBeforeEntry);
+assert.equal(entryFetches,0);
+console.log('Tenant entry: existing idle Lens, accessible identity and no workspace fetch passed');
 const tree = components.forsic();
 function uniqueSiblingKeys(node) {
   if (!node || typeof node !== 'object') return;
@@ -214,6 +230,12 @@ const available={allowed:true,reason:null,active_case:null};
 const occupied={allowed:false,reason:'진행 중인 조사가 있어 새 조사를 만들 수 없습니다.',active_case:{case_id:'CASE-한 글',resume_session_id:'native-one',label:'합성 조사',status:'investigating'}};
 const newAction=NewInvestigationAction({availability:available});
 assert.equal(newAction.type,'a');assert.equal(newAction.props.href,'/forsic?view=new');
+for(const count of [1,2]) {
+  const action=NewInvestigationAction({availability:{...available,allowed:count<2,active_count:count,limit:2,available_slots:2-count}});
+  assert.equal(action.type,count<2?'a':'button');
+  assert(JSON.stringify(action).includes(`동시 조사 ${count} / 2`));
+}
+assert(!JSON.stringify(NewInvestigationAction({availability:{...occupied,active_count:null,limit:2}})).includes('동시 조사 0'));
 for(const props of [{availability:occupied},{availability:null},{availability:available,error:'조회 실패'}]) {
   const action=NewInvestigationAction(props);
   assert.equal(action.type,'button');assert.equal(action.props.disabled,true);assert.equal(action.props.href,undefined);
@@ -372,6 +394,7 @@ async function testInvestigationClosure() {
   browser.location.pathname='/chat';
   const compact=InvestigationAdmissionNotice({availability});
   assert.equal(compact.type,CloseInvestigationAction);
+  assert.equal(InvestigationAdmissionNotice({availability:{...availability,allowed:true,active_count:1,limit:2}}).type,CloseInvestigationAction);
   assert(!JSON.stringify(compact).includes('기존 조사 열기'));
   assert(!JSON.stringify(compact).includes('차단 이유'));
   browser.location.search='?case=other-case&resume=other-session';

@@ -23,8 +23,13 @@ class RequestConflict(ValueError):
     """An idempotency key was reused for a different explicit UI action."""
 
 
+MAX_CONCURRENT_INVESTIGATIONS = 2
+_CAPACITY_REASON = (f'동시에 접수할 수 있는 조사 {MAX_CONCURRENT_INVESTIGATIONS}개가 모두 사용 중입니다. '
+                    '기존 조사를 완료하거나 종료한 뒤 새 조사를 시작해주세요. 일시 중지된 조사도 포함됩니다.')
+
+
 class InvestigationUnavailable(RequestConflict):
-    """A new case cannot be admitted while another investigation is reserved."""
+    """A new case cannot be admitted without a free investigation reservation."""
 
 
 def conversation_usage(session_ids, usage_rows):
@@ -182,21 +187,30 @@ class Investigations:
 
         Intake/receipts also reserve creation until a native goal exists. These
         are the existing recovery records, not a second investigation ledger.
+        Capacity is shared across tenants; only local case identities are returned.
         """
         unavailable = {'allowed': False, 'reason': '기존 조사 상태를 확인할 수 없어 새 조사를 시작할 수 없습니다. 기존 조사와 저장 상태를 확인해주세요.',
-                       'active_case': None}
+                       'active_case': None, 'active_count': None, 'limit': MAX_CONCURRENT_INVESTIGATIONS, 'available_slots': None}
         try:
             if self.tenant_scope and not _local:
                 from .tenants import TenantRegistry
                 registry = TenantRegistry()
+                local = self.new_investigation(exclude_session_id=exclude_session_id, _local=True)
+                total = local['active_count']
+                if total is None:
+                    return local
                 for tenant in registry.list_public():
                     scope = registry.resolve(tenant_id=tenant['tenant_id'])
                     if scope['tenant_id'] == self.tenant_scope['tenant_id']:
                         continue
-                    other = Investigations(scope['profile_home'], scope['intake_root'])
-                    if not other.new_investigation(_local=True)['allowed']:
-                        return {'allowed': False, 'reason': '다른 작업공간에서 진행 중이거나 일시정지된 조사가 있습니다.',
-                                'active_case': None}
+                    other = Investigations(scope['profile_home'], scope['intake_root']).new_investigation(_local=True)
+                    if other['active_count'] is None:
+                        return {**unavailable, 'reason': '다른 작업공간의 조사 상태를 확인할 수 없어 새 조사를 시작할 수 없습니다.'}
+                    total += other['active_count']
+                allowed = total < MAX_CONCURRENT_INVESTIGATIONS
+                return {**local, 'allowed': allowed,
+                        'reason': None if allowed else _CAPACITY_REASON,
+                        'active_count': total, 'available_slots': max(0, MAX_CONCURRENT_INVESTIGATIONS-total)}
             cases = self.list()
             goals, sessions, leases = {}, {}, None
             has_native = self.native_path.exists()
@@ -216,7 +230,7 @@ class Investigations:
             # A live native lease with no session row is inconsistent; it must
             # not be mistaken for deliberately deleted, idle history.
             uncertain = bool(leases and leases - {row['id'] for row in sessions.values()})
-            pending = False
+            pending = set()
             for path in self.intake.glob('*.json'):
                 if len(path.stem) != 64 or any(c not in '0123456789abcdef' for c in path.stem):
                     continue
@@ -248,8 +262,8 @@ class Investigations:
                     raise ValueError('Invalid request receipt')
                 if (receipt['intent'].get('path') and not receipt.get('result')
                         and receipt['session_id'] != exclude_session_id):
-                    pending = True
-            blockers = []
+                    pending.add(receipt['session_id'])
+            blockers, reserved_sessions = [], set()
             for case in cases:
                 for conversation in case['conversations']:
                     sid = conversation['resume_session_id']
@@ -277,25 +291,24 @@ class Investigations:
                                                                   'goal_queued', 'goal_manual', 'goal_active', 'case_bound'):
                         raise ValueError('Unknown investigation lifecycle')
                     status = 'paused' if native == 'paused' else 'investigating' if native == 'active' or running else 'waiting'
+                    reserved_sessions.update(conversation['session_ids'])
                     blockers.append({'case_id': case['case_id'], 'label': case['label'],
                                      'resume_session_id': sid, 'status': status})
                     from hermes_cli.goals import GoalState, goal_identity
                     valid_goal = GoalState.from_json(json.dumps(goal)) if goal else None
                     blockers[-1].update(goal_id=goal_identity(valid_goal) if valid_goal and valid_goal.goal.strip() else '',
                                         closable=bool(valid_goal and valid_goal.goal.strip() and native in ('active', 'paused')))
-            if blockers:
-                # Prefer a running investigation over another pending conversation.
-                active = min(blockers, key=lambda item: ('investigating', 'paused', 'waiting').index(item['status']))
-                reason = ('일시 중지된 조사가 있습니다. 기존 조사를 재개하거나 종료한 뒤 새 조사를 시작해주세요.'
-                          if active['status'] == 'paused' else
-                          '진행 중이거나 접수된 조사가 있습니다. 기존 조사를 완료하거나 종료한 뒤 새 조사를 시작해주세요.')
-                return {'allowed': False, 'reason': reason, 'active_case': active}
             if uncertain:
                 return unavailable
-            if pending:
-                return {'allowed': False, 'reason': '새 조사 접수가 완료되지 않았습니다. 기존 접수 화면에서 같은 요청을 다시 시도해주세요.',
-                        'active_case': None}
-            return {'allowed': True, 'reason': None, 'active_case': None}
+            active = min(blockers, key=lambda item: ('investigating', 'paused', 'waiting').index(item['status'])) if blockers else None
+            # A partially committed receipt and its native conversation occupy
+            # the same reservation; replay excludes only its own pending session.
+            count = len(blockers) + len(pending-reserved_sessions)
+            allowed = count < MAX_CONCURRENT_INVESTIGATIONS
+            reason = None if allowed else _CAPACITY_REASON
+            return {'allowed': allowed, 'reason': reason, 'active_case': active,
+                    'active_count': count, 'limit': MAX_CONCURRENT_INVESTIGATIONS,
+                    'available_slots': max(0, MAX_CONCURRENT_INVESTIGATIONS-count)}
         except (OSError, sqlite3.Error, ValueError, KeyError, TypeError, AttributeError):
             return unavailable
 
@@ -536,6 +549,7 @@ class Investigations:
             db = SessionDB(self.native_path)
             try:
                 db.create_session(session_id=session_id, source='cli',
+                                  model_config={'follow_profile_config': True},
                                   profile_name=self.tenant_scope['profile_name'] if self.tenant_scope else 'default')
             finally:
                 db.close()

@@ -107,7 +107,7 @@ def shell_navigation(body, lookup):
             and set(value) <= {'kind', 'source_handle', 'pointer', 'export_line'}
             and value.get('kind') == 'workspace_export' and value.get('source_handle') == handle
             and isinstance(handle, str) and handle_reference(handle) == ref
-            and value.get('pointer') == '/stdout'
+            and value.get('pointer') in ('/stdout', '/stderr')
             and ('export_line' not in value or type(value['export_line']) is int and value['export_line'] >= 1)
             and len(json.dumps(value, ensure_ascii=False)) <= 900)
     result = {}
@@ -120,9 +120,10 @@ def shell_navigation(body, lookup):
         total = max(len(selectors), total) if type(total) is int else len(selectors)
         result.update(retained_export_targets=deepcopy(selected[:4]), retained_export_target_count=total,
             omitted_retained_export_target_count=total-min(4, len(selected)))
-    if result:
+    first = result.get('retained_export_target') or next(iter(result.get('retained_export_targets', [])), None)
+    if first:
         result['shell_result_lookup'] = {'tool': 'forsic_reporting', 'arguments': {
-            **lookup['arguments'], 'pointer': '/stdout', 'limit': 4096}}
+            **lookup['arguments'], 'pointer': first['pointer'], 'limit': 4096}}
     return result
 
 
@@ -181,7 +182,7 @@ def summarize(tool, args, content):
     view.update(execution_summary(body))
     view.update(shell_navigation(body, view.get('lookup')))
     error = body.get('error')
-    question_repair = (body.get('error_code') in ('invalid_question_fields', 'invalid_review_response') and
+    question_repair = (body.get('error_code') in ('invalid_question_fields', 'invalid_review_response', 'invalid_citation_selection') and
                        isinstance(body.get('invalid_fields'),list) and isinstance(body.get('recovery'),dict))
     mutation_repair = (body.get('error_code') == 'mutation_payload_conflict'
                        and isinstance(body.get('recovery'), dict)

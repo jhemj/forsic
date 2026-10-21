@@ -9,6 +9,54 @@ DIRECT = re.compile(r'C2:([0-9a-f]{32}):([0-9a-f]{64}):(0|[1-9][0-9]*)\Z')
 ANALYSIS_FIELDS = ('counter_citation_refs', 'inference_strength', 'assumptions', 'limitations')
 
 
+class CitationSelectionError(ValueError):
+    """A rejected explicit selection; recovery never adopts a different source."""
+    def __init__(self, location, reason, recovery=None):
+        super().__init__('Invalid citation selection at ' + location + ': ' + reason)
+        self.details = {'error_code': 'invalid_citation_selection',
+            'failure_stage': 'citation_validation',
+            'write_applied': False,
+            'invalid_fields': [{'path': location, 'reason': reason}],
+            'next_step': 'No question was changed. Select an unchanged returned citation reference and retry the original request explicitly.'}
+        if recovery:
+            self.details['recovery'] = recovery
+            self.details['next_step'] = ('No question was changed. Read the retained output with recovery.read_call, '
+                'then explicitly select a returned C1 reference in the original request. '
+                'The failed command was not rerun or reclassified; partial output does not establish completion or coverage.')
+
+
+def _failed_output_recovery(case, value):
+    """Offer only an actual available field from a confirmed returned failure."""
+    from .host import source_record
+    from .investigation_state import failed_result, pending_result
+    from .model_pages import source_read_call
+    match = DIRECT.fullmatch(value) if isinstance(value, str) else None
+    if not match:
+        return None
+    event = case.event(match[1])
+    if not event or event['kind'] != 'tool_result':
+        return None
+    data = event['data']; execution = data.get('execution', {})
+    start = case.event(data.get('started_id', ''))
+    if (data.get('tool') != 'forsic_shell' or data.get('execution_rejected') or
+            not start or start['kind'] != 'tool_start' or start['session'] != event['session'] or
+            start['data'].get('tool') != 'forsic_shell' or start['data'].get('execution_rejected') or
+            pending_result(data) or not failed_result(data) or execution.get('state') != 'returned' or
+            execution.get('termination_confirmed') is not True or
+            type(execution.get('exit_code')) is not int or execution['exit_code'] == 0):
+        return None
+    source = source_record(event)
+    if source['content_sha256'] != match[2]:
+        return None
+    for field in ('stdout', 'stderr'):
+        if isinstance(data.get(field), str) and data[field]:
+            return {'source_ref': {'id': source['id'], 'version': source['version']},
+                'read_call': {'tool': 'forsic_reporting',
+                    'arguments': source_read_call(source, '/' + field)},
+                'meaning': 'Read an available retained output field; this is not a replacement citation or proof that the failed script completed.'}
+    return None
+
+
 def schema(contract_version='v1'):
     string={'type':'string'}
     strings={'type':'array','items':string}
@@ -103,8 +151,14 @@ def records(case,state,note,judgment,contract_version='v1'):
         by_role={}
         for role in ('citation_refs','counter_citation_refs'):
             by_role[role]=[]
-            for value in dict.fromkeys(analysis[role]):
-                c=selection(case,state,value);source,span=_citation(case,state,c)
+            for ref_index, value in enumerate(analysis[role]):
+                if value in analysis[role][:ref_index]:
+                    continue
+                location = ('judgment.claims[' + str(index) + ']' if 'claims' in judgment else 'judgment') + '.' + role + '[' + str(ref_index) + ']'
+                try:
+                    c=selection(case,state,value);source,span=_citation(case,state,c)
+                except ValueError as exc:
+                    raise CitationSelectionError(location, str(exc), _failed_output_recovery(case, value)) from exc
                 source_ids.append(source['id'])
                 from .retained_scalar import citation_context
                 context=citation_context(case.event(source['id'])['data'],c['pointer'])

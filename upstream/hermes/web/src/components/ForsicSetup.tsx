@@ -35,16 +35,20 @@ export function SetupReadOnly({status}: {status: SetupStatus}) {
   </section>
 }
 
-export default function ForsicSetup({initial, onSaved}: {initial: SetupStatus; onSaved: (status: SetupStatus) => void}) {
+export default function ForsicSetup({initial, onSaved, mode='initial'}: {initial: SetupStatus; onSaved: (status: SetupStatus) => void; mode?: 'initial'|'hosting'}) {
+  const embedded = mode === 'hosting';
+  const firstStep = embedded ? 1 : 0;
   const [value, setValue] = useState(initial.values)
-  const [step, setStep] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState('')
-  const [apiKey, setApiKey] = useState(''), [clearKey, setClearKey] = useState(false), [password, setPassword] = useState('')
+  const [step, setStep] = useState(firstStep), [busy, setBusy] = useState(false), [error, setError] = useState('')
+  const [apiKey, setApiKey] = useState<string | null>(null), [password, setPassword] = useState('')
   const [checkMessage, setCheckMessage] = useState('')
   const [models, setModels] = useState<string[]>([])
   const heading = useRef<HTMLHeadingElement>(null), lock = useRef(false)
-  useEffect(() => {heading.current?.focus({preventScroll:true})}, [step])
+  useEffect(() => {if(!embedded)heading.current?.focus({preventScroll:true})}, [step,embedded])
   if (!initial.local_admin) return <SetupReadOnly status={initial} />
   if (!value) return <p role="alert">설정 내용을 불러오지 못했습니다. 화면을 다시 열어 주세요.</p>
+  const editingKey = apiKey !== null || !initial.llm_key_configured
+  const keyFields = editingKey ? {llm_api_key:apiKey ?? ''} : {}
   function update<K extends keyof SetupValues>(key: K, next: SetupValues[K]) {
     setValue(previous => previous && ({...previous, [key]: next})); setError(''); setCheckMessage('')
     if (key === 'llm_base_url') setModels([])
@@ -54,7 +58,7 @@ export default function ForsicSetup({initial, onSaved}: {initial: SetupStatus; o
     if (lock.current || !value) return
     lock.current = true; setBusy(true); setError(''); setCheckMessage('')
     try {
-      const result = await fetchJSON<{reachable:boolean;model_found:boolean;models?:string[];detail:string}>('/api/plugins/forsic/setup/check-model', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({llm_base_url:value.llm_base_url,llm_model:value.llm_model,llm_api_key:apiKey})})
+      const result = await fetchJSON<{reachable:boolean;model_found:boolean;models?:string[];detail:string}>('/api/plugins/forsic/setup/check-model', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({llm_base_url:value.llm_base_url,llm_model:value.llm_model,...keyFields})})
       setModels(result.models || [])
       setCheckMessage(result.reachable ? result.model_found ? '모델 목록에서 선택한 모델을 확인했어요. 실제 응답은 조사 시작 후 확인합니다.' : '서버에 연결됐어요. 아래 모델 목록에서 선택하거나 모델 이름을 직접 입력하세요.' : '모델 서버에 연결하지 못했어요. 주소와 키를 확인해 주세요.')
     } catch {setError('모델 목록을 확인하지 못했어요. 주소와 연결 상태를 확인해 주세요.')}
@@ -64,25 +68,35 @@ export default function ForsicSetup({initial, onSaved}: {initial: SetupStatus; o
     if (lock.current) return
     lock.current=true; setBusy(true);setError('')
     try {
-      const saved = await fetchJSON<SetupStatus>('/api/plugins/forsic/setup',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...value,llm_api_key:apiKey,clear_llm_key:clearKey,login_password:password})})
-      setApiKey('');setPassword('');onSaved(saved)
+      // This editor changes folders/hosting only. Read the latest saved model so
+      // a model change in the sibling category cannot be overwritten by this draft.
+      let modelFields = {};
+      if(embedded){
+        const latest=await fetchJSON<SetupStatus>('/api/plugins/forsic/setup');
+        if(!latest.local_admin||!latest.values)throw new Error('설정 권한과 현재 연결을 확인해 주세요.');
+        modelFields={llm_base_url:latest.values.llm_base_url,llm_model:latest.values.llm_model,llm_context_length:latest.values.llm_context_length};
+      }
+      const saved = await fetchJSON<SetupStatus>('/api/plugins/forsic/setup',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...value,...(embedded?modelFields:keyFields),login_password:password})})
+      setApiKey(null);setPassword('');onSaved(saved)
       window.dispatchEvent(new Event('forsic:connections-changed'))
     } catch (cause) {setError(cause instanceof Error ? cause.message : '설정을 저장하지 못했어요. 입력 내용을 확인해 주세요.')}
     finally {lock.current=false;setBusy(false)}
   }
   const ready = step === 0 ? Boolean(value.llm_base_url.trim() && value.llm_model.trim()) : step === 1 ? Boolean(value.evidence_directory.trim())
     : step === 2 ? (value.hosting_mode === 'local' || Boolean(value.evidence_directory.trim() && (value.hosting_mode === 'private_lan' ? value.private_lan_host.trim() : value.public_url.trim() && value.login_username.trim() && (password ? password.length >= 12 : initial.login_configured)))) : true
-  return <main className="forsic-setup"><section className="fs-window" aria-labelledby="fs-title">
-    <header className="fs-header"><span className="fs-brand"><Search size={20} aria-hidden="true" /> FORSIC</span><span>{initial.required ? '처음 설정' : '연결 및 호스팅 설정'}</span></header>
-    <nav aria-label="설정 단계"><ol className="fs-steps">{steps.map((label,index) => <li key={label} aria-current={index === step ? 'step' : undefined}><span>{index < step ? <Check size={14} /> : index + 1}</span>{label}</li>)}</ol></nav>
-    <div className="fs-body"><h1 id="fs-title" tabIndex={-1} ref={heading}>{steps[step]}</h1>
+  const Container=embedded?'div':'main';
+  const Heading=embedded?'h3':'h1';
+  return <Container className={`forsic-setup${embedded?' fs-embedded':''}`}><section className="fs-window" aria-labelledby="fs-title">
+    {!embedded&&<header className="fs-header"><span className="fs-brand"><Search size={20} aria-hidden="true" /> FORSIC</span><span>{initial.required ? '처음 설정' : '연결 및 호스팅 설정'}</span></header>}
+    <nav aria-label="설정 단계"><ol className="fs-steps">{steps.map((label,index) => index>=firstStep&&<li key={label} aria-current={index === step ? 'step' : undefined}><span>{index < step ? <Check size={14} /> : index + 1-firstStep}</span>{label}</li>)}</ol></nav>
+    <div className="fs-body"><Heading id="fs-title" tabIndex={-1} ref={heading}>{steps[step]}</Heading>
       {step === 0 && <><p>조사에 사용할 모델 서버를 연결하세요.</p>
         <label className="fs-field">API 주소 · OpenAI 호환<input type="url" autoComplete="off" spellCheck={false} value={value.llm_base_url} onChange={event => update('llm_base_url',event.target.value)} placeholder="http://localhost:11434/v1" /></label>
         <label className="fs-field">모델 이름<input list="fs-model-options" value={value.llm_model} autoComplete="off" spellCheck={false} onChange={event => update('llm_model',event.target.value)} placeholder="서버에 설치된 모델 이름" /><datalist id="fs-model-options">{models.map(model => <option key={model} value={model} />)}</datalist></label>
-        <label className="fs-field">API 키 · 선택<input type="password" autoComplete="new-password" disabled={clearKey} value={apiKey} onChange={event => setApiKey(event.target.value)} placeholder={initial.llm_key_configured ? '등록됨 · 바꿀 때만 입력' : '인증이 필요한 서버만 입력'} /></label>
-        {initial.llm_key_configured && <label className="fs-check"><input type="checkbox" checked={clearKey} onChange={event => {setClearKey(event.target.checked);setApiKey('')}} />저장된 API 키 삭제</label>}
+        {editingKey ? <><label className="fs-field">API 키 · 선택<input type="password" autoComplete="new-password" disabled={busy} value={apiKey ?? ''} onChange={event => setApiKey(event.target.value)} placeholder="빈칸이면 API 키 없이 연결" /></label><p>빈칸으로 저장하면 API 키 없이 연결해요. {initial.llm_key_configured && <button type="button" disabled={busy} onClick={() => setApiKey(null)}>기존 키 유지</button>}</p></>
+          : <div className="fs-field"><span>API 키 · 등록됨</span><div><button type="button" disabled={busy} onClick={() => setApiKey('')}>API 키 변경</button> <button type="button" disabled={busy} onClick={() => setApiKey('')}>키 없이 사용</button></div></div>}
         <details><summary>문맥 길이 직접 지정</summary><label className="fs-field">토큰 수 · 비우면 모델 기본값<input type="number" min={64000} max={2147483647} value={value.llm_context_length ?? ''} onChange={event => update('llm_context_length',event.target.value ? Number(event.target.value) : null)} /></label></details>
-        <div className="fs-check-model"><button type="button" disabled={busy || !value.llm_base_url.trim() || clearKey} onClick={() => void checkModel()}>모델 목록 확인 · 선택</button><small>누르면 입력한 서버에 모델 목록만 요청합니다.</small></div>{models.length > 0 && <label className="fs-field">확인된 모델<select value={models.includes(value.llm_model) ? value.llm_model : ''} onChange={event => update('llm_model',event.target.value)}><option value="" disabled>사용할 모델 선택</option>{models.map(model => <option key={model} value={model}>{model}</option>)}</select></label>}
+        <div className="fs-check-model"><button type="button" disabled={busy || !value.llm_base_url.trim()} onClick={() => void checkModel()}>모델 목록 확인 · 선택</button><small>누르면 입력한 서버에 모델 목록만 요청합니다.</small></div>{models.length > 0 && <label className="fs-field">확인된 모델<select value={models.includes(value.llm_model) ? value.llm_model : ''} onChange={event => update('llm_model',event.target.value)}><option value="" disabled>사용할 모델 선택</option>{models.map(model => <option key={model} value={model}>{model}</option>)}</select></label>}
       </>}
       {step === 1 && <><p>조사 자료를 보관할 폴더를 선택하세요. 원본은 읽기 전용으로 연결합니다.</p><EvidencePicker directoryOnly path={value.evidence_directory} connection={null} checking={false} onCancelCheck={() => {}} onChange={path => update('evidence_directory',path)} /><label className="fs-field">화면에 표시할 폴더 이름<input value={value.evidence_directory_label} onChange={event => update('evidence_directory_label',event.target.value)} placeholder="조사 자료" /></label></>}
       {step === 2 && <><p>어디에서 포식이에 접속할지 선택하세요.</p><fieldset className="fs-hosting"><legend className="sr-only">접속 범위</legend>{hosting.map(item => <label key={item.id} data-selected={value.hosting_mode === item.id}><input type="radio" name="hosting" value={item.id} checked={value.hosting_mode === item.id} onChange={() => update('hosting_mode',item.id)} /><span><strong>{item.label}</strong><small>{item.detail}</small></span></label>)}</fieldset>
@@ -90,12 +104,12 @@ export default function ForsicSetup({initial, onSaved}: {initial: SetupStatus; o
         {value.hosting_mode !== 'local' && <>{value.hosting_mode === 'private_lan' ? <label className="fs-field">이 컴퓨터의 내부망 IP<input value={value.private_lan_host} onChange={event => update('private_lan_host',event.target.value)} placeholder="192.168.1.10" /></label> : <><label className="fs-field">HTTPS 접속 주소<input type="url" value={value.public_url} onChange={event => update('public_url',event.target.value)} placeholder="https://forsic.example.com" /></label><p className="fs-notice">인증서를 갖춘 HTTPS 프록시를 먼저 준비하세요. 저장 후 재시작하면 해당 주소를 사용하는 설정이 적용됩니다.</p></>}
           {value.hosting_mode === 'online' && <><label className="fs-field">로그인 이름<input autoComplete="username" value={value.login_username} onChange={event => update('login_username',event.target.value)} /></label><label className="fs-field">로그인 비밀번호<input type="password" autoComplete="new-password" minLength={12} value={password} onChange={event => setPassword(event.target.value)} placeholder={initial.login_configured ? '등록됨 · 바꿀 때만 입력' : '접속할 때 사용할 비밀번호'} /><small>새 비밀번호는 12자 이상 입력하세요.</small></label></>}</>}
       </>}
-      {step === 3 && <><p>저장할 내용을 확인하세요.</p><dl className="fs-review"><div><dt>조사 모델</dt><dd>{value.llm_model}<small>{value.llm_base_url}</small></dd></div><div><dt>자료 폴더</dt><dd>{value.evidence_directory_label || '조사 자료'}<small>{value.evidence_directory}</small></dd></div><div><dt>접속 범위</dt><dd>{hosting.find(item => item.id === value.hosting_mode)?.label}<small>{value.hosting_mode === 'online' ? value.public_url : value.hosting_mode === 'private_lan' ? value.private_lan_host : '이 컴퓨터에서만 접속'}</small></dd></div></dl><p className="fs-notice">저장 후 실행 도구로 포식이를 다시 시작하면 적용됩니다. 모델 요청이나 조사 시작은 하지 않습니다.</p></>}
+      {step === 3 && <><p>저장할 내용을 확인하세요.</p><dl className="fs-review">{!embedded&&<div><dt>조사 모델</dt><dd>{value.llm_model}<small>{value.llm_base_url}</small></dd></div>}<div><dt>자료 폴더</dt><dd>{value.evidence_directory_label || '조사 자료'}<small>{value.evidence_directory}</small></dd></div><div><dt>접속 범위</dt><dd>{hosting.find(item => item.id === value.hosting_mode)?.label}<small>{value.hosting_mode === 'online' ? value.public_url : value.hosting_mode === 'private_lan' ? value.private_lan_host : '이 컴퓨터에서만 접속'}</small></dd></div></dl><p className="fs-notice">저장 후 실행 도구로 포식이를 다시 시작하면 적용됩니다. 모델 요청이나 조사 시작은 하지 않습니다.</p></>}
       {checkMessage && <p role="status" className="fs-notice">{checkMessage}</p>}{error && <p role="alert" className="fs-error">{error}</p>}
     </div>
-    <footer className="fs-footer">{step > 0 ? <button type="button" disabled={busy} onClick={() => move(step-1)}><ArrowLeft size={16} />이전</button> : !initial.required ? <Link to="/forsic?view=start">조사 화면으로</Link> : <span />}
+    <footer className="fs-footer">{step > firstStep ? <button type="button" disabled={busy} onClick={() => move(step-1)}><ArrowLeft size={16} />이전</button> : !embedded&&!initial.required ? <Link to="/forsic?view=start">조사 화면으로</Link> : <span />}
       <button type="button" className="fs-primary" disabled={busy || !ready} onClick={() => step === 3 ? void save() : move(step+1)}>{busy ? '처리 중…' : step === 3 ? '설정 저장' : '다음'}{!busy && <ArrowRight size={16} />}</button></footer>
-  </section></main>
+  </section></Container>
 }
 
 /** Read-only bootstrap check. Existing configured installations keep their normal entry. */

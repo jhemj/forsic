@@ -183,6 +183,13 @@ def run_tool_round(
                     agent.stream_delta_callback(None)
         return _verdict("break")
 
+    # The accepted batch and its canonical results have finished. Stop before
+    # post-tool compression or another provider request, without interrupting tools.
+    from agent.goal_pause import SAFE_PAUSE_NOTICE, SAFE_PAUSE_REASON, settle_requested_goal_pause
+    if settle_requested_goal_pause(agent):
+        final_response, _turn_exit_reason = SAFE_PAUSE_NOTICE, SAFE_PAUSE_REASON
+        return _verdict("break")
+
     # Reset per-turn retry counters so one truncation can't poison the turn.
     truncated_tool_call_retries = 0
     # Defer the paragraph break: _fire_stream_delta() prepends one "\n\n" when real

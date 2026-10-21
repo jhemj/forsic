@@ -811,10 +811,9 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
                         or int(turns_used)-previous['turns_used']<4):
                     return _latest_result(resolved,max_chars)
             from hermes_cli.config import load_config_readonly
-            config=load_config_readonly();model=config.get('model',{})
-            if model.get('provider')!='custom' or not isinstance(model.get('default'),str) or not model['default'] or not model.get('base_url'):
-                return _with_state(_result('unavailable','독립 검토는 현재의 명시적 custom 모델 연결이 필요합니다. 다른 모델로 전환하지 않았습니다.',max_chars),resolved,max_chars)
-            route={k:model[k] for k in ('provider','default','base_url')}
+            from .connections import _lock as connection_lock, review_connection_snapshot
+            with connection_lock:
+                route,credential=review_connection_snapshot(load_config_readonly())
             system=snapshot.get('system',SYSTEM)
             identity={**_identity(resolved),'model':route,'stage':stage,'system':system,'prompt':snapshot['prompt']}
             rid=_hash(identity);prefix='independent-review-'+_goal_key(resolved)+'-'+rid
@@ -848,7 +847,7 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
             _immutable(request_path,request)
             complete_options=dict(session_id=session_id,goal_id=goal_id,goal_text=goal_text,
                 intake_root=intake_root,native_db=native_db,stage=stage,draft_response=draft_response,
-                max_chars=max_chars)
+                max_chars=max_chars,credential=credential)
             if nonblocking:
                 from .independent_review_overlap import start
                 # flock follows this duplicated open description until the worker
@@ -870,7 +869,7 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
 
 
 def _complete_review(resolved,snapshot,request,request_path,response_path,*,session_id,goal_id,goal_text,
-                     intake_root,native_db,stage,draft_response,cancel_check,max_chars,deadline=None):
+                     intake_root,native_db,stage,draft_response,cancel_check,max_chars,credential,deadline=None):
     """Consume exactly the recorded bounded input, whether foreground or overlapping."""
     rid=request['request_id'];route=request['model']
     response={'request_id':rid,'status':'delivery_unconfirmed','findings':[],
@@ -883,7 +882,7 @@ def _complete_review(resolved,snapshot,request,request_path,response_path,*,sess
         with aux_interrupt_protection(cancel_check=cancel_check),aux_stream_deadline(deadline):
             # Native stream=True bypasses auxiliary retries/fallbacks; SDK retries are disabled natively.
             stream=call_llm(task='report_review',provider='custom',model=route['default'],base_url=route['base_url'],
-                api_key='ollama',messages=request['messages'],temperature=0,
+                api_key=credential,messages=request['messages'],temperature=0,
                 max_tokens=4000 if request.get('executive_round') else 1800,timeout=600,
                 reasoning_config={'enabled':False},stream=True,stream_options={'include_usage':True},api_mode='chat_completions')
             for chunk in stream:

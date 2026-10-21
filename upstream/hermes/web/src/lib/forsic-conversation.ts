@@ -63,14 +63,10 @@ export function fullSavedCalls(messages: unknown[]): InspectorToolCall[] {
   const calls = savedToolCalls(messages.map(raw => {
     const message = asRecord(raw)
     return message.role === 'tool' ? {...message, content: resultForStatus(message.content)} : raw
-  }))
+  }), Infinity)
   for (const raw of messages) {
     const message = asRecord(raw)
     if (message.display_kind === 'hidden') continue
-    for (const rawCall of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
-      const call = asRecord(rawCall), fn = asRecord(call.function), match = calls.find(item => item.id === call.id)
-      if (match) {match.arguments = string(fn.arguments); match.argumentsTruncated = false}
-    }
     const match = calls.find(item => item.id === message.tool_call_id)
     if (message.role === 'tool' && match) {match.result = string(message.content); match.resultTruncated = false}
   }
@@ -139,9 +135,7 @@ export function applyConversationEvent(previous: PublicConversation, event: Insp
       result: resultForStatus(payload.result), result_text: resultForStatus(payload.result_text, payload.result == null),
       ...(payload.result == null && payload.result_text == null ? {status: payload.status ?? 'completion_unknown', result: resultForStatus(payload.summary)} : {}),
     }} : event
-    const calls = applyInspectorEvent(row?.calls ?? [], statusEvent).map(call => call.id !== toolId ? call : {...call,
-      arguments: payload.args_text !== undefined || payload.args !== undefined ? string(payload.args_text ?? payload.args) : call.arguments,
-      argumentsTruncated: false,
+    const calls = applyInspectorEvent(row?.calls ?? [], statusEvent, Infinity).map(call => call.id !== toolId ? call : {...call,
       ...(event.type === 'tool.complete' ? {result: string(payload.result_text ?? payload.result ?? payload.summary), resultTruncated: false} : {}),
     })
     if (row) row.calls = calls

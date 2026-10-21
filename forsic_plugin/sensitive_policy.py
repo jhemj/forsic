@@ -61,9 +61,9 @@ REMEDIES = {
     'sensitive_unsupported_format': 'Use an existing supported extractor, then select its text or record derivative. Binary/container data was not scanned.',
     'sensitive_resume_mismatch': 'This resume_ref belongs to different inputs or settings. Inspect the retained scan; request a new scan explicitly only for the changed scope.',
     'sensitive_source_selection_invalid': 'Copy a retained source_handle and exact returned pointer from this case; do not substitute a path.',
-    'sensitive_export_source_invalid': 'Select a successful, terminated shell export from this conversation with a complete stdout preview.',
-    'sensitive_export_selection_required': 'Copy one returned retained_export_targets entry, including its export_line. A labelled or batched stdout is not one export receipt.',
-    'sensitive_export_receipt_invalid': 'Select a complete retained export receipt with an exported-byte SHA-256; export_line selects one exact retained stdout line.',
+    'sensitive_export_source_invalid': 'Select a successful, terminated shell export from this conversation with a complete selected stdout or stderr preview.',
+    'sensitive_export_selection_required': 'Copy one returned retained_export_targets entry, including its export_line. A labelled or batched stream is not one export receipt.',
+    'sensitive_export_receipt_invalid': 'Select a complete retained export receipt with an exported-byte SHA-256; export_line selects one exact retained stream line.',
     'sensitive_export_destination_invalid': 'Select an export whose retained destination is a file inside this conversation workspace.',
     'sensitive_export_file_unavailable': 'The selected workspace export is unavailable or not a permitted regular file. Inspect it or obtain a new explicit export.',
 }
@@ -124,16 +124,16 @@ def export_receipt(stdout, export_line=None):
 
 
 def workspace_export_scope(data, pointer):
-    """Only the exact retained command stdout can declare an export."""
+    """Only an exact retained command output stream can declare an export."""
     scope = data
-    if data.get('tool') != 'forsic_shell' or pointer != '/stdout':
+    if data.get('tool') != 'forsic_shell' or pointer not in ('/stdout', '/stderr'):
         raise ScanRejected('sensitive_export_source_invalid')
     execution = scope.get('execution')
     preview = scope.get('preview_truncated', {})
     raw = scope.get('raw_output', scope.get('raw_output_metadata', {}))
     if (scope.get('error') or not isinstance(execution, dict)
             or execution.get('exit_code') != 0 or execution.get('termination_confirmed') is not True
-            or not isinstance(preview, dict) or preview.get('stdout')
+            or not isinstance(preview, dict) or preview.get(pointer[1:])
             or not isinstance(raw, dict) or raw.get('truncated') or raw.get('complete') is False):
         raise ScanRejected('sensitive_export_source_invalid')
     return scope
@@ -142,14 +142,14 @@ def workspace_export_scope(data, pointer):
 def properties():
     return {
         'targets': {'type': 'array', 'minItems': 1, 'maxItems': 64,
-            'description': 'Select retained references, never new paths. retained_text scans one body scalar; evidence_file selects a returned original file path; workspace_export selects a complete receipt in /stdout, with the returned export_line for labelled or JSONL output.',
+            'description': 'Select retained references, never new paths. retained_text scans one body scalar; evidence_file selects a returned original file path; workspace_export selects a complete receipt in /stdout or /stderr, with the returned export_line for labelled or JSONL output.',
             'items': {'type': 'object', 'properties': {
                 'source_handle': {'type': 'string', 'maxLength': 2048},
                 'source_id': {'type': 'string', 'maxLength': 64},
                 'source_version': {'type': 'string', 'maxLength': 64},
                 'pointer': {'type': 'string', 'maxLength': 512},
                 'export_line': {'type': 'integer', 'minimum': 1,
-                    'description': 'workspace_export only: exact 1-based LF-delimited line in selected retained stdout, copied from retained_export_targets; never inferred from a path.'},
+                    'description': 'workspace_export only: exact 1-based LF-delimited line in selected retained stdout or stderr, copied from retained_export_targets; never inferred from a path.'},
                 'kind': {'type': 'string', 'enum': ['retained_text', 'evidence_file', 'workspace_export']},
                 'encoding': {'type': 'string', 'enum': ['auto', 'utf-8', 'utf-16', 'cp949']},
                 'format': {'type': 'string', 'enum': ['text', 'csv', 'jsonl']}},
@@ -186,9 +186,9 @@ def validate(args):
                 or value['encoding'] not in ('auto', 'utf-8', 'utf-16', 'cp949')
                 or value['format'] not in ('text', 'csv', 'jsonl')):
             raise ValueError('Unsupported target kind, encoding or format')
-        if 'export_line' in value and (value['kind'] != 'workspace_export' or value['pointer'] != '/stdout'
+        if 'export_line' in value and (value['kind'] != 'workspace_export' or value['pointer'] not in ('/stdout', '/stderr')
                 or type(value['export_line']) is not int or value['export_line'] < 1):
-            raise ValueError('export_line must select one positive retained /stdout line for workspace_export')
+            raise ValueError('export_line must select one positive retained /stdout or /stderr line for workspace_export')
         result.append(value)
     profiles = args.get('profiles', ['secrets', 'pii_kr'])
     if (not isinstance(profiles, list) or not profiles or len(profiles) > 2
@@ -654,7 +654,8 @@ def invoke(case, submitted, session_id, native_execution=None):
                 from .environments import EnvironmentManager
                 with EnvironmentManager().execution(case,expected_snapshot=snapshot):
                     result = shell.run_container(command, container, native_execution,
-                        timeout_seconds=args['timeout_seconds'], max_output_bytes=65536, cleanup_on_return=True)
+                        timeout_seconds=args['timeout_seconds'], max_output_bytes=65536, cleanup_on_return=True,
+                        retained_container=True)
                 execution = _execution(result['execution'])
                 safe['execution'] = execution
                 _write(job / 'stdout.bin', result['stdout'])

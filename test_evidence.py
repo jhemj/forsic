@@ -95,9 +95,13 @@ class EvidenceTests(unittest.TestCase):
     def test_image_parser_is_readonly_and_isolated(self):
         from test_execution_contract import Process
         (self.root/'disk.e01').write_bytes(b'fixture')
-        with patch('forsic_plugin.image_process.subprocess.Popen', return_value=Process(b'{"volumes":[]}')) as runner:
+        with patch('forsic_plugin.image_process.subprocess.Popen', return_value=Process(b'{"volumes":[]}')) as runner, \
+             patch('forsic_plugin.image_process._cleanup', return_value={'confirmed':True}) as cleanup:
             result = self.call('image_files', {'path': 'disk.e01', 'action': 'volumes'})
+        runner.assert_called_once()
+        cleanup.assert_called_once()
         command = runner.call_args.args[0]
+        self.assertNotIn('--rm', command)
         self.assertIn('--read-only', command)
         self.assertEqual(command[command.index('--network')+1], 'none')
         self.assertIn('no-new-privileges', command)

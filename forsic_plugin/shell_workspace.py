@@ -508,7 +508,7 @@ def invoke(case,args,session_id,native_execution=None, *, _pack_root=None, _exte
         with _workspace_lock(workspace), EnvironmentManager().execution(case,expected_snapshot=snapshot):
             result=run_container(command,container,native_execution,
                 timeout_seconds=args['timeout_seconds'],max_output_bytes=max_output_bytes,
-                cleanup_on_return=True)
+                cleanup_on_return=True,retained_container=True)
         value['execution']=result['execution']
         raw=_raw_output(result['stdout'],result['stderr'],complete=True,limit=max_output_bytes)
         if value['execution']['state']=='completion_unknown':

@@ -34,6 +34,7 @@ _ACTION_COMMAND_MAP: dict[str, tuple[str, str]] = {
 }
 
 _MANAGER_ACTIONS = frozenset({
+    "goal.pause_safe",
     "subgoal.add",
     "subgoal.remove",
     "subgoal.clear",
@@ -52,6 +53,7 @@ def _safe_goal_snapshot(state) -> dict | None:
     snapshot = {
         "title": state.goal,
         "status": state.status,
+        "pause_requested": state.pause_requested,
         "turns_used": state.turns_used,
         "max_turns": state.max_turns,
         "contract": state.contract.to_dict(),
@@ -278,7 +280,34 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 4001, "session has no stored key")
 
     try:
-        if action in _ACTION_COMMAND_MAP:
+        if action == "goal.pause_safe":
+            from hermes_cli.goals import GoalManager
+            with session["history_lock"]:
+                mode = (getattr(session.get("agent"), "api_mode", None)
+                        or (session.get("_metadata_mirror") or {}).get("api_mode")
+                        or (session.get("model_override") or {}).get("api_mode"))
+                if session.get("running") and mode == "codex_app_server":
+                    return _err(rid, 4004, "safe pause is unsupported for the externally owned codex_app_server turn loop")
+                manager = GoalManager(session_key)
+                if session.get("running"):
+                    manager.request_pause()
+                elif manager.state is not None and manager.state.status == "active":
+                    manager.pause(reason="user-safe-paused")
+                # Reuse admission's stop latch, without cancelling requests/tools/children.
+                session["_turn_cancel_requested"] = True
+                session["_queued_prompt_generation"] = int(session.get("_queued_prompt_generation", 0)) + 1
+            action_result = {"result": {"type": "exec", "output": "Safe pause requested."}}
+        elif action in _ACTION_COMMAND_MAP:
+            if action == "goal.resume":
+                from hermes_cli.goals import GoalManager
+                with session["history_lock"]:
+                    manager = GoalManager(session_key)
+                    if manager.state is not None and manager.state.pause_requested:
+                        if session.get("running"):
+                            return _err(rid, 4009, "safe pause is still finishing the current response/tool batch")
+                        manager.settle_pause()  # a crashed owner has no in-flight batch
+                    elif session.get("running") and manager.state is not None and manager.state.status == "paused":
+                        return _err(rid, 4009, "safe pause is still settling")
             name, arg = _ACTION_COMMAND_MAP[action]
             action_result = _dispatch_command(rid, session_id=params.get("session_id") or "", name=name, arg=arg)
         else:

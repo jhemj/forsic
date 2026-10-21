@@ -111,7 +111,7 @@ def _goal_advisory_stop(agent, final_response):
 
         expected = db.get_meta("goal:" + session_id)
         state = GoalState.from_json(expected) if expected else None
-        if state is None or state.status != "active":
+        if state is None or state.status != "active" or state.pause_requested:
             return None
 
         def cancelled():

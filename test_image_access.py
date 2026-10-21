@@ -30,6 +30,9 @@ class Node:
     def open(self):
         return self.local.open('rb')
 
+    def scandir(self):
+        return self.local.iterdir()
+
 
 class ImageAccessTests(unittest.TestCase):
     def setUp(self):
@@ -163,6 +166,71 @@ class ImageAccessTests(unittest.TestCase):
             code, result = self.cli(['/evidence/synthetic.e01', 'read'])
         self.assertEqual(code, 1)
         self.assertEqual(result['error_type'], 'InvalidArguments')
+
+    def test_file_listing_reports_type_and_bounded_recovery_without_reading(self):
+        with patch.object(self.node, 'open', side_effect=AssertionError('listing must not read content')):
+            with self.assertRaises(NotADirectoryError) as raised:
+                inspect(self.image, self.args('list', volume_offset=4096))
+            details = raised.exception.details
+            self.assertEqual(details['observed_kind'], 'regular_file')
+            self.assertEqual(details['bytes'], len(self.payload.read_bytes()))
+            self.assertTrue(details['content_not_measured'])
+            self.assertNotIn('lines', details)
+            self.assertNotIn('entries', details)
+            with patch.object(access, 'evidence_image', return_value=self.image):
+                code, result = self.cli(['/evidence/synthetic.e01', 'list',
+                    '--volume-offset', '4096', '--file-path', self.node.path])
+        self.assertEqual(code, 1)
+        self.assertEqual(result['error_type'], 'NotADirectoryError')
+        self.assertEqual(result['recovery_argv'][3], 'read_bytes')
+        recovered = inspect(self.image, result['recovery_arguments'])
+        self.assertEqual(base64.b64decode(recovered['base64']), self.payload.read_bytes())
+        self.assertEqual(recovered['volume_offset'], 4096)
+
+    def test_backend_file_listing_preserves_recovery_metadata(self):
+        from forsic_plugin import image_reader
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = image_reader.main([str(self.image), json.dumps(self.args('list'))])
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 0)  # Existing internal JSON error protocol.
+        self.assertEqual(result['error_type'], 'NotADirectoryError')
+        self.assertEqual(result['recovery_arguments']['file_path'], self.node.path)
+
+    def test_listing_recovery_keeps_exact_filename_and_bounded_byte_scope(self):
+        self.node.path = '/odd name/quoted\' file.bin'
+        self.payload.write_bytes(b'x' * 5000)
+        with patch.object(access, 'evidence_image', return_value=self.image):
+            code, result = self.cli(['/evidence/synthetic.e01', 'list', '--file-path', self.node.path])
+        self.assertEqual(code, 1)
+        self.assertEqual(result['recovery_argv'][result['recovery_argv'].index('--file-path') + 1], self.node.path)
+        recovered = inspect(self.image, result['recovery_arguments'])
+        self.assertEqual((recovered['byte_start'], recovered['byte_end']), (0, 4096))
+        self.assertEqual(recovered['next_offset'], 4096)
+        self.assertFalse(recovered['complete_file'])
+
+    def test_directory_and_unobserved_types_do_not_offer_file_recovery(self):
+        directory = self.root / 'empty-dir'
+        directory.mkdir()
+        self.node.local = directory
+        result = inspect(self.image, self.args('list'))
+        self.assertEqual(result['entries'], [])
+        self.assertTrue(result['listing_complete'])
+        self.assertNotIn('recovery_arguments', result)
+        link = self.root / 'link'
+        link.symlink_to(self.payload)
+        self.node.local = link
+        with patch.object(access, 'evidence_image', return_value=self.image):
+            code, result = self.cli(['/evidence/synthetic.e01', 'list', '--file-path', self.node.path])
+        self.assertEqual(code, 1)
+        self.assertNotIn('observed_kind', result)
+        self.assertNotIn('recovery_arguments', result)
+        self.node.local = self.root / 'missing'
+        with patch.object(access, 'evidence_image', return_value=self.image):
+            code, result = self.cli(['/evidence/synthetic.e01', 'list', '--file-path', self.node.path])
+        self.assertEqual(code, 1)
+        self.assertEqual(result['error_type'], 'FileNotFoundError')
+        self.assertNotIn('recovery_arguments', result)
 
     def test_cli_source_boundary_rejects_outside_and_symlink_escape(self):
         evidence = self.root/'evidence'

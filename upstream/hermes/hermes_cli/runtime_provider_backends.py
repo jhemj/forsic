@@ -141,6 +141,17 @@ def _resolve_openrouter_runtime(
     )
     base_url = ((explicit_base_url or "").strip() or env_custom_base_url or (cfg_base_url.strip() if use_config_base_url else "")
                 or env_openrouter_base_url or OPENROUTER_BASE_URL).rstrip("/")
+    # A credential explicitly bound to this trusted custom model endpoint is a
+    # deliberate choice, including the no-key-required sentinel. Ambient named
+    # pools/provider keys must not replace it (or revive auth after it was cleared).
+    config_endpoint_matches = use_config_base_url and base_url == cfg_base_url.strip().rstrip("/")
+    if requested_norm == "custom" and config_endpoint_matches:
+        from hermes_cli.runtime_provider_custom import _model_cfg_key_env_for
+        configured_key = cfg_api_key or _model_cfg_key_env_for(model_cfg, base_url)
+        if rp.has_usable_secret(configured_key) or model_cfg.get("key_env") or model_cfg.get("api_key_env"):
+            api_key = (explicit_api_key or configured_key or "no-key-required").strip()
+            return rp._runtime("custom", rp._resolve_plain_custom_api_mode(model_cfg, base_url), base_url,
+                               api_key, source="env/config")
     # Choose API key based on whether the resolved base_url targets OpenRouter. When hitting OpenRouter,
     # prefer OPENROUTER_API_KEY (issue #289). When hitting a custom endpoint (e.g. Z.ai, local LLM), prefer
     # OPENAI_API_KEY so the OpenRouter key doesn't leak to an unrelated provider (issues #420, #560).
@@ -172,7 +183,7 @@ def _resolve_openrouter_runtime(
         # ``model.api_key`` and ``model.key_env`` back a trusted config base_url only; the key_env
         # rung is what a bare ``provider: custom`` block relies on (#67453).
         from hermes_cli.runtime_provider_custom import _model_cfg_key_env_for
-        candidates = [explicit_api_key, (cfg_api_key if use_config_base_url else ""),
+        candidates = [explicit_api_key, (cfg_api_key if config_endpoint_matches else ""),
                       (_model_cfg_key_env_for(model_cfg, base_url) if use_config_base_url else ""),
                       *rp._host_gated_env_key_candidates(base_url, ollama=True)]
     api_key = next((str(c or "").strip() for c in candidates if rp.has_usable_secret(c)), "")

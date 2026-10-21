@@ -3,6 +3,17 @@ import {isRoutineReportingLookup, shellCommandOutcome, toolDetail, toolStatusLab
 import {savedToolCalls, type InspectorToolCall} from './forsic-inspector'
 const call = (patch: Partial<InspectorToolCall> = {}): InspectorToolCall => ({id: 'a', name: 'forsic_image_files', arguments: '{}', status: 'completed', source: 'saved', ...patch})
 
+it('labels a native batch by its requested tools and public purposes without inventing child execution results', () => {
+  const [batch] = savedToolCalls([{tool_calls: [{id: 'batch-id', function: {name: 'tool_call', arguments: JSON.stringify({calls: [
+    {name: 'forsic_skill', arguments: {name: 'example'}},
+    {name: 'forsic_shell', arguments: {reason: 'Compare selected records', command: 'printf ok'}},
+  ]})}}]}, {role: 'tool', tool_call_id: 'batch-id', content: '{"error":"Local tools require one entry"}'}])
+  expect(batch.id).toBe('batch-id')
+  expect(batch.name).toBe('tool_call')
+  expect(toolDetail(batch)).toMatchObject({label: '조사 스킬 읽기 · 분석 터미널', purpose: 'Compare selected records', summary: 'Local tools require one entry'})
+  expect(toolStatusLabel(batch)).toBe('실패')
+})
+
 it('describes the selected image operation and returned listing without claiming body coverage', () => {
   const detail = toolDetail(call({arguments: JSON.stringify({action: 'list', path: '/evidence/disk.e01', file_path: '/etc', limit: 100}), result: JSON.stringify({entries: [{name: 'a'}, {name: 'b'}], listing_complete: false, next_offset: 2})}))
   expect(detail.label).toBe('이미지 폴더 목록')

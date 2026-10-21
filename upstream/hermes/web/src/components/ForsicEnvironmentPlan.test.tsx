@@ -28,3 +28,13 @@ it('accepts readable functional-check fields as literal argv and exact expected 
 it('rejects help and version commands as functional checks without inventing replacement inputs',async()=>{
  const {host,click,type,plan}=await render([]);await type('기능 검사 이름','설치');await type('기능 검사 실행 파일','parser');await type('기능 검사 인수','--version');await type('기능 검사 기대 출력','2');await click('이 기능 검사를 계획에 추가');expect(host.querySelector('[role=alert]')?.textContent).toContain('실제 합성 입력');expect(plan()).toEqual({});
 });
+
+it('keeps the advanced functional-check editor collapsed until opened and shows the registered count',async()=>{
+ const {host,type,click,plan}=await render([]);
+ const editor=host.querySelector<HTMLDetailsElement>('.forsic-functional-check-editor')!;
+ expect(editor.open).toBe(false);expect(editor.querySelector('summary')!.textContent).toContain('등록된 검사 0개');
+ await act(async()=>editor.querySelector('summary')!.click());expect(editor.open).toBe(true);
+ await type('기능 검사 이름','literal check');await type('기능 검사 실행 파일','parser');await type('기능 검사 인수','synthetic.txt');await type('기능 검사 기대 출력','expected rows');
+ await click('이 기능 검사를 계획에 추가');expect(plan().checks).toEqual([{name:'literal check',argv:['parser','synthetic.txt'],expected_stdout:'expected rows'}]);expect(editor.querySelector('summary')!.textContent).toContain('등록된 검사 1개');
+ await act(async()=>editor.querySelector('summary')!.click());expect(editor.open).toBe(false);expect(plan().checks).toHaveLength(1);
+});

@@ -17,6 +17,7 @@ def api_error(exc):
 async def request_scope(request:Request):
     """Bind in the async request task; sync endpoints inherit its contextvars."""
     from forsic_plugin.tenants import resolve_request,bind_scope
+    unscoped={'tenants_list','tenant_create','setup_get','setup_save','setup_check_model','skills_ui_copy'}
     body={}
     if request.method in ('POST','PUT','PATCH') and 'application/json' in request.headers.get('content-type',''):
         try:body=await request.json()
@@ -32,8 +33,19 @@ async def request_scope(request:Request):
         if len(set(values))>1:raise HTTPException(403,'요청의 테넌트·프로필·사건 범위가 일치하지 않습니다.')
         selected[field]=values[0] if values else ''
     remote_profile=getattr(request.state,'forsic_remote_profile',None)
+    remote_policy=getattr(request.state,'forsic_remote_policy',None)
+    if (getattr(request.scope.get('route'),'name','') in unscoped
+            and selected['profile_name']=='default'
+            and (getattr(request.app.state,'initial_profile','default') or 'default')=='default'
+            and not any(selected[k] for k in ('tenant_id','session_id','case_id'))):
+        # Old entry links may explicitly name the host profile. It is not a
+        # tenant selector, and a clean install need not register a default tenant.
+        selected['profile_name']=''
     try:
-        if remote_profile is not None and any(selected.values()):
+        if remote_policy is not None and any(selected.values()):
+            allowed=remote_policy.select(profile=selected['profile_name'],tenant_id=selected['tenant_id'])
+            selected['profile_name']=allowed.profile
+        elif remote_profile is not None and any(selected.values()):
             if selected['profile_name'] not in ('',remote_profile):
                 raise PermissionError('이 서버에서 제공하는 조직의 조사를 선택해주세요.')
             if selected['tenant_id']:
@@ -48,7 +60,6 @@ async def request_scope(request:Request):
         from forsic_plugin.tenants import TenantRegistry
         # Only the tenant gate and host setup are meaningful without selection.
         # In particular, never follow the legacy global current.json implicitly.
-        unscoped={'tenants_list','tenant_create','setup_get','setup_save','setup_check_model','skills_ui_copy'}
         if TenantRegistry().path.exists() and getattr(request.scope.get('route'),'name','') not in unscoped:
             raise HTTPException(400,'테넌트를 선택해주세요.')
         yield
@@ -118,7 +129,10 @@ def tenants_list(request:Request):
     try:
         tenants=TenantRegistry().list_public()
         remote_profile=getattr(request.state,'forsic_remote_profile',None)
-        if remote_profile is not None:
+        remote_policy=getattr(request.state,'forsic_remote_policy',None)
+        if remote_policy is not None:
+            tenants=remote_policy.tenants()
+        elif remote_profile is not None:
             tenants=[item for item in tenants if item['profile_name']==remote_profile]
         can_create=remote_profile is None and local_admin(request)
         return {'tenants':tenants,'access':{'can_create':can_create,

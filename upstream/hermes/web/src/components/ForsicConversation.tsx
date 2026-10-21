@@ -22,8 +22,9 @@ export interface ForsicConversationProps {
   inputDisabled?: boolean
   pendingContent?: ReactNode
   children?: ReactNode
-  control?: {paused: boolean; pending: boolean; disabled?: boolean; onToggle: () => void}
+  control?: {paused: boolean; pausing?: boolean; pending: boolean; disabled?: boolean; onToggle: () => void}
   reviewActivity?: ReviewActivity | null
+  recentAvgTps?: number | null
   contextUsage?: ContextUsage | null
 }
 
@@ -36,6 +37,13 @@ function ContextMeter({usage, connected}: {usage?: ContextUsage | null; connecte
     <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="7" pathLength="100" strokeDasharray={`${Math.min(100, percent ?? 0)} 100`}/></svg>
     <span>{label}{usage && !connected && <small> · 마지막 확인</small>}</span>
   </div>
+}
+
+function RecentSpeed({value, connected}: {value?: number | null; connected: boolean}) {
+  if (!connected || typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null
+  const label = `최근 평균 ${value.toLocaleString('ko-KR', {minimumFractionDigits: 1, maximumFractionDigits: 1})} 토큰/초`
+  const detail = '사용량이 확인된 최근 완료 API 요청 최대 10회의 출력 토큰 합계를 요청 시간 합계로 나눈 값입니다. 입력 처리와 대기 시간을 포함하며, 순수 생성 속도나 세션 전체 평균이 아닙니다.'
+  return <span className="fc-recent-speed" tabIndex={0} title={detail} aria-label={`${label}. ${detail}`}>{label}</span>
 }
 
 /** Abstract activity belongs to the pending reply, never the application's mascot. */
@@ -104,7 +112,7 @@ function ReviewCard({item}: {item: ReviewChatItem}) {
   </div>
 }
 
-export function ForsicConversation({rows, running, connected, loading, statusText, error, hasMore, onLoadEarlier, onSend, inputDisabled, pendingContent, children, control, contextUsage, reviewActivity}: ForsicConversationProps) {
+export function ForsicConversation({rows, running, connected, loading, statusText, error, hasMore, onLoadEarlier, onSend, inputDisabled, pendingContent, children, control, contextUsage, recentAvgTps, reviewActivity}: ForsicConversationProps) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState(false)
@@ -198,9 +206,9 @@ export function ForsicConversation({rows, running, connected, loading, statusTex
       <textarea ref={input} id="forsic-chat-draft" value={draft} rows={2} disabled={disabled} placeholder={control?.paused ? '재개하면 이 대화를 이어갈 수 있어요…' : '포식이에게 물어보세요…'} onChange={event => {draftRef.current = event.target.value; setDraft(event.target.value)}} onCompositionStart={() => {composing.current = true}} onCompositionEnd={() => {composing.current = false}} onKeyDown={event => {
         if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !composing.current && event.keyCode !== 229) {event.preventDefault(); void submit()}
       }} />
-      <div className="fc-compose-actions"><div className="fc-compose-meta"><ContextMeter usage={contextUsage} connected={connected}/></div><div>
+      <div className="fc-compose-actions"><div className="fc-compose-meta"><ContextMeter usage={contextUsage} connected={connected}/><RecentSpeed value={recentAvgTps} connected={connected}/></div><div>
 
-        {control && <button type="button" className="fc-control" onClick={control.onToggle} disabled={control.pending || control.disabled} aria-label={control.paused ? '조사 재개' : '조사 일시정지'}><svg viewBox="0 0 16 16" aria-hidden="true">{control.paused ? <path d="m5 3 8 5-8 5Z" /> : <path d="M4 3h3v10H4zm5 0h3v10H9z" />}</svg>{control.pending ? '처리 중' : control.paused ? '재개' : '일시정지'}</button>}
+        {control && <button type="button" className="fc-control" onClick={control.onToggle} disabled={control.pending || control.pausing || control.disabled} aria-label={control.paused ? '조사 재개' : control.pausing ? '안전하게 일시정지 중' : '안전하게 일시정지'}><svg viewBox="0 0 16 16" aria-hidden="true">{control.paused ? <path d="m5 3 8 5-8 5Z" /> : <path d="M4 3h3v10H4zm5 0h3v10H9z" />}</svg>{control.pending ? '처리 중' : control.pausing ? '작업 마무리 중' : control.paused ? '재개' : '안전하게 일시정지'}</button>}
         <button type="submit" className="fc-send" disabled={disabled || sending || !draft.trim()} aria-label="메시지 보내기"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 15 0-10m-4 4 4-4 4 4" /></svg></button>
       </div></div>
     </form>{sendError && <p className="fc-error" role="alert">전송 결과를 확인해 주세요. 작성한 내용은 유지했습니다.</p>}</div>

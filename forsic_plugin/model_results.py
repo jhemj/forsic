@@ -1,5 +1,6 @@
 """Native model presentation only. The case ledger keeps the complete returns."""
 import base64
+import json
 
 
 def _mission_summary(record):
@@ -65,27 +66,41 @@ def _shell_view(view, source):
 def _export_target(view):
     """Select only a complete retained receipt; staging still verifies its file."""
     from .sensitive_policy import export_receipt, export_receipt_lines, workspace_export_scope
-    try:
-        workspace_export_scope(view, '/stdout')
-    except ValueError:
-        return
-    try:
-        export_receipt(view.get('stdout', ''))
-    except (TypeError, ValueError):
-        selectors, total = [], 0
-        for line, _ in export_receipt_lines(view.get('stdout', '')):
+    selectors, seen, total = [], set(), 0
+    # The helper mirrors completed exports to stderr. Prefer stdout and omit
+    # identical mirrored declarations without changing either retained stream.
+    for stream in ('stdout', 'stderr'):
+        pointer = '/' + stream
+        try:
+            workspace_export_scope(view, pointer)
+        except ValueError:
+            continue
+        text = view.get(stream, '')
+        try:
+            receipts = [(None, export_receipt(text))]
+        except (TypeError, ValueError):
+            receipts = export_receipt_lines(text)
+        for line, receipt in receipts:
+            identity = json.dumps(receipt, sort_keys=True, ensure_ascii=False)
+            # Repeated receipts within one stream retain their exact selectors.
+            if stream == 'stderr' and identity in seen:
+                continue
             total += 1
             if len(selectors) < 64:
-                selectors.append({'source_handle': view['source_handle'],
-                    'pointer': '/stdout', 'kind': 'workspace_export', 'export_line': line})
-        if not selectors:
-            return
+                target = {'source_handle': view['source_handle'], 'pointer': pointer, 'kind': 'workspace_export'}
+                if line is not None:
+                    target['export_line'] = line
+                selectors.append(target)
+            if stream == 'stdout':
+                seen.add(identity)
+    if not selectors:
+        return
+    if total == 1 and 'export_line' not in selectors[0]:
+        view['retained_export_target'] = selectors[0]
+    else:
         view.update(retained_export_targets=selectors, retained_export_target_count=total,
             omitted_retained_export_target_count=total-len(selectors))
-    else:
-        view['retained_export_target'] = {'source_handle': view['source_handle'],
-            'pointer': '/stdout', 'kind': 'workspace_export'}
-    view['retained_export_selection_note'] = ('These are derived selectors over unchanged retained stdout. '
+    view['retained_export_selection_note'] = ('These are derived selectors over unchanged retained stdout/stderr. '
         'Copy one exact target, including export_line when present, after choosing a profile and its required format/ABI. '
         'Admission still verifies source version, conversation ownership, complete receipt, file boundaries and exported-byte hash; this selector is not admission or coverage.')
 

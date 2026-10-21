@@ -50,7 +50,7 @@ function ConversationPage({isActive = true, navigationTarget, caseLabel, convers
     <ForsicWorkbench inspector={inspector} expectedCaseId={expectedCaseId} connected={chat.connected} running={chat.running} statusText={chat.control.paused ? '일시정지됨' : chat.statusText}>
       <ForsicConversation key={`${profile}:${sessionId}`} rows={chat.rows} running={chat.running} connected={chat.connected} loading={chat.loading}
         statusText={chat.control.paused ? '일시정지됨' : chat.statusText} error={chat.error} hasMore={chat.hasMore} onLoadEarlier={chat.onLoadEarlier}
-        onSend={chat.send} inputDisabled={chat.inputDisabled} control={chat.control} contextUsage={chat.contextUsage} reviewActivity={chat.reviewActivity} connectionText={chat.connectionText}
+        onSend={chat.send} inputDisabled={chat.inputDisabled} control={chat.control} contextUsage={chat.contextUsage} recentAvgTps={chat.recentAvgTps} reviewActivity={chat.reviewActivity} connectionText={chat.connectionText}
         pendingContent={<ForsicRequests requests={chat.pendingRequests} pendingApproval={chat.pendingApproval?.params}
           onApproval={chat.onApproval} connected={chat.connected} />}>
         {!chat.connected && !chat.control.paused && <div className="forsic-chat-recovery"><span>{chat.reconnecting ? '연결을 자동으로 다시 확인하고 있어요.' : '현재 연결을 다시 확인할 수 있어요.'}</span><button type="button" disabled={chat.loading} onClick={chat.reconnect}><RefreshCw size={13} />다시 연결</button></div>}

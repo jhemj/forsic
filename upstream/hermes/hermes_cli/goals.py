@@ -453,6 +453,7 @@ class GoalState:
     last_verdict: Optional[str] = None        # "done" | "blocked" | "continue" | "wait" | "skipped"
     last_reason: Optional[str] = None
     paused_reason: Optional[str] = None       # why we auto-paused (budget, etc.)
+    pause_requested: bool = False            # finish the accepted response/tool batch, then pause
     consecutive_parse_failures: int = 0       # judge-output parse failures in a row
     # Tracked separately from parse failures: a broken API key returns 401 every call and must
     # auto-pause instead of burning the budget on an unreachable judge.
@@ -506,6 +507,7 @@ class GoalState:
             last_verdict=data.get("last_verdict"),
             last_reason=data.get("last_reason"),
             paused_reason=data.get("paused_reason"),
+            pause_requested=data.get("pause_requested") is True,
             subgoals=[str(s).strip() for s in raw_subgoals if str(s).strip()] if isinstance(raw_subgoals, list) else [],
             waiting_on_pid=(int(data["waiting_on_pid"]) if data.get("waiting_on_pid") else None),
             waiting_on_session=(str(data["waiting_on_session"]) if data.get("waiting_on_session") else None),
@@ -1364,6 +1366,7 @@ class GoalManager:
     def _pause_state(self, reason: str) -> None:
         settle_runtime(self._state)
         self._state.status = "paused"
+        self._state.pause_requested = False
         self._state.runtime_started_at = None
         self._state.paused_reason = reason
         self._save()
@@ -1402,6 +1405,22 @@ class GoalManager:
         return self._state
 
     @_goal_state_mutation
+    def request_pause(self) -> Optional[GoalState]:
+        """Persist intent without withdrawing authority from an already accepted tool batch."""
+        if self._state is not None and self._state.status == "active":
+            self._state.pause_requested = True
+            return self._save()
+        return self._state
+
+    @_goal_state_mutation
+    def settle_pause(self, *, reason: str = "user-safe-paused") -> bool:
+        """Called only at a native execution boundary with no response/tool in flight."""
+        if self._state is None or self._state.status != "active" or not self._state.pause_requested:
+            return False
+        self.pause(reason=reason)
+        return True
+
+    @_goal_state_mutation
     def resume(self, *, reset_budget: bool = True) -> Optional[GoalState]:
         if not self._state:
             return None
@@ -1412,6 +1431,8 @@ class GoalManager:
         if runtime_remaining(self._state) == 0:
             self._pause_state(RUNTIME_BUDGET_REASON)
             return self._state
+        if self._state.pause_requested:
+            raise RuntimeError("safe pause has not reached its execution boundary")
         was_active = self._state.status == "active"
         self._state.status = "active"
         if not was_active and self._state.runtime_budget_seconds is not None:
@@ -1808,7 +1829,7 @@ class GoalManager:
         ``continuation_prompt``, ``verdict``, ``reason``, ``message``). Both real user prompts and our
         own continuations increment ``turns_used`` — both consume model budget."""
         state = self._state
-        if state is None or state.status != "active":
+        if state is None or state.status != "active" or state.pause_requested:
             return _decision(state.status if state else None, False, None, "inactive", "no active goal", "")
         self._assert_evaluation_current()
 
@@ -1955,7 +1976,7 @@ class GoalManager:
         if not hasattr(self, "_evaluation_expected"):
             self._state = load_goal(self.session_id) or self._state
         s = self._state
-        if not s or s.status != "active":
+        if not s or s.status != "active" or s.pause_requested:
             return None
         if runtime_remaining(s) == 0:
             if hasattr(self, "_evaluation_expected"):

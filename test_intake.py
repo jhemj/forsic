@@ -77,6 +77,13 @@ class IntakeTests(unittest.TestCase):
         self.assertIsNone(self.intake.after('one', inject))
         self.assertEqual(self.intake.case('one').config['question'], OPTIONS[0])
         self.assertEqual(self.intake.state('one')['stage'], 'goal_queued')
+        # The real legacy intake path persists the scan-first contract and
+        # projects the same request as wizard admission without starting tools.
+        from forsic_plugin.capability_policy import policy
+        from forsic_plugin.onboarding import initial_triage
+        stored = self.intake.case('one').config
+        self.assertEqual(stored['investigation_goal'], GOAL)
+        self.assertTrue(initial_triage(stored, policy())['execution_requested'])
         meta_before = self.intake.state('one')
         self.assertNotIn('선택지', self.intake.before('one', '상태를 알려줘'))
         self.assertEqual(self.intake.state('one'), meta_before)

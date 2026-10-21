@@ -9,6 +9,8 @@ export interface InspectorToolCall {
   argumentsTruncated?: boolean
   resultTruncated?: boolean
   durationSeconds?: number
+  submittedRequest?: {name: string; arguments: string; argumentsTruncated?: boolean}
+  requestedTools?: {name: string; arguments: string}[]
 }
 export interface InspectorCatalogueItem {
   name: string
@@ -51,15 +53,45 @@ function resultStatus(...values: unknown[]): InspectorToolCall['status'] {
   if (states.some(state => ['queued', 'pending', 'accepted', 'running', 'in_progress'].includes(String(state)))) return 'running'
   return 'completed'
 }
-function truncated(value: unknown): boolean {
-  return (typeof value === 'string' ? value : JSON.stringify(value ?? '', null, 2)).length > TEXT_LIMIT
+function truncated(value: unknown, limit = TEXT_LIMIT): boolean {
+  return (typeof value === 'string' ? value : JSON.stringify(value ?? '', null, 2)).length > limit
 }
 function finished(call: InspectorToolCall | undefined): boolean { return call?.result !== undefined || call?.status === 'completed' || call?.status === 'error' }
-function text(value: unknown): string {
+function text(value: unknown, limit = TEXT_LIMIT): string {
   const result = typeof value === 'string' ? value : JSON.stringify(value ?? '', null, 2)
-  return result.length > TEXT_LIMIT ? result.slice(0, TEXT_LIMIT) + '\n…' : result
+  return result.length > limit ? result.slice(0, limit) + '\n…' : result
 }
-export function savedToolCalls(messages: unknown[]): InspectorToolCall[] {
+/** Mirror native bridge shapes without inventing child execution IDs. */
+function toolInput(name: string, input: unknown, limit: number) {
+  let argumentsValue = input
+  let resolvedName = name
+  let requestedTools: InspectorToolCall['requestedTools']
+  if (name === 'tool_call') {
+    try {
+      const args = record(typeof input === 'string' ? JSON.parse(input) : input)
+      let rawEntries: unknown = args.calls ?? [args]
+      if (typeof rawEntries === 'string') rawEntries = JSON.parse(rawEntries)
+      const entries: unknown[] = Array.isArray(rawEntries) ? rawEntries : [rawEntries]
+      const normalized = entries.map(raw => {
+        const entry = record(raw), underlying = typeof entry.name === 'string' ? entry.name.trim() : ''
+        let inner = entry.arguments ?? {}
+        if (typeof inner === 'string') inner = inner.trim() ? JSON.parse(inner) : {}
+        if (underlying && !['tool_call', 'tool_search', 'tool_describe'].includes(underlying) && inner && typeof inner === 'object' && !Array.isArray(inner)) {
+          return {name: underlying, arguments: inner}
+        }
+        return null
+      })
+      if (normalized.length && normalized.every(entry => entry !== null)) {
+        if (normalized.length === 1) {resolvedName = normalized[0].name; argumentsValue = normalized[0].arguments}
+        else requestedTools = normalized.map(entry => ({name: entry.name, arguments: text(entry.arguments, limit)}))
+      }
+    } catch { /* A malformed request remains the original bridge request. */ }
+  }
+  return {name: resolvedName, arguments: text(argumentsValue, limit), argumentsTruncated: truncated(argumentsValue, limit),
+    ...(requestedTools ? {requestedTools} : {}),
+    ...(resolvedName !== name ? {submittedRequest: {name, arguments: text(input, limit), argumentsTruncated: truncated(input, limit)}} : {})}
+}
+export function savedToolCalls(messages: unknown[], textLimit = TEXT_LIMIT): InspectorToolCall[] {
   const calls = new Map<string, InspectorToolCall>()
   for (const value of messages) {
     const message = record(value)
@@ -68,18 +100,18 @@ export function savedToolCalls(messages: unknown[]): InspectorToolCall[] {
       for (const value of message.tool_calls) {
         const call = record(value), fn = record(call.function)
         if (typeof call.id !== 'string' || typeof fn.name !== 'string') continue
-        calls.set(call.id, {id: call.id, name: fn.name, arguments: text(fn.arguments), argumentsTruncated: truncated(fn.arguments), status: 'unknown', source: 'saved'})
+        calls.set(call.id, {id: call.id, ...toolInput(fn.name, fn.arguments, textLimit), status: 'unknown', source: 'saved'})
       }
     }
     if (message.role === 'tool' && typeof message.tool_call_id === 'string') {
       const id = message.tool_call_id
       const call = calls.get(id)
-      calls.set(id, {...(call ?? {id, name: String(message.tool_name || 'tool'), arguments: '', source: 'saved' as const}), result: text(message.content), resultTruncated: truncated(message.content), status: resultStatus(message, message.content)})
+      calls.set(id, {...(call ?? {id, name: String(message.tool_name || 'tool'), arguments: '', source: 'saved' as const}), result: text(message.content, textLimit), resultTruncated: truncated(message.content, textLimit), status: resultStatus(message, message.content)})
     }
   }
   return [...calls.values()].slice(-INSPECTOR_HISTORY_LIMIT)
 }
-export function applyInspectorEvent(calls: InspectorToolCall[], event: InspectorEvent): InspectorToolCall[] {
+export function applyInspectorEvent(calls: InspectorToolCall[], event: InspectorEvent, textLimit = TEXT_LIMIT): InspectorToolCall[] {
   if (event.type !== 'tool.start' && event.type !== 'tool.complete') return calls
   const payload = record(event.payload)
   if (typeof payload.tool_id !== 'string' || typeof payload.name !== 'string') return calls
@@ -87,11 +119,11 @@ export function applyInspectorEvent(calls: InspectorToolCall[], event: Inspector
   // Late hydration/start delivery must not downgrade an already returned call.
   if (event.type === 'tool.start' && finished(prior)) return calls
   const call: InspectorToolCall = {
-    ...prior, id: payload.tool_id, name: payload.name,
-    arguments: payload.args_text !== undefined ? text(payload.args_text) : payload.args !== undefined ? text(payload.args) : prior?.arguments ?? '',
-    argumentsTruncated: truncated(payload.args_text ?? payload.args ?? prior?.arguments),
+    ...prior, id: payload.tool_id,
+    ...toolInput(payload.name === 'tool_call' && prior && payload.args_text === undefined && payload.args === undefined ? prior.name : payload.name,
+      payload.args_text ?? payload.args ?? prior?.arguments ?? '', textLimit),
     source: 'live', status: event.type === 'tool.start' ? 'running' : resultStatus(payload, payload.result, payload.result_text),
-    ...(event.type === 'tool.complete' ? {result: text(payload.result_text ?? payload.result ?? payload.summary), resultTruncated: truncated(payload.result_text ?? payload.result ?? payload.summary)} : {}),
+    ...(event.type === 'tool.complete' ? {result: text(payload.result_text ?? payload.result ?? payload.summary, textLimit), resultTruncated: truncated(payload.result_text ?? payload.result ?? payload.summary, textLimit)} : {}),
     ...(typeof payload.duration_s === 'number' ? {durationSeconds: payload.duration_s} : {}),
   }
   return (prior ? calls.map(item => item.id === call.id ? call : item) : [...calls, call]).slice(-INSPECTOR_HISTORY_LIMIT)
@@ -103,7 +135,13 @@ export function mergeInspectorHistory(saved: InspectorToolCall[], live: Inspecto
     const persisted = calls.get(call.id)
     // A bounded history page must not reappend older live calls as new activity.
     if (!persisted && index < lastShared) continue
-    calls.set(call.id, finished(persisted) && !finished(call) ? {...persisted!, arguments: persisted!.arguments || call.arguments} : call)
+    const merged = {...persisted, ...call, name: call.name === 'tool_call' && persisted ? persisted.name : call.name,
+      arguments: call.arguments || persisted?.arguments || '',
+      argumentsTruncated: call.arguments ? call.argumentsTruncated : persisted?.argumentsTruncated ?? call.argumentsTruncated,
+      ...(persisted?.submittedRequest && !call.submittedRequest ? {submittedRequest: persisted.submittedRequest} : {}),
+      ...(persisted?.requestedTools && !call.requestedTools ? {requestedTools: persisted.requestedTools} : {}),
+    }
+    calls.set(call.id, finished(persisted) && !finished(call) ? {...persisted!, arguments: persisted!.arguments || call.arguments} : merged)
   }
   return [...calls.values()].slice(-INSPECTOR_HISTORY_LIMIT)
 }

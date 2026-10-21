@@ -191,8 +191,8 @@ class DeploymentTests(unittest.TestCase):
                 deploy.unit_text(Path(value), Path('/usr/bin/python3'))
         self.assertEqual(deploy.private_url('http://[::1]:11434/v1/'), 'http://[::1]:11434/v1')
 
-    def native(self):
-        path = self.root / 'state/hermes/state.db'
+    def native(self, home=None):
+        path = (home or self.root / 'state/hermes') / 'state.db'
         path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(path)) as db, db:
             db.execute('CREATE TABLE state_meta(key TEXT, value TEXT)')
@@ -225,6 +225,105 @@ class DeploymentTests(unittest.TestCase):
         self.assertFalse(deploy.idle_state(self.root)['observed_idle'])
         verify.write_text('broken')
         self.assertEqual(deploy.idle_state(self.root)['unknown'], ['verification_receipt_unreadable'])
+
+    def test_idle_counts_root_and_tenant_native_controls_without_writes(self):
+        root_db=self.native()
+        home=self.root/'state/hermes/profiles/tenant-synthetic'
+        tenant_db=self.native(home)
+        for path in (root_db,tenant_db):
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute('INSERT INTO state_meta VALUES(?,?)',
+                    ('goal:synthetic',json.dumps({'status':'active','pause_requested':True})))
+        with closing(sqlite3.connect(tenant_db)) as db, db:
+            db.execute('INSERT INTO session_turn_leases VALUES(?)',('tenant-turn',))
+        before={path:path.read_bytes() for path in (root_db,tenant_db)}
+        result=deploy.idle_state(self.root)
+        self.assertFalse(result['observed_idle'])
+        self.assertEqual(result['active_goals'],2)
+        self.assertEqual(result['turn_leases'],1)
+        self.assertEqual(result['unknown'],[])
+        self.assertEqual({path:path.read_bytes() for path in before},before)
+        for path in (root_db,tenant_db):
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute('DELETE FROM session_turn_leases')
+                db.execute('UPDATE state_meta SET value=?',('{"status":"paused"}',))
+        self.assertTrue(deploy.idle_state(self.root)['observed_idle'])
+        with closing(sqlite3.connect(tenant_db)) as db, db:
+            db.execute('UPDATE state_meta SET value=?',('{"status":"paused","pause_requested":true}',))
+        self.assertEqual(deploy.idle_state(self.root)['active_goals'],1)
+
+    def test_current_native_case_layout_verification_blocks_even_paused_tenant(self):
+        home=self.root/'state/hermes/profiles/tenant-synthetic'
+        path=self.native(home)
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute('INSERT INTO state_meta VALUES(?,?)',('goal:synthetic','{"status":"paused"}'))
+        receipt=home/'forsic/intake/cases/synthetic/results/verify-synthetic.json'
+        receipt.parent.mkdir(parents=True)
+        for status in ('queued','running','completed'):
+            receipt.write_text(json.dumps({'status':status,'pid':999999999}))
+            before=receipt.read_bytes()
+            result=deploy.idle_state(self.root)
+            self.assertEqual(result['verification_jobs'],int(status!='completed'))
+            self.assertEqual(result['observed_idle'],status=='completed')
+            self.assertEqual(receipt.read_bytes(),before)
+        root_receipt=self.root/'state/hermes/forsic/intake/cases/root-case/results/verify-root.json'
+        root_receipt.parent.mkdir(parents=True)
+        root_receipt.write_text('{"status":"running"}')
+        self.assertEqual(deploy.idle_state(self.root)['verification_jobs'],1)
+        receipt.write_text('{}')
+        self.assertIn('verification_receipt_unreadable',deploy.idle_state(self.root)['unknown'])
+
+    def test_unreadable_tenant_database_is_unknown(self):
+        self.native()
+        path=self.root/'state/hermes/profiles/tenant-synthetic/state.db'
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b'not a native SQLite database')
+        result=deploy.idle_state(self.root)
+        self.assertFalse(result['observed_idle'])
+        self.assertEqual(result['unknown'],['native_state_unreadable_or_unsupported'])
+
+    @unittest.skipIf(os.geteuid()==0,'Root can enumerate otherwise unreadable scopes')
+    def test_unreadable_profile_or_verification_scope_is_unknown(self):
+        self.native()
+        profiles=self.root/'state/hermes/profiles';profiles.mkdir()
+        profiles.chmod(0)
+        try:
+            result=deploy.idle_state(self.root)
+            self.assertFalse(result['observed_idle'])
+            self.assertIn('native_scope_unreadable',result['unknown'])
+        finally:
+            profiles.chmod(0o700)
+        home=profiles/'tenant-synthetic';self.native(home)
+        cases=home/'forsic/intake/cases';cases.mkdir(parents=True)
+        cases.chmod(0)
+        try:
+            result=deploy.idle_state(self.root)
+            self.assertFalse(result['observed_idle'])
+            self.assertIn('verification_scope_unreadable',result['unknown'])
+        finally:
+            cases.chmod(0o700)
+
+    def test_idle_does_not_follow_profile_or_case_scope_symlinks(self):
+        self.native()
+        outside=Path(self.temp.name)/'outside-managed-profiles';outside.mkdir()
+        profiles=self.root/'state/hermes/profiles';profiles.mkdir()
+        (profiles/'linked').symlink_to(outside,target_is_directory=True)
+        original_scandir=os.scandir
+        def guarded(path):
+            self.assertFalse(Path(path).is_relative_to(outside),'must not inspect outside managed scope')
+            return original_scandir(path)
+        with patch.object(deploy.os,'scandir',side_effect=guarded):
+            result=deploy.idle_state(self.root)
+        self.assertFalse(result['observed_idle'])
+        self.assertIn('native_scope_unreadable',result['unknown'])
+        (profiles/'linked').unlink()
+        home=profiles/'tenant-synthetic';self.native(home)
+        cases=home/'forsic/intake/cases';cases.mkdir(parents=True)
+        (cases/'linked').symlink_to(outside,target_is_directory=True)
+        with patch.object(deploy.os,'scandir',side_effect=guarded):
+            result=deploy.idle_state(self.root)
+        self.assertFalse(result['observed_idle'])
+        self.assertIn('verification_scope_unreadable',result['unknown'])
 
     def test_doctor_no_network_no_secret_values(self):
         self.init()

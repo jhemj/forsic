@@ -168,13 +168,15 @@ interface PluginSlotProps {
   /** Optional content rendered when no plugins have claimed the slot.
    *  Useful for built-in defaults the plugin would replace. */
   fallback?: React.ReactNode;
+  /** Page-owned presentation state passed to the registered component. */
+  componentProps?: Record<string, unknown>;
 }
 
 /** Render all components registered for a given slot, stacked in order.
  *
  *  Component re-renders when the slot registry changes so plugins that
  *  arrive after initial mount show up without a manual refresh. */
-export function PluginSlot({ name, fallback }: PluginSlotProps) {
+export function PluginSlot({ name, fallback, componentProps }: PluginSlotProps) {
   const [entries, setEntries] = useState<SlotEntry[]>(() => getSlotEntries(name));
 
   useEffect(() => {
@@ -193,7 +195,7 @@ export function PluginSlot({ name, fallback }: PluginSlotProps) {
     Fragment,
     null,
     ...entries.map((entry) =>
-      React.createElement(entry.component, { key: entry.plugin }),
+      React.createElement(entry.component, { ...componentProps, key: entry.plugin }),
     ),
   );
 }

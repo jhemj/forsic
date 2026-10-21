@@ -383,6 +383,22 @@ def _goal_followup_after_turn(
     chain once ``running`` is released, or None.  Compression failures are never judge
     input: the error text is not work toward the goal, and judging it spends a turn."""
     goal_followup = None
+    if session.get("session_key"):
+        from hermes_cli.goals import GoalManager
+        manager = GoalManager(str(session["session_key"]))
+        guardrail = result.get("guardrail") if isinstance(result, dict) else None
+        if (manager.state is not None and manager.state.pause_requested
+                and isinstance(guardrail, dict) and guardrail.get("action") in {"block", "halt"}):
+            manager.pause(reason="tool guardrail: " + str(guardrail.get("code") or "halt"))
+        elif (manager.state is not None and manager.state.pause_requested
+                and isinstance(result, dict) and (result.get("failed") or status == "error")):
+            manager.pause(reason="native work failed before safe pause")
+        elif (manager.state is not None and manager.state.pause_requested
+                and isinstance(result, dict) and result.get("interrupted")
+                and result.get("turn_exit_reason") != "safe_paused_by_user"):
+            manager.pause(reason="native work interrupted before safe pause")
+        else:
+            manager.settle_pause()
     guardrail = result.get("guardrail") if isinstance(result, dict) else None
     if isinstance(guardrail, dict) and guardrail.get("action") in {"block", "halt"}:
         # Excluding this result from the judge prevents a retry, but leaves the
@@ -482,7 +498,9 @@ def _dispatch_followup_turn(rid, sid: str, session: dict, prompt: Any, what: str
     release ``running``."""
     try:
         _emit("message.start", sid)
-        _run_prompt_submit(rid, sid, session, prompt, **({"display_kind": display_kind} if display_kind else {}))
+        if _run_prompt_submit(rid, sid, session, prompt, respect_goal_pause=True,
+                              **({"display_kind": display_kind} if display_kind else {})) is False:
+            raise RuntimeError("Automatic followup was not admitted")
         if on_done is not None:
             on_done()
     except Exception as exc:
@@ -502,7 +520,11 @@ def _run_post_turn_followups(
     steer = result.get("pending_steer") if isinstance(result, dict) else None
     if isinstance(steer, str) and steer.strip():
         with session["history_lock"]:
-            _enqueue_prompt(session, steer, session.get("transport"))
+            envelope = _enqueue_prompt(session, steer, session.get("transport"))
+            if envelope is not None:
+                _persist_queued_user_row(session, envelope, None)
+    if _session_goal_paused(session):
+        return
     if _drain_queued_prompt(rid, sid, session):
         return
     # Addressed human/bot mailbox input is a user turn too. Admit it at this safe
@@ -517,7 +539,7 @@ def _run_post_turn_followups(
         with _session_turn_admission(session) as admitted:
             if not admitted or session.get("running"):
                 return  # user already sent something — their turn wins
-            if session.get("_turn_cancel_requested"):
+            if session.get("_turn_cancel_requested") or _session_goal_paused(session):
                 return  # the user pressed Stop; the goal resumes after their next prompt
             session["running"] = True
         _dispatch_followup_turn(rid, sid, session, goal_followup, "goal continuation dispatch", display_kind="hidden")
@@ -1180,7 +1202,21 @@ def _run_prompt_submit(
     display_metadata: dict | None = None, image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
     terminal_callback: Callable[[dict[str, Any]], None] | None = None,
-    turn_author: dict | None = None) -> bool:
+    turn_author: dict | None = None, respect_goal_pause: bool = False) -> bool:
+    # A notification/queued claim may race a user pause before reaching this
+    # runner. Reject it before preflight can start compression or another model.
+    if respect_goal_pause:
+        with session["history_lock"]:
+            paused = _session_goal_paused(session)
+            if paused:
+                session["running"] = False
+                session.pop("_submit_user_row", None)  # its accepted DB row is retained
+                _release_hosted_room_turn_slot(session)
+        if paused:
+            if terminal_callback is not None:
+                terminal_callback({"status": "failed", "text": "", "error": "User paused before automatic turn admission."})
+            _emit("message.complete", sid, {"text": "", "status": "interrupted"})
+            return False
     # Every dispatch binds the session's own row (session_key, real source) before the turn writes:
     # the synthesized turns that enter here directly (crash auto-continue, queued-prompt drain,
     # wake-ups) bypass prompt.submit's persist, and a row-less turn is otherwise materialized by

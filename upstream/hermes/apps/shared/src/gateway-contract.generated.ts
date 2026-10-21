@@ -840,6 +840,7 @@ export interface GoalSnapshot {
   created_at?: number | null
   updated_at?: number | null
   paused_reason?: string | null
+  pause_requested?: boolean
   last_verdict?: string | null
   last_reason?: string | null
   wait_barrier?: WaitBarrierUntil | WaitBarrierTarget | null

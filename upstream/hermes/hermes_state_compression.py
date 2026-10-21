@@ -218,6 +218,17 @@ class SessionCompressionMixin:
         _insert_session_row's compression-fork backfill: the child stays on the parent's profile and keeps
         gateway routing/origin columns; no owner on either side -> this store's profile."""
         system_prompt_hash = self._store_system_prompt(conn, system_prompt)
+        # Compression continues the same conversation's profile policy. Carry only its provenance,
+        # not a stale runtime snapshot; the caller's child config wins any explicit replacement.
+        try:
+            parent_config = json.loads(parent["model_config"] or "{}")
+        except (TypeError, ValueError):
+            parent_config = {}
+        if not isinstance(parent_config, dict):
+            parent_config = {}
+        child_config = {key: parent_config[key] for key in (
+            "follow_profile_config", "composer_override_profile", "room_plumbing") if key in parent_config}
+        child_config.update(model_config or {})
         # The child continues the parent's tools[] pin (the compaction refresh re-pinned it just
         # before publish), or its first hop to another surface re-derives the array.
         conn.execute(
@@ -230,7 +241,7 @@ class SessionCompressionMixin:
                    archived, auto_archived
                 ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                child_session_id, source, model, json.dumps(model_config) if model_config else None,
+                child_session_id, source, model, json.dumps(child_config) if child_config else None,
                 system_prompt_hash, parent["tool_names"], parent_session_id, cwd or parent["cwd"], parent["git_branch"],
                 parent["git_repo_root"],
                 profile_name or parent["profile_name"] or self._own_profile_name(),
@@ -279,7 +290,7 @@ class SessionCompressionMixin:
                 """SELECT ended_at, end_reason, cwd, git_branch, git_repo_root,
                           user_id, session_key, chat_id, chat_type,
                           thread_id, display_name, origin_json, profile_name, tool_names,
-                          archived, auto_archived
+                          archived, auto_archived, model_config
                    FROM sessions WHERE id = ?""",
                 (parent_session_id,),
             ).fetchone()

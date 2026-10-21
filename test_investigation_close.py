@@ -247,6 +247,7 @@ class InvestigationCloseTests(unittest.TestCase):
                 self.assertEqual(goals.load_goal(self.sid).status, 'paused')
 
     def test_live_turn_and_compression_guards_hold_pause_and_retry_same_request(self):
+        self.catalog.create_conversation(uuid.uuid4(), path=str(self.evidence))
         for table, column in (('session_turn_leases', 'conversation_id'), ('compression_locks', 'session_id')):
             with self.subTest(table=table):
                 self.db.set_meta('goal:' + self.sid, self.goal.to_json())

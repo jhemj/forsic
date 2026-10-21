@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tarfile
@@ -23,13 +24,14 @@ from urllib.parse import urlsplit
 
 PIN = 'bafb42b431fca313471958fdf77f9c30e455f86b'
 DEPENDENCIES = {'python-docx': '1.2.0', 'lxml': '6.1.3', 'python-telegram-bot': '22.8'}
-ROOT_FILES = ('test_initial_triage_context.py', 'test_linux_persistence.py',
+ROOT_FILES = ('test_container_start.py', 'test_initial_triage_context.py', 'test_linux_persistence.py',
               'test_skill_proposals.py', 'test_skill_proposal_native.py', 'test_skill_proposal_api.py', 'test_task_focus.py',
               'test_telegram_clarify_native.py',
               'test_model_result_compaction.py', 'test_triage_target_contract.py',
               'docs/extensions/workflow-skills.md', 'docs/notifications.md',
               'test_tenant_memory.py', 'test_tenant_ownership.py', 'test_tenant_boundaries.py',
-              'docs/tenant-architecture.md',
+              'docs/tenant-architecture.md', 'docs/ren-model.md',
+              'test_remote_tenant_evidence.py', 'test_ren_model_connection.py',
               'test_report_word_export.py', 'test_report_word_api.py', 'test_report_narrative.py', 'docs/report-authoring.md', 'test_reader_explanation.py', 'test_report_numbered_references.py', 'test_native_agent_options.py', 'test_repository_builder.py', 'test_management_api.py', 'test_environment_management.py', 'test_environment_support.py', 'test_extension_hub.py',
               'docs/environment-management.md', 'docs/extensions/format.md',
               'docs/extensions/repository-builder.md', 'docs/roadmap/skill-creator.md',
@@ -87,6 +89,9 @@ REQUIRED_PUBLIC = ('README.md', 'docs/ARCHITECTURE.md', 'docs/TOOLS_AND_SKILLS.m
 CONFIG_FILES = ('SOUL.md', 'AGENTS.md', 'skin.yaml', 'forsic-theme.yaml', 'config.example.yaml', 'bundled-skills/README.txt')
 FIXTURES = ('notes.txt', 'cron.log', 'change.txt')
 UPSTREAM_ADDITIONS = (
+    'tests/hermes_cli/test_runtime_custom_credentials.py',
+    'agent/goal_pause.py', 'tests/agent/test_goal_safe_pause.py',
+    'tests/tui_gateway/test_safe_pause_control.py',
     'web/src/components/ForsicWorkflowSkills.tsx', 'web/src/components/forsic-workflow-skills.css',
     'web/src/components/ForsicMissionFocus.tsx', 'web/src/components/ForsicMissionFocus.test.tsx',
     'web/src/components/forsic-mission-focus.css',
@@ -278,22 +283,97 @@ def initialize(root, base_url, model, python, evidence_dir=None, *, wizard=False
 def idle_state(root):
     """Conservative observation, NOT a lock or permission to kill an active service."""
     result = {'active_goals': 0, 'turn_leases': 0, 'verification_jobs': 0, 'unknown': []}
-    dbpath = root / 'state/hermes/state.db'
-    if dbpath.exists():
+
+    def path_at(base, parts, reason, *, file=False):
+        """Follow only real managed directories; absent optional state is normal."""
+        path = base
+        for index, part in enumerate(parts):
+            path = path / part
+            try:
+                mode = path.lstat().st_mode
+            except FileNotFoundError:
+                return None
+            except OSError:
+                result['unknown'].append(reason)
+                return None
+            regular = file and index == len(parts)-1
+            if not (stat.S_ISREG(mode) if regular else stat.S_ISDIR(mode)):
+                result['unknown'].append(reason)
+                return None
+        return path
+
+    def children(path, reason):
         try:
-            with closing(sqlite3.connect(dbpath.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+            with os.scandir(path) as entries:
+                directories = []
+                for entry in entries:
+                    if entry.is_symlink():
+                        result['unknown'].append(reason)
+                    elif entry.is_dir(follow_symlinks=False):
+                        directories.append(Path(entry.path))
+                return directories
+        except OSError:
+            result['unknown'].append(reason)
+            return []
+
+    state = path_at(Path(root), ('state',), 'state_scope_unreadable')
+    home = path_at(state, ('hermes',), 'native_scope_unreadable') if state else None
+    homes = [home] if home else []
+    profiles = path_at(home, ('profiles',), 'native_scope_unreadable') if home else None
+    if profiles:
+        homes.extend(children(profiles, 'native_scope_unreadable'))
+    for native_home in homes:
+        dbpath = path_at(native_home, ('state.db',), 'native_state_unreadable_or_unsupported', file=True)
+        if dbpath is None:
+            continue
+        try:
+            with closing(sqlite3.connect(dbpath.absolute().as_uri() + '?mode=ro', uri=True)) as db:
                 db.execute('PRAGMA query_only=ON')
-                result['turn_leases'] = db.execute('SELECT COUNT(*) FROM session_turn_leases').fetchone()[0]
+                result['turn_leases'] += db.execute('SELECT COUNT(*) FROM session_turn_leases').fetchone()[0]
                 rows = db.execute("SELECT value FROM state_meta WHERE key LIKE 'goal:%'").fetchall()
-                result['active_goals'] = sum(json.loads(row[0]).get('status') == 'active' for row in rows)
-        except (sqlite3.Error, ValueError, TypeError, AttributeError):
+                for row in rows:
+                    goal = json.loads(row[0])
+                    if goal.get('status') not in ('active', 'paused', 'done', 'cleared'):
+                        raise ValueError('Unsupported native goal state')
+                    result['active_goals'] += goal['status'] == 'active' or goal.get('pause_requested') is True
+        except (OSError, sqlite3.Error, ValueError, TypeError, AttributeError):
             result['unknown'].append('native_state_unreadable_or_unsupported')
-    for path in (root / 'state/intake/cases').glob('*/results/verify-*.json'):
-        try:
-            if json.loads(path.read_text()).get('status') in ('running', 'queued'):
-                result['verification_jobs'] += 1
-        except (OSError, ValueError):
-            result['unknown'].append('verification_receipt_unreadable')
+
+    case_roots = []
+    if state:
+        legacy = path_at(state, ('intake', 'cases'), 'verification_scope_unreadable')
+        if legacy:
+            case_roots.append(legacy)
+    for native_home in homes:
+        cases = path_at(native_home, ('forsic', 'intake', 'cases'), 'verification_scope_unreadable')
+        if cases:
+            case_roots.append(cases)
+    for cases in case_roots:
+        for case in children(cases, 'verification_scope_unreadable'):
+            output = path_at(case, ('results',), 'verification_scope_unreadable')
+            if output is None:
+                continue
+            try:
+                with os.scandir(output) as entries:
+                    receipts = [entry.name for entry in entries
+                                if entry.name.startswith('verify-') and entry.name.endswith('.json')]
+            except OSError:
+                result['unknown'].append('verification_scope_unreadable')
+                continue
+            for name in receipts:
+                path = path_at(output, (name,), 'verification_receipt_unreadable', file=True)
+                if path is None:
+                    continue
+                try:
+                    status = json.loads(path.read_text()).get('status')
+                    if status not in ('running', 'queued', 'completed', 'failed', 'timed_out',
+                                      'not_started', 'worker_unavailable'):
+                        raise ValueError('Unsupported verification receipt')
+                    if status in ('running', 'queued'):
+                        result['verification_jobs'] += 1
+                except (OSError, ValueError, TypeError, AttributeError):
+                    result['unknown'].append('verification_receipt_unreadable')
+    result['unknown'] = list(dict.fromkeys(result['unknown']))
     result['observed_idle'] = not any(result.values())
     result['meaning'] = 'Read-only snapshot; pause goals and prevent new input before rechecking/stopping. No automatic stop or recovery.'
     return result

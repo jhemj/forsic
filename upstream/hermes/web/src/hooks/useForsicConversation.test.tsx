@@ -4,6 +4,7 @@ import {createRoot, type Root} from 'react-dom/client'
 import {afterEach, beforeEach, expect, it, vi, type Mock} from 'vitest'
 import type {ServerRequest} from '@hermes/shared'
 import {useForsicConversation} from './useForsicConversation'
+import {TenantContext} from '@/contexts/tenant-context'
 import {inspectorEventRuntime} from '@/lib/forsic-inspector'
 
 const mocks = vi.hoisted(() => ({fetch: vi.fn(), instances: [] as unknown[]}))
@@ -18,9 +19,9 @@ vi.mock('@/lib/gatewayClient', () => ({GatewayClient: class {
   close = vi.fn(() => {this.connectionState = 'closed'})
   request = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === 'session.resume') return {session_id: 'runtime', session_key: 'tip', info: {profile_name: params.profile}, running: false}
-    if (method === 'session.activate') return {session_id: 'runtime', info: {profile_name: params.profile, stored_session_id: 'tip'}, running: false}
-    if (method === 'session.control.read') return {control: {goal: {status: 'paused'}}}
-    if (method === 'session.control') return {control: {goal: {status: params.action === 'goal.pause' ? 'paused' : 'active'}}, dispatch: params.action === 'goal.resume' ? {type: 'send', message: 'NATIVE CONTINUATION', display: '/goal resume'} : {type: 'exec'}}
+    if (method === 'session.activate') return {session_id: 'runtime', info: {profile_name: params.profile, stored_session_id: 'tip'}, running: liveRunning}
+    if (method === 'session.control.read') return {control: {goal: {status: goalStatus, pause_requested: pauseRequested}}}
+    if (method === 'session.control') return {control: {goal: {status: params.action === 'goal.pause_safe' ? 'paused' : 'active'}}, dispatch: params.action === 'goal.resume' ? {type: 'send', message: 'NATIVE CONTINUATION', display: '/goal resume'} : {type: 'exec'}}
     return {status: 'streaming'}
   })
   onAny(handler: (event: unknown) => void) {this.event = handler; return () => {this.event = undefined}}
@@ -33,14 +34,14 @@ interface FakeGateway {
 }
 const live = (available = false, status = 'paused', profile = 'case') => ({available, requested_session_id: 'root', stored_session_id: 'tip', runtime_session_id: available ? 'runtime' : null, profile_name: profile, running: false, control: {goal: {status}}})
 let value: ReturnType<typeof useForsicConversation>, roots: Root[] = []
-let available = false, goalStatus = 'paused'
+let available = false, goalStatus = 'paused', pauseRequested = false, liveRunning = false
 const observer = vi.fn()
 function Probe({profile = 'case', sessionId = 'root', active = true}: {profile?: string; sessionId?: string; active?: boolean}) {const snapshot = useForsicConversation({sessionId, profile, active, onEvent: observer}); useEffect(() => {value = snapshot}, [snapshot]); return null}
 async function mount(profile = 'case') {const root = createRoot(document.createElement('div')); roots.push(root); await act(async () => {root.render(<Probe profile={profile} />)}); return root}
 function gateway() {return mocks.instances.at(-1) as FakeGateway}
 beforeEach(() => {
   Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true})
-  available = false; goalStatus = 'paused'; mocks.instances.length = 0; observer.mockClear()
+  available = false; goalStatus = 'paused'; pauseRequested = false; liveRunning = false; mocks.instances.length = 0; observer.mockClear()
   mocks.fetch.mockImplementation(async (url: string) => url.includes('/review-chat') ? {status: 'ready', profile: new URLSearchParams(url.split('?')[1]).get('profile'), requested_session_id: 'root', case_id: 'synthetic-case', conversation_id: 'root', goal_id: 'goal', snapshot_id: 's', items: [], next_cursor: null, coverage: {scanned_receipts: 0, omitted_receipts: 0}} : url.includes('/messages') ? {session_id: 'tip', messages: [{row_id: 1, role: 'assistant', content: 'Saved'}]} : live(available, goalStatus, new URLSearchParams(url.split('?')[1]).get('profile') ?? 'case'))
 })
 afterEach(async () => {for (const root of roots) await act(async () => {root.unmount()}); roots = []; mocks.fetch.mockReset(); vi.useRealTimers()})
@@ -62,7 +63,7 @@ it('keeps persisted user pause across reload and resumes only through one explic
   expect(gw.request.mock.calls.some(([method]) => method === 'session.create' || method === 'session.close')).toBe(false)
 })
 
-it('attaches exact live runtime and persists goal pause before native interrupt', async () => {
+it('attaches exact live runtime and requests durable safe pause without interrupting work', async () => {
   available = true; goalStatus = 'active'
   await mount()
   const gw = gateway()
@@ -74,7 +75,8 @@ it('attaches exact live runtime and persists goal pause before native interrupt'
   await act(async () => {gw.event({type: 'session.control.update', session_id: 'runtime', payload: {control: {goal: {status: 'active'}}}})})
   await act(async () => {value.control.onToggle()})
   const methods = gw.request.mock.calls.map(([method]) => method)
-  expect(methods.indexOf('session.control')).toBeLessThan(methods.indexOf('session.interrupt'))
+  expect(gw.request.mock.calls.find(([method]) => method === 'session.control')?.[1]).toMatchObject({action: 'goal.pause_safe'})
+  expect(methods).not.toContain('session.interrupt')
   expect(gw.request.mock.calls.find(([method]) => method === 'session.activate')?.[1]).toMatchObject({session_id: 'runtime', profile: 'case'})
   expect(methods).not.toContain('session.resume')
   expect(value.control.paused).toBe(true)
@@ -96,6 +98,44 @@ it('never implicitly answers inbound requests and removes canceled cards', async
   expect(fail).not.toHaveBeenCalled(); expect(respond).not.toHaveBeenCalled(); expect(decline).toHaveBeenCalledOnce()
   expect(value.pendingRequests).toHaveLength(0)
   expect(value.error).toBe('이 요청은 대화 화면에서 지원하지 않습니다.')
+})
+
+it('removes a submitted clarify form without waiting for cancellation and preserves saved history', async () => {
+  available = true; goalStatus = 'active'
+  await mount()
+  const gw = gateway(), respond = vi.fn()
+  const request: ServerRequest = {id: 'clarify-q', method: 'clarify', params: {session_id: 'runtime', questions: [{qid: 'q', question: '범위 확인'}]}, respond, fail: vi.fn()}
+  const savedRows = value.rows
+  const callsBefore = gw.request.mock.calls.length
+  await act(async () => {gw.inbound(request)})
+  expect(value.pendingRequests).toHaveLength(1)
+  expect(value.inputDisabled).toBe(true)
+  expect(respond).not.toHaveBeenCalled()
+  const displayed = value.pendingRequests[0]
+  await act(async () => {displayed.respond({answers: {q: '선택한 범위'}}); displayed.respond({answers: {q: '중복 응답'}})})
+  expect(respond).toHaveBeenCalledExactlyOnceWith({answers: {q: '선택한 범위'}})
+  expect(value.pendingRequests).toEqual([])
+  expect(value.inputDisabled).toBe(false)
+  expect(value.rows).toEqual(savedRows)
+  expect(gw.request).toHaveBeenCalledTimes(callsBefore)
+  await act(async () => {value.reconnect()})
+  expect(value.pendingRequests).toEqual([])
+  expect(value.inputDisabled).toBe(false)
+  expect(value.rows).toEqual(savedRows)
+  expect(gw.request.mock.calls.some(([method]) => method === 'prompt.submit' || method === 'session.resume')).toBe(false)
+})
+
+it('retains a clarify form when sending throws and settles only the explicitly answered request', async () => {
+  available = true; goalStatus = 'active'
+  await mount()
+  const gw = gateway(), respond = vi.fn().mockImplementationOnce(() => {throw new Error('send failed')})
+  const first: ServerRequest = {id: 'q1', method: 'clarify', params: {session_id: 'runtime'}, respond, fail: vi.fn()}
+  await act(async () => {gw.inbound(first); gw.inbound({...first, id: 'q2', respond: vi.fn()})})
+  await act(async () => {expect(() => value.pendingRequests[0].respond({answers: {q: 'answer'}})).toThrow('send failed')})
+  expect(value.pendingRequests.map(request => request.id)).toEqual(['q1', 'q2'])
+  await act(async () => {value.pendingRequests[0].respond({answers: {q: 'answer'}})})
+  expect(value.pendingRequests.map(request => request.id)).toEqual(['q2'])
+  expect(value.inputDisabled).toBe(true)
 })
 
 it('blocks duplicate and uncertain submissions and reconnects same client without resuming', async () => {
@@ -563,4 +603,91 @@ it('requires a new successful review observation after pause/resume and disconne
  await act(async () => {finish!(page)})
  expect(value.reviewActivity?.reviewId).toBe('r')
  expect(gw.request.mock.calls.some(([method]) => method === 'prompt.submit')).toBe(false)
+})
+
+it('keeps a durable safe pause pending through refresh and permits one resume only after settlement', async () => {
+  available = true; goalStatus = 'active'; liveRunning = true
+  let running = true, requested = false
+  mocks.fetch.mockImplementation(async (url: string) => url.includes('/review-chat') ? {items: []} : url.includes('/messages') ? {session_id: 'tip', messages: [{row_id: 1, role: 'assistant', content: 'Saved'}]} : {...live(true, goalStatus), running, control: {goal: {status: goalStatus, pause_requested: requested}}})
+  const first = await mount()
+  const configure = () => {
+    const gw = gateway()
+    gw.request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'session.control.read') return {control: {goal: {status: goalStatus, pause_requested: requested}}}
+      if (method === 'session.control') {
+        if (params.action === 'goal.pause_safe') requested = pauseRequested = true
+        return {control: {goal: {status: goalStatus, pause_requested: requested}}}
+      }
+      if (method === 'session.activate') return {session_id: 'runtime', running, info: {stored_session_id: 'tip', profile_name: 'case'}}
+      return {status: 'streaming'}
+    })
+    return gw
+  }
+  let gw = configure()
+  await act(async () => {await value.control.onToggle()})
+  expect(value.control.pausing).toBe(true)
+  expect(value.control.disabled).toBe(true)
+  expect(value.inputDisabled).toBe(true)
+  expect(value.connectionText).toContain('현재 응답과 도구 작업을 마친 뒤')
+  await act(async () => {value.control.onToggle()})
+  expect(gw.request.mock.calls.filter(([method]) => method === 'session.control')).toHaveLength(1)
+  expect(gw.request.mock.calls.some(([method]) => method === 'session.interrupt' || method === 'prompt.submit')).toBe(false)
+  await act(async () => {first.unmount()}); roots = []
+  await mount(); gw = configure()
+  expect(value.control.pausing).toBe(true)
+  expect(gw.request.mock.calls.some(([method]) => method === 'session.control' || method === 'prompt.submit')).toBe(false)
+  running = liveRunning = false; requested = pauseRequested = false; goalStatus = 'paused'
+  await act(async () => {
+    gw.event({type: 'session.control.update', session_id: 'runtime', payload: {control: {goal: {status: 'paused', pause_requested: false}}}})
+    gw.event({type: 'session.info', session_id: 'runtime', payload: {running: false, stored_session_id: 'tip', profile_name: 'case'}})
+    await value.reconnect()
+  })
+  expect(value.control.paused).toBe(true)
+  expect(value.control.pausing).toBe(false)
+  expect(value.control.disabled).toBe(false)
+})
+
+
+it('shows only verified recent request speed and clears missing usage and changed scopes without extra requests', async () => {
+  available = true
+  const root = await mount(), gw = gateway()
+  expect(value.recentAvgTps).toBeNull()
+  const requests = gw.request.mock.calls.length
+  const emit = async (type: string, usage?: unknown, session_id = 'runtime') => act(async () => {gw.event({type, session_id, payload: usage === undefined ? {} : {usage}})})
+  await emit('session.usage', {avg_tps: 12.34, total_tokens: 900000})
+  expect(value.recentAvgTps).toBe(12.34)
+  await emit('session.usage', {avg_tps: 99}, 'foreign')
+  expect(value.recentAvgTps).toBe(12.34)
+  for (const type of ['session.info', 'session.usage', 'message.complete']) {
+    await emit(type, {avg_tps: 15.6})
+    expect(value.recentAvgTps).toBe(15.6)
+    await emit(type)
+    expect(value.recentAvgTps).toBeNull()
+  }
+  for (const avg_tps of [null, '12.3', 0, -1, Infinity, NaN]) {
+    await emit('session.usage', {avg_tps: 12.3})
+    await emit('session.usage', {avg_tps})
+    expect(value.recentAvgTps).toBeNull()
+  }
+  expect(gw.request.mock.calls).toHaveLength(requests)
+  await emit('session.usage', {avg_tps: 12.3})
+  await act(async () => {gw.state('closed')})
+  expect(value.recentAvgTps).toBeNull()
+  await emit('session.usage', {avg_tps: 99})
+  expect(value.recentAvgTps).toBeNull()
+  gw.request.mockImplementation(async (method: string) => method === 'session.control.read' ? {control: {goal: {status: 'paused'}}} : {session_id: 'runtime', info: {profile_name: 'case', stored_session_id: 'tip', usage: {avg_tps: 18.2}}})
+  await act(async () => {await value.reconnect()})
+  expect(value.recentAvgTps).toBe(18.2)
+  await act(async () => {gw.event({type: 'session.info', session_id: 'runtime', payload: {profile_name: 'foreign'}})})
+  expect(value.recentAvgTps).toBeNull()
+  await act(async () => {await value.reconnect()})
+  expect(value.recentAvgTps).toBe(18.2)
+  await act(async () => {root.render(<Probe sessionId="another" />)})
+  expect(value.recentAvgTps).toBeNull()
+  const tenant = (tenant_id: string) => ({tenant_id, display_name: tenant_id, profile_name: 'case', revision: 1, memory_policy: {mode: 'off' as const}})
+  await act(async () => {root.render(<TenantContext.Provider value={tenant('a')}><Probe /></TenantContext.Provider>)})
+  await act(async () => {gateway().event({type: 'session.usage', session_id: 'runtime', payload: {usage: {avg_tps: 23.4}}})})
+  expect(value.recentAvgTps).toBe(23.4)
+  await act(async () => {root.render(<TenantContext.Provider value={tenant('b')}><Probe /></TenantContext.Provider>)})
+  expect(value.recentAvgTps).toBeNull()
 })

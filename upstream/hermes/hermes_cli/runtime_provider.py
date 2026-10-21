@@ -635,6 +635,12 @@ def _exchange_copilot_pool_entry(entry: Any, pool_api_key: str) -> str:
 def _resolve_from_pool(provider: str, requested_provider: str, model_cfg: Dict[str, Any], explicit_api_key, explicit_base_url,
                        target_model) -> Optional[Dict[str, Any]]:
     """Runtime from the provider's credential pool, or None to continue down the ladder."""
+    if (provider == "custom" and not explicit_base_url and model_cfg.get("base_url")
+            and _config_base_url_trustworthy_for_bare_custom(model_cfg["base_url"], _cfg_provider(model_cfg))
+            and any(model_cfg.get(field) for field in ("api_key", "api", "key_env", "api_key_env"))):
+        # The backend resolves the configured endpoint and its explicit key/no-key
+        # choice together. A generic custom pool may belong to another endpoint.
+        return None
     should_use_pool = provider != "openrouter" or _openrouter_should_use_pool(requested_provider, model_cfg, explicit_api_key,
                                                                              explicit_base_url)
     try:

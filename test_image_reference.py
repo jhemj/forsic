@@ -150,7 +150,7 @@ class ImageReferenceTests(unittest.TestCase):
             result = self.call('forsic_image_files', {'path': self.disk.name, 'action': 'list'})
         effective, _ = resolve(self.case, {'image_ref': result['image_ref']})
         self.assertEqual(effective['path'], self.disk.name)
-        def changed(*args):
+        def changed(*args, **kwargs):
             self.disk.write_bytes(b'mid-call change')
             return {'entries': []}
         with patch('forsic_plugin.image_process.run_parser', side_effect=changed):

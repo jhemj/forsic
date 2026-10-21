@@ -2,6 +2,40 @@ import {describe, expect, it} from 'vitest'
 import {inspectorEventRuntime, applyInspectorEvent, mergeInspectorHistory, savedToolCalls, skillCatalogue, toolCatalogue} from './forsic-inspector'
 
 describe('passive inspector projections', () => {
+  it.each([
+    {calls: [{name: 'forsic_shell', arguments: {command: 'printf ok', reason: 'Check the selected log'}}]},
+    {name: 'forsic_shell', arguments: '{"command":"printf ok","reason":"Check the selected log"}'},
+    {calls: JSON.stringify({name: 'forsic_shell', arguments: {command: 'printf ok', reason: 'Check the selected log'}})},
+  ])('resolves a native single-call bridge before pairing its return: %j', envelope => {
+    const argumentsText = JSON.stringify(envelope)
+    const [call] = savedToolCalls([
+      {role: 'assistant', tool_calls: [{id: 'native-id', function: {name: 'tool_call', arguments: argumentsText}}]},
+      {role: 'tool', tool_call_id: 'native-id', tool_name: 'forsic_shell', content: '{"error":"Command failed","execution":{"exit_code":1}}'},
+    ])
+    expect(call).toMatchObject({id: 'native-id', name: 'forsic_shell', status: 'error', source: 'saved', submittedRequest: {name: 'tool_call', arguments: argumentsText}})
+    expect(JSON.parse(call.arguments)).toEqual({command: 'printf ok', reason: 'Check the selected log'})
+  })
+  it('keeps malformed and batch wrappers intact instead of inventing executions or selecting the first entry', () => {
+    for (const argumentsText of ['{"calls":', '{"calls":[{"name":"forsic_shell","arguments":"invalid JSON"}]}', '{"calls":[{"name":"tool_call","arguments":{}}]}', '{"calls":[{"name":"forsic_read","arguments":{}},{"name":"forsic_shell","arguments":{}}]}']) {
+      const calls = savedToolCalls([{tool_calls: [{id: 'a', function: {name: 'tool_call', arguments: argumentsText}}]}])
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({id: 'a', name: 'tool_call', arguments: argumentsText, status: 'unknown'})
+      expect(calls[0].submittedRequest).toBeUndefined()
+    }
+  })
+  it('normalizes live bridge input and keeps its identity and purpose through an input-free completion', () => {
+    const started = applyInspectorEvent([], {type: 'tool.start', payload: {tool_id: 'a', name: 'tool_call', args: {calls: [{name: 'forsic_shell', arguments: {reason: 'Inspect a log', command: 'printf ok'}}]}}})
+    const completed = applyInspectorEvent(started, {type: 'tool.complete', payload: {tool_id: 'a', name: 'forsic_shell', result: {execution: {exit_code: 1}}}})
+    expect(completed[0]).toMatchObject({id: 'a', name: 'forsic_shell', status: 'error', submittedRequest: {name: 'tool_call'}})
+    expect(JSON.parse(completed[0].arguments).reason).toBe('Inspect a log')
+  })
+  it('merges an input-free live completion with saved normalized input and original submission', () => {
+    const saved = savedToolCalls([{tool_calls: [{id: 'a', function: {name: 'tool_call', arguments: '{"calls":[{"name":"forsic_shell","arguments":{"reason":"Inspect a log"}}]}'}}]}])
+    const completed = applyInspectorEvent([], {type: 'tool.complete', payload: {tool_id: 'a', name: 'forsic_shell', result: {error: 'Command failed'}}})
+    const [merged] = mergeInspectorHistory(saved, completed)
+    expect(merged).toMatchObject({id: 'a', name: 'forsic_shell', status: 'error', submittedRequest: saved[0].submittedRequest})
+    expect(JSON.parse(merged.arguments).reason).toBe('Inspect a log')
+  })
   it('maps compression tips to the parent runtime and rejects child or foreign profile events', () => {
     const info = {type: 'session.info', session_id: 'parent', payload: {stored_session_id: 'tip', profile_name: 'A'}}
     expect(inspectorEventRuntime(info, ['ancestor'], 'A')).toBe(null)

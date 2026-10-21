@@ -33,7 +33,8 @@ export function ForsicToolCall({call}: {call: InspectorToolCall}) {
       {detail.details.length > 0 && <dl>{detail.details.map((item, i) => <div key={`${item.label}:${i}`}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>}
       <details className="fc-tool-raw" onToggle={event => setRawOpen(event.currentTarget.open)}><summary>입력·결과 원문</summary>
         {rawOpen && <div><p><code>{call.name}</code> · {call.source === 'live' ? '실시간 기록' : '저장된 기록'}</p><h4>입력</h4><pre>{pretty(call.arguments || '(입력 기록 없음)')}</pre>
-          {call.argumentsTruncated && <p>긴 입력의 앞부분만 표시합니다.</p>}
+          {call.submittedRequest && <><h4>제출된 요청 · {call.submittedRequest.name}</h4><pre>{pretty(call.submittedRequest.arguments)}</pre></>}
+          {(call.argumentsTruncated || call.submittedRequest?.argumentsTruncated) && <p>긴 입력의 앞부분만 표시합니다.</p>}
           <h4>반환 결과</h4><pre>{call.result === undefined ? pending ? '결과를 기다리고 있습니다.' : '반환 기록이 없습니다.' : pretty(call.result)}</pre>
         </div>}
       </details>

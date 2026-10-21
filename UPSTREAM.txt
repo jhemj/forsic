@@ -49,6 +49,14 @@ Maintained integration areas
   classified error layer/code is retained; no raw provider text, extra judge,
   retry loop or budget reset is introduced. Bounded compression recovery keeps
   its existing path.
+- Native goal.pause_safe persists pause_requested in the existing goal record.
+  The native response/tool boundary saves accepted work and stops before another
+  provider, compression or goal-judge call. It does not signal running tools or
+  children. The normal finalizer and exact-value CAS retain failure/guardrail
+  precedence; queued input stays pending until an explicit resume. Pending pause
+  also blocks notification/crash continuations after restart. The Forsic button
+  uses this control; immediate native interruption remains a separate action.
+  Externally delegated loops without this boundary reject safe pause explicitly.
 - Native goal evaluation receives the typed per-turn iteration-limit outcome
   across CLI, messaging and TUI delivery. It still uses the existing judge,
   completion checks, turn budget and pause/CAS fences; no verdict is overridden.
@@ -248,3 +256,16 @@ an unowned default conversation or silently create an empty replacement. Native
 session import validates the complete owner set before any copy and retains the
 verified profile on imported rows. These inherited boundary defects are guarded
 only when profile ownership is enabled; unmanaged behavior is preserved.
+
+Maintained custom credential precedence: an explicit key or keyless choice bound
+to the selected custom endpoint is resolved before ambient credential pools.
+Unspecified credentials retain the native fallback path. Profile A/B/A tests use
+real temporary native configuration, secrets and pools without network calls.
+Forsic stores pending route/key changes through the existing setup configuration
+and applies them together at the launcher boundary, without changing live turns.
+
+Maintained tool display projection: stored native tool_call envelopes are read
+through the same projection as live events. Single calls expose the inner tool
+and its recorded public purpose while preserving the parent ID, original request
+and raw result. Invalid multi-call requests remain one parent event; the UI does
+not manufacture child executions or promote missing results to success.

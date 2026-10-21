@@ -50,6 +50,11 @@
     return session ? conversationURL(caseId,session) : '';
   }
   function scopedURL(url, caseId=selectedCase()) {
+    if(url.startsWith('/settings?')) {
+      const params=new URLSearchParams(url.split('?')[1]),scope=new URLSearchParams(window.location?.search || '');
+      for(const key of ['tenant_id','profile','case','resume'])if(scope.get(key))params.set(key,scope.get(key));
+      return '/settings?'+params;
+    }
     if(!url.startsWith(base))return url;
     const [path,query='']=url.split('?'),params=new URLSearchParams(query);
     const scope=new URLSearchParams(window.location?.search || '');
@@ -250,11 +255,13 @@
   }
   function NewInvestigationAction({availability,error='',current=false}) {
     const allowed=availability?.allowed===true && !error;
+    const capacity=!error && Number.isInteger(availability?.active_count) && Number.isInteger(availability?.limit)
+      ? `동시 조사 ${availability.active_count} / ${availability.limit}` : '';
     const reason=error ? '조사 상태를 확인하지 못해 새 조사를 만들 수 없습니다.'
-      : availability?.reason || (availability ? '진행 중인 조사가 있어 새 조사를 만들 수 없습니다.' : '조사 상태 확인 중');
+      : availability?.reason || (availability ? '새 조사를 시작할 수 없습니다. 조사 상태를 다시 확인해 주세요.' : '조사 상태 확인 중');
     return allowed
-      ? h('a',{className:'forsic-action-secondary',href:workspaceURL('new'),'aria-current':current?'page':undefined},'+ 새 조사')
-      : h('button',{type:'button',className:'forsic-action-secondary',disabled:true,title:reason,'aria-label':'+ 새 조사 · '+reason},'+ 새 조사');
+      ? h('a',{className:'forsic-action-secondary',href:workspaceURL('new'),'aria-current':current?'page':undefined,title:capacity?capacity+' · 일시정지·대기 포함':undefined},'+ 새 조사',capacity&&h('small',null,capacity))
+      : h('button',{type:'button',className:'forsic-action-secondary',disabled:true,title:reason,'aria-label':'+ 새 조사 · '+reason},'+ 새 조사',capacity&&h('small',null,capacity));
   }
   function CloseInvestigationAction({active,onClosed}) {
     const [busy,setBusy]=R.useState(false), [error,setError]=R.useState('');
@@ -281,7 +288,6 @@
       error&&h('p',{role:'alert'},error));
   }
   function InvestigationAdmissionNotice({availability,error='',onClosed}) {
-    if(availability?.allowed===true && !error)return null;
     const active=availability?.active_case;
     // Native client navigation keeps this sidebar mounted; its route hook may
     // still hold the entry route after pushState. Read the current URL here.
@@ -290,9 +296,10 @@
       return !error && active && (target?.caseId===active.case_id || !target?.caseId && target?.session===active.resume_session_id)
         ? h(CloseInvestigationAction,{active,onClosed}) : null;
     }
+    if(availability?.allowed===true && !error)return active?.closable?h(CloseInvestigationAction,{active,onClosed}):null;
     return h('div',{className:'forsic-admission-notice',role:'status'},
       h('p',null,error ? '조사 상태를 확인하지 못해 새 조사를 만들 수 없습니다.'
-        : availability?.reason || (availability ? '진행 중인 조사가 있어 새 조사를 만들 수 없습니다.' : '조사 상태 확인 중')),
+        : availability?.reason || (availability ? '새 조사를 시작할 수 없습니다. 조사 상태를 다시 확인해 주세요.' : '조사 상태 확인 중')),
       active?.case_id && active?.resume_session_id && h('a',{href:conversationURL(active.case_id,active.resume_session_id)},'기존 조사 열기'),
       !error&&h(CloseInvestigationAction,{active,onClosed}));
   }
@@ -343,12 +350,6 @@
     const {data,error}=useCase(), {items,error:directoryError,availability}=useDirectory(), route=useRoute();
     const caseId=data?.case?.case_id || selectedCase(), item=items.find(c=>c.case_id===caseId);
     const params=new URLSearchParams(window.location?.search || ''), currentSession=route.panel==='chat'?params.get('resume'):'';
-    const [settings,setSettings]=R.useState(false);
-    R.useEffect(()=>{
-      const open=()=>setSettings(true);
-      window.addEventListener('forsic:open-connection-settings',open);
-      return ()=>window.removeEventListener('forsic:open-connection-settings',open);
-    },[]);
     const scope=data?.case?.scope || item?.scope || '';
     return h('aside',{className:'forsic-sidebar'},
       h('nav',{className:'forsic-global-nav','aria-label':'사건 탐색'},
@@ -367,9 +368,7 @@
       directoryError&&h('p',{role:'status'},directoryError),
       h('footer',{className:'forsic-sidebar-footer'},
         h('a',{className:'forsic-nav-item',href:workspaceURL('history','','library'),'aria-current':route.panel==='library'?'page':undefined,title:'참고할 보관 사례 찾아보기'},h(NavIcon,{name:'library'}),'저장한 사례'),
-        h('div',{id:'forsic-model-target'}),
-        h('button',{type:'button',className:'forsic-nav-item',onClick:()=>setSettings(true),title:'모델과 연결 설정'},h(NavIcon,{name:'settings'}),'설정')),
-      settings&&h(ConnectionSettings,{onClose:()=>setSettings(false)}));
+        h('div',{id:'forsic-model-target'})));
   }
   function NewCase() {
     const [path,setPath]=R.useState(''),[busy,setBusy]=R.useState(false),[error,setError]=R.useState('');
@@ -391,15 +390,63 @@
         h('button',{type:'submit',className:'forsic-action-primary',disabled:busy||!path.trim()},busy?'경로 확인 중…':'사건 만들고 대화 시작')),
       h('div',{className:'forsic-intake-explanation'},h('h2',null,'사건과 대화'),h('p',null,'같은 증거에 대한 추가 질문은 사건 안에서 새 대화로 이어가세요. 다른 증거를 조사할 때는 새 사건을 만듭니다.')));
   }
-  function settingsBody(value, secret, clearKey, telegram={}) {
+  function settingsBody(value, secret, clearKey, telegram={}, renKey=null, llmKey=null) {
     return {llm_base_url:value.llm.base_url, llm_model:value.llm.model,
+      ...(llmKey !== null || !value.llm.key_configured ? {llm_api_key:llmKey ?? ''} : {}),
       ...(value.llm.context_changed ? {llm_context_length:value.llm.context_length} : {}),
+      ren_llm_enabled:!!value.ren_llm?.enabled, ren_llm_base_url:value.ren_llm?.base_url || '', ren_llm_model:value.ren_llm?.model || '',
+      ...(renKey !== null || !value.ren_llm?.key_configured ? {ren_llm_api_key:renKey ?? ''} : {}),
       jev_base_url:value.jev.base_url, gti_enabled:value.gti.enabled,
       gti_public_network:value.gti.allow_public_network_indicators,
       gti_api_key:secret, clear_gti_key:clearKey,
       telegram_assistant_key:telegram.assistant || '', telegram_user_key:telegram.user || '',
       telegram_group:value.telegram?.group ?? null,
       clear_telegram_assistant_key:!!telegram.clearAssistant, clear_telegram_user_key:!!telegram.clearUser};
+  }
+  function ModelKeyField({label, configured, value, onChange, busy}) {
+    const editing = value !== null || !configured;
+    return h('div', null,
+      editing ? h('label', {className:'forsic-connection-field'}, h('span', null, label+' (선택)'),
+        h('input', {type:'password',value:value ?? '',autoComplete:'new-password',spellCheck:false,disabled:busy,
+          placeholder:'빈칸이면 API 키 없이 연결',onChange:e=>onChange(e.target.value)}))
+        : h('div', {className:'forsic-connection-field'}, h('span', null, label),
+          h('span', {className:'forsic-connection-badge'}, '등록됨'),
+          h('button', {type:'button',disabled:busy,'aria-label':label+' 변경',onClick:()=>onChange('')}, '변경'),
+          h('button', {type:'button',disabled:busy,'aria-label':label+' 없이 사용',onClick:()=>onChange('')}, '키 없이 사용')),
+      editing && h('p', {className:'forsic-connection-hint'}, '빈칸으로 저장하면 API 키 없이 연결해요.',
+        configured && h('button', {type:'button',disabled:busy,'aria-label':label+' 유지',onClick:()=>onChange(null)}, '기존 키 유지')));
+  }
+  function ModelConnectionTest({connection, model, apiKey, saving}) {
+    const [busy,setBusy]=R.useState(false), [result,setResult]=R.useState(null);
+    const pending=R.useRef(false), live=R.useRef(true);
+    const draft=JSON.stringify([model.base_url,model.model,apiKey,!!model.key_configured]);
+    const latest=R.useRef(draft); latest.current=draft;
+    R.useEffect(()=>{live.current=true;return()=>{live.current=false;};},[]);
+    R.useEffect(()=>{setResult(null);},[draft]);
+    async function test() {
+      if(pending.current || saving)return;
+      pending.current=true;setBusy(true);setResult(null);
+      const tested=draft;
+      try {
+        const response=await nativeFetch(base+'/connections/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+          connection,base_url:model.base_url.trim(),model:model.model.trim(),
+          ...(apiKey!==null || !model.key_configured ? {api_key:apiKey ?? ''} : {})})});
+        if(live.current && latest.current===tested)setResult(response);
+      } catch {if(live.current && latest.current===tested)setResult({status:'request_error'});}
+      finally {pending.current=false;if(live.current)setBusy(false);}
+    }
+    const messages={authentication_error:'API 키 또는 모델 접근 권한을 확인해 주세요.',model_error:'모델 이름과 해당 서버의 지원 여부를 확인해 주세요.',
+      timeout:'제한 시간 안에 응답을 받지 못했어요. 서버가 처리 중일 수 있어요.',connection_error:'서버에 연결하지 못했어요. API 주소와 네트워크를 확인해 주세요.',
+      provider_error:'서버가 요청을 처리하지 못했어요. 서버 상태를 확인해 주세요.',invalid_response:'응답은 받았지만 모델 답변을 확인하지 못했어요.',
+      request_error:'테스트를 마치지 못했어요. 주소·모델·키 입력과 접속 권한을 확인해 주세요.'};
+    const success=result?.status==='ok' && result?.model_responded===true;
+    return h('div',{className:'forsic-model-test'},
+      h('button',{type:'button',disabled:busy||saving||!model.base_url.trim()||!model.model.trim(),onClick:test,
+        'aria-label':(connection==='ren'?'렌':'포식이')+' 모델 테스트'},busy?'응답 확인 중…':'연결 테스트'),
+      h('small',null,'입력한 연결로 짧은 응답을 요청해요. 저장하거나 사건 자료를 보내지 않아요.'),
+      result && h('p',{role:success?'status':'alert',className:success?'forsic-model-test-ok':'forsic-connection-error'},
+        success?'모델 응답 확인':messages[result.status]||messages.request_error,
+        Number.isFinite(result.latency_ms) && result.latency_ms>=0 ? ' · '+(result.latency_ms/1000).toFixed(1)+'초' : ''));
   }
   function ContextLengthControl({llm, metadata, busy, onChange}) {
     const sameModel = metadata?.model === llm.model && metadata?.base_url === llm.base_url;
@@ -422,36 +469,45 @@
       h('div', {className:'forsic-context-scale', 'aria-hidden':true}, h('span',null,number(minimum)), h('span',null,number(maximum))),
       h('p', {id:'forsic-context-hint', className:'forsic-connection-hint'},
         actualDefault ? '제공자가 보고한 기본 문맥: '+number(actualDefault)+' 토큰. ' : '제공자의 실제 기본 문맥 길이는 확인되지 않았어요. ',
-        '기본값을 선택하면 모델 정보에 따라 자동 설정합니다. 직접 지정한 길이는 저장 후 서버를 다시 시작할 때 적용됩니다.'),
+        '기본값을 선택하면 모델 정보에 따라 자동 설정합니다. 직접 지정한 길이는 저장 후 다음 대화 차례부터 적용됩니다.'),
       h('small', null, reported ? '이전에 확인한 문맥: '+number(reported)+' 토큰 · 기본값이나 현재 최대 한도를 보장하지 않습니다.' : '슬라이더 범위는 모델의 최대 지원 길이를 뜻하지 않습니다.'));
   }
-  function ConnectionSettings({onClose}) {
+  function ConnectionSettings({onClose, embedded=false, section}) {
     const dialog = R.useRef(null);
-    const [tab, setTab] = R.useState('llm');
+    const [localTab, setTab] = R.useState('llm');
+    const tab = section || localTab;
     const [telegram, setTelegram] = R.useState({assistant:'',user:'',clearAssistant:false,clearUser:false});
     const [value, setValue] = R.useState(null), [secret, setSecret] = R.useState('');
     const [clearKey, setClearKey] = R.useState(false), [busy, setBusy] = R.useState(false);
+    const [renKey, setRenKey] = R.useState(null), [llmKey, setLlmKey] = R.useState(null);
+    const withRen = v => ({...v,ren_llm:{enabled:false,base_url:'',model:'',key_configured:false,...v.ren_llm}});
     const [message, setMessage] = R.useState(''), [error, setError] = R.useState('');
     const [setup, setSetup] = R.useState(null);
     R.useEffect(() => {
-      dialog.current?.showModal();
+      if(!embedded) dialog.current?.showModal();
       let live = true;
       nativeFetch(base + '/setup').then(status => {
         if (live) setSetup(status);
         return status.local_admin ? nativeFetch(base + '/connections') : null;
-      }).then(v => {if(live && v) setValue(v);})
+      }).then(v => {if(live && v) setValue(withRen(v));})
         .catch(() => {if(live) setError('연결 설정을 불러오지 못했어요. 새 설정 기능의 서버 적용 여부를 확인해주세요.');});
       return () => {live=false;};
     }, []);
     function update(section, name, next) {setValue(v => ({...v, [section]:{...v[section], [name]:next}})); setMessage('');}
     async function save(event) {
-      event.preventDefault(); setBusy(true); setError(''); setMessage('');
+      event.preventDefault(); setError(''); setMessage('');
+      if(value.ren_llm.enabled) {
+        let validURL = false;
+        try {const url = new URL(value.ren_llm.base_url.trim()); validURL = ['http:','https:'].includes(url.protocol) && !!url.hostname && !url.username && !url.password && !url.search && !url.hash;} catch {}
+        if(!validURL || !value.ren_llm.model.trim()) {setError('추가 모델을 사용하려면 렌 전용 URL과 모델을 모두 입력해주세요. URL은 인증정보·쿼리·프래그먼트 없는 HTTP(S) 주소여야 해요.'); return;}
+      }
+      setBusy(true);
       try {
-        const saved = await nativeFetch(base + '/connections', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settingsBody(value,secret,clearKey,telegram))});
+        const saved = await nativeFetch(base + '/connections', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settingsBody(value,secret,clearKey,telegram,renKey,llmKey))});
         const telegramChanged = tab === 'telegram' || telegram.assistant || telegram.user || telegram.clearAssistant || telegram.clearUser;
         window.dispatchEvent(new Event('forsic:connections-changed'));
-        setValue(saved); setSecret(''); setClearKey(false); setTelegram({assistant:'',user:'',clearAssistant:false,clearUser:false});
-        setMessage(telegramChanged ? '텔레그램 설정을 저장했어요. 기존 그룹·토픽은 바꾸지 않았어요. 저장한 그룹은 새 미러를 명시적으로 연결할 때 사용해요.' : saved.llm_pending ? '저장했어요. LLM 변경은 웹 서버를 다음에 시작할 때 적용돼요. 진행 중인 조사는 그대로예요.' : '연결 설정을 저장했어요.');
+        setValue(withRen(saved)); setRenKey(null); setLlmKey(null); setSecret(''); setClearKey(false); setTelegram({assistant:'',user:'',clearAssistant:false,clearUser:false});
+        setMessage(telegramChanged ? '텔레그램 설정을 저장했어요. 기존 그룹·토픽은 바꾸지 않았어요. 저장한 그룹은 새 미러를 명시적으로 연결할 때 사용해요.' : tab === 'llm' ? '저장했어요. 새 조사는 바로, 진행 중인 조사는 현재 대화 차례가 끝난 뒤 적용돼요. 서버를 다시 시작할 필요 없어요.' : '연결 설정을 저장했어요.');
       } catch {setError('저장하지 못했어요. API 주소·문맥 길이·키·봇 토큰 형식을 확인해주세요. 텔레그램은 비공개 초대 링크 대신 그룹 ID 또는 공개 @아이디를 입력해주세요.');}
       finally {setBusy(false);}
     }
@@ -467,26 +523,42 @@
     }
     const field = (label, section, name, extra={}) => h('label', {className:'forsic-connection-field'},
       h('span', null, label), h('input', {value:value[section][name], onChange:e => update(section,name,e.target.value), spellCheck:false, autoComplete:'off', disabled:busy, ...extra}));
-    return h('dialog', {ref:dialog, className:'forsic-connections', 'aria-label':'연결 설정', onCancel:onClose},
-      h('header', null, h('div', null, h('small', null, 'FORSIC'), h('h2', null, '연결 설정')), h('button', {type:'button', onClick:onClose, 'aria-label':'연결 설정 닫기'}, '닫기')),
-      setup?.local_admin && h('a', {href:workspaceURL('setup'), className:'forsic-setup-link', onClick:onClose}, '모델 · 자료 폴더 · 접속 범위 설정', ' →'),
+    return h(embedded ? 'div' : 'dialog', {ref:dialog, className:'forsic-connections'+(embedded ? ' forsic-connections-embedded' : ''), 'aria-label':'연결 설정', onCancel:onClose},
+      !embedded && h('header', null, h('div', null, h('small', null, 'FORSIC'), h('h2', null, '연결 설정')), h('button', {type:'button', onClick:onClose, 'aria-label':'연결 설정 닫기'}, '닫기')),
+      setup?.local_admin && !embedded && h('a', {href:scopedURL('/settings?section=hosting'), className:'forsic-setup-link', onClick:onClose}, '자료 폴더와 접속 범위', ' →'),
       setup?.local_admin === false && h('section', {className:'forsic-connection-readonly'},
         h('h3', null, '연결 상태'),
         h('p', null, '조사 모델 · ', setup.llm_configured ? '설정됨' : '설정 필요'),
         h('p', null, '자료 폴더 · ', setup.evidence_configured ? '설정됨' : '설정 필요'),
         h('p', null, '접속 범위 · ', {local:'이 컴퓨터에서만',private_lan:'내부 네트워크',online:'보안 온라인 접속'}[setup.hosting_current?.mode] || '확인 필요'),
         h('p', null, '연결과 공개 범위는 포식이가 설치된 컴퓨터에서 변경할 수 있습니다.')),
-      setup?.local_admin && h('nav', {className:'forsic-connection-tabs', 'aria-label':'연결 종류'}, ...[['llm','LLM'],['gti','VT / GTI'],['telegram','텔레그램']].map(([id,label]) =>
+      setup?.local_admin && !embedded && h('nav', {className:'forsic-connection-tabs', 'aria-label':'연결 종류'}, ...[['llm','LLM'],['gti','VT / GTI'],['telegram','텔레그램']].map(([id,label]) =>
         h('button', {type:'button', key:id, 'aria-pressed':tab===id, onClick:() => {setTab(id); setMessage(''); setError('');}},label))),
       value ? h('form', {onSubmit:save, noValidate:true},
-        h('section', {hidden:tab!=='llm'}, h('h3', null, 'LLM ', h('span', {className:'forsic-connection-badge'}, '조사 모델')),
+        h('section', {hidden:tab!=='llm',className:'forsic-connection-group'}, h('h2', null, '조사 모델'),
           field('API 주소 · OpenAI 호환', 'llm', 'base_url', {type:'url', required:true, placeholder:'http://서버:11434/v1'}),
           field('모델 이름', 'llm', 'model', {required:true, placeholder:'qwen3.8:latest'}),
-          h(ContextLengthControl, {llm:value.llm, metadata:value.llm_context, busy, onChange:next=>setValue(v=>({...v,llm:{...v.llm,context_length:next,context_changed:true}}))}),
-          h('small', null, '현재 설정: ', value.llm_current.model, ' · ', value.llm_current.base_url,
-            ' · 문맥 ', value.llm_current.context_length ? Number(value.llm_current.context_length).toLocaleString('ko-KR')+' 토큰 (직접 지정)' : '모델 기본값'),
-          h('p', {className:'forsic-connection-hint'}, value.llm_pending ? '변경 대기 · 다음 웹 서버 시작부터 적용돼요.' : '주소·모델 변경은 다음 웹 서버 시작부터 적용돼요. 지금 조사는 바꾸지 않아요.')),
-        h('section', {hidden:tab!=='gti'}, h('h3', null, 'VT / GTI ', h('span', {className:'forsic-connection-badge'}, value.gti.key_configured ? '키 등록됨' : '키 미등록')),
+          h(ModelKeyField, {label:'조사 모델 API 키', configured:value.llm.key_configured, value:llmKey, onChange:setLlmKey, busy}),
+          h(ModelConnectionTest,{connection:'main',model:value.llm,apiKey:llmKey,saving:busy}),
+          h('details', {className:'forsic-connection-advanced'}, h('summary',null,'문맥 길이 · 고급 설정'),
+            h(ContextLengthControl, {llm:value.llm, metadata:value.llm_context, busy, onChange:next=>setValue(v=>({...v,llm:{...v.llm,context_length:next,context_changed:true}}))})),
+          h('div', {className:'forsic-connection-runtime'},
+            h('p', null, h('strong',null,'저장된 기본 모델'), ' · ', value.llm_current.model),
+            h('p', null, value.llm_current.base_url),
+            h('p', null, '문맥 · ', value.llm_current.context_length ? Number(value.llm_current.context_length).toLocaleString('ko-KR')+' 토큰 (직접 지정)' : '모델 기본값'),
+            h('p', null, '새 조사는 바로 · 진행 중인 조사는 다음 대화 차례부터 적용돼요.')),
+          h('p', {className:'forsic-connection-hint'}, '진행 중인 요청은 끝까지 유지해요. API 키를 빈칸으로 저장하면 키 없이 연결해요.')),
+        h('section', {hidden:tab!=='llm',className:'forsic-connection-group'}, h('h2', null, '렌 검토 모델'),
+          h('label', {className:'forsic-connection-check'}, h('input', {type:'checkbox', checked:value.ren_llm.enabled, disabled:busy, onChange:e=>update('ren_llm','enabled',e.target.checked)}), '추가 모델 사용'),
+          h('p', {className:'forsic-connection-hint'}, value.ren_llm.enabled ? '렌은 전용 모델과 독립된 검토 문맥을 사용해요. 포식이의 조사 모델은 바뀌지 않아요.' : '추가 모델을 끄면 렌도 현재 포식이 모델을 사용해요. 입력한 전용 설정은 보관돼요.'),
+          value.ren_llm.enabled && h('div', null,
+            field('렌 전용 URL', 'ren_llm', 'base_url', {type:'url',required:true}),
+            field('렌 전용 모델', 'ren_llm', 'model', {required:true}),
+            h(ModelKeyField, {label:'렌 전용 API 키', configured:value.ren_llm.key_configured, value:renKey, onChange:setRenKey, busy}),
+            h(ModelConnectionTest,{connection:'ren',model:value.ren_llm,apiKey:renKey,saving:busy}),
+            h('p', {className:'forsic-connection-hint'}, '렌 전용 키는 조사 모델의 키와 별도로 보관해요.')),
+          h('p', {className:'forsic-connection-hint'}, '변경은 다음 렌 검토 호출부터 적용돼요. 진행 중인 호출은 바뀌지 않으며, 설정을 열거나 저장해도 모델을 호출하지 않아요.')),
+        h('section', {hidden:tab!=='gti',className:'forsic-connection-group'}, h('h2', null, 'VT / GTI ', h('span', {className:'forsic-connection-badge'}, value.gti.key_configured ? '키 등록됨' : '키 미등록')),
           h('label', {className:'forsic-connection-check'}, h('input', {type:'checkbox', checked:value.gti.enabled, disabled:busy, onChange:e => update('gti','enabled',e.target.checked)}), '외부 위협 평판 조회 사용'),
           h('p', {className:'forsic-connection-address'}, '공식 API · ', h('code', null, value.gti.base_url)),
           h('label', {className:'forsic-connection-field'}, h('span', null, 'API 키'), h('input', {type:'password', value:secret, autoComplete:'new-password', spellCheck:false, disabled:busy || clearKey, placeholder:value.gti.key_configured ? '등록되어 있어요 · 바꿀 때만 입력' : 'VT/GTI API 키 입력', onChange:e => setSecret(e.target.value)})),
@@ -494,8 +566,9 @@
           h('label', {className:'forsic-connection-check'}, h('input', {type:'checkbox', checked:value.gti.allow_public_network_indicators, disabled:busy, onChange:e => update('gti','allow_public_network_indicators',e.target.checked)}), '공개 IP·도메인 조회도 허용'),
           h('p', {className:'forsic-connection-hint'}, '기본은 파일 해시 조회예요. IP·도메인은 조회만으로 GTI 공유 데이터셋에 포함될 수 있어요. 파일 업로드·URL 재검사는 하지 않아요.'),
           h('button', {type:'button', disabled:busy || !value.gti.key_configured || !!secret || clearKey, onClick:check}, 'GTI 연결 확인'),
-          h('small', null, '저장된 키로 공개 시험 해시 1개만 조회해요. 사건 자료·모델 호출은 없어요.')),
-        h('section', {hidden:tab!=='telegram'}, h('h3',null,'텔레그램'),
+          h('small', null, '저장된 키로 공개 시험 해시 1개만 조회해요. 사건 자료·모델 호출은 없어요.'),
+          h('p', {className:'forsic-connection-hint'}, '변경은 저장 후 다음 GTI 조회부터 적용돼요.')),
+        h('section', {hidden:tab!=='telegram',className:'forsic-connection-group'}, h('h2',null,'텔레그램'),
           field('그룹 ID 또는 공개 그룹 주소', 'telegram', 'group', {type:'text', maxLength:256, placeholder:'-100… / @group_name / https://t.me/group_name'}),
           h('p',{className:'forsic-connection-hint'},'비공개 초대 링크(t.me/+…)가 아니라 그룹 ID를 입력해주세요. 저장은 연결 정보만 보관하며, 진행 중인 그룹·사건 토픽은 옮기지 않아요.'),
           ...[['assistant','clearAssistant','assistant_key_configured','포식이 봇 토큰'],['user','clearUser','user_key_configured','내 질문용 봇 토큰']].map(([name,clear,configured,label]) =>
@@ -508,7 +581,7 @@
                 h('input',{type:'checkbox',checked:telegram[clear],disabled:busy,onChange:e=>setTelegram(v=>({...v,[clear]:e.target.checked,[name]:''}))}),label+' 삭제'))),
           h('p',{className:'forsic-connection-hint'},'빈칸으로 저장하면 기존 토큰을 유지해요. 변경은 다음 텔레그램 미러 시작부터 적용되며, 기존 그룹과 사건별 토픽은 그대로예요.'),
           h('p',{className:'forsic-connection-hint'},'새 봇으로 바꿀 때는 두 봇 모두 기존 그룹에 참여해 있어야 해요. 저장만으로 메시지를 보내지는 않아요.')),
-        h('footer', null, h('button', {type:'submit', className:'forsic-connection-save', disabled:busy}, busy ? '처리 중…' : '설정 저장')))
+        h('footer', {className:'forsic-connection-actions'}, h('span',null,'변경한 연결 설정을 함께 저장합니다.'), h('button', {type:'submit', className:'forsic-connection-save', disabled:busy}, busy ? '처리 중…' : '설정 저장')))
         : !error && !setup && h('p', null, '설정을 불러오고 있어요…'),
       message && h('p', {className:'forsic-connection-message', role:'status'}, message),
       error && h('p', {className:'forsic-connection-error', role:'alert'}, error));
@@ -932,11 +1005,13 @@
   }
   window.__HERMES_PLUGINS__.register('forsic', Workspace);
   window.__HERMES_PLUGINS__.registerSlot('forsic', 'sidebar', Sidebar);
+  window.__HERMES_PLUGINS__.registerSlot('forsic', 'settings-connections', props => h(ConnectionSettings, {...props,embedded:true}));
   window.__HERMES_PLUGINS__.registerSlot('forsic', 'chat:top', () => {
     const {data}=useCase();
     return data?.case?.question==='질문 선택 대기' ? h('div',{className:'forsic-intake-greeting'},'증거가 등록됐어요. 종합 침해 분석은 아래 대화에 1을 입력하거나, 확인하고 싶은 내용을 자유롭게 질문하세요.') : null;
   });
   window.__HERMES_PLUGINS__.registerSlot('forsic', 'header-left', Identity);
+  window.__HERMES_PLUGINS__.registerSlot('forsic', 'tenant-entry', () => h(Lens, {mode:'idle', active:false}));
   document.documentElement?.classList.add('forsic-shell');
   document.title = 'Forsic';
   // Offline contract/visual tests reuse the real component without a model or case writes.

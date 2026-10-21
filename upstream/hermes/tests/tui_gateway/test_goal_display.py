@@ -10,6 +10,9 @@ def test_goal_followup_uses_hidden_projection_without_changing_prompt(monkeypatc
     session = {"running": False, "history_lock": threading.RLock()}
     prompt = "[Continuing toward your standing goal]\nGoal: investigate\n\ncontinue"
     dispatch = Mock()
+    # This projection-only test has no stored session; durable pause admission is
+    # exercised against real isolated stores in test_safe_pause_control.py.
+    monkeypatch.setattr(server, "_session_goal_paused", lambda *args: False)
     monkeypatch.setattr(server, "_drain_queued_prompt", lambda *args: False)
     monkeypatch.setattr(server, "_session_turn_admission", lambda *args: nullcontext(True))
     monkeypatch.setattr(server, "_dispatch_followup_turn", dispatch)
@@ -29,5 +32,5 @@ def test_dispatch_preserves_prompt_and_passes_display_only_hint(monkeypatch):
     monkeypatch.setattr(server, "_emit", emit)
     session = {"running": True}
     server._dispatch_followup_turn("r", "s", session, "exact goal body", "goal", display_kind="hidden")
-    submit.assert_called_once_with("r", "s", session, "exact goal body", display_kind="hidden")
+    submit.assert_called_once_with("r", "s", session, "exact goal body", respect_goal_pause=True, display_kind="hidden")
     emit.assert_called_once_with("message.start", "s")

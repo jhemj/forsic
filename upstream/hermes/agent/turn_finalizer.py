@@ -536,6 +536,20 @@ def finalize_turn(
 ):
     """Run the post-loop finalization and return the turn ``result`` dict."""
     from agent.conversation_loop import logger
+    from agent.goal_pause import SAFE_PAUSE_REASON, settle_requested_goal_pause
+    if failed or _turn_exit_reason == "guardrail_halt":
+        # The stop intent remains durable, but a failed canonical write or safety
+        # halt must never be reclassified as a successfully saved safe pause.
+        decision = getattr(agent, "_tool_guardrail_halt_decision", None)
+        reason = ("tool guardrail: " + str(getattr(decision, "code", "halt"))
+                  if _turn_exit_reason == "guardrail_halt" else "native work failed before safe pause")
+        pause_settled = settle_requested_goal_pause(agent, reason=reason)
+    else:
+        pause_settled = settle_requested_goal_pause(agent)
+    safe_pause_stopped = pause_settled or _turn_exit_reason == SAFE_PAUSE_REASON
+    if pause_settled and not failed and _turn_exit_reason != "guardrail_halt":
+        interrupted = True
+        _turn_exit_reason = SAFE_PAUSE_REASON
 
     final_response, _turn_exit_reason, preserved_verification_fallback, interrupted = _resolve_budget_fallback(
         agent, final_response=final_response, api_call_count=api_call_count,
@@ -613,7 +627,8 @@ def finalize_turn(
     # The model has answered (or the loop gave up): a title upgrade held back because it shares a
     # self-hosted endpoint with the main request (#117296) may go out now.
     from agent.turn_context import start_deferred_title_upgrade
-    _guarded_cleanup("start_deferred_title_upgrade", lambda: start_deferred_title_upgrade(agent), _cleanup_errors, logger)
+    if not safe_pause_stopped:
+        _guarded_cleanup("start_deferred_title_upgrade", lambda: start_deferred_title_upgrade(agent), _cleanup_errors, logger)
     # ``user_message`` may be a multimodal list of parts; the trajectory format wants a string.
     _guarded_cleanup(
         "save_trajectory",
@@ -639,10 +654,10 @@ def finalize_turn(
         # earlier seam transformed; the normal text turn already did this before its flush and
         # gets the recorded outcome back. Either way the tail close below writes the text the
         # user will see, never the raw model text (#44239).
-        if final_response and not interrupted:
+        if final_response and not interrupted and not safe_pause_stopped:
             final_response, _, _ = apply_llm_output_transform(agent, final_response, turn_id=turn_id, logger=logger)
         _close_transcript_tail(agent, messages, final_response, interrupted, _recovered_from_stream)
-        if not interrupted and not failed:
+        if not interrupted and not failed and not safe_pause_stopped:
             _micro_compact_after_turn(agent, messages, final_response, logger, effective_task_id)
         agent._persist_session(messages, conversation_history)
 
@@ -656,7 +671,7 @@ def finalize_turn(
     _log_turn_exit(agent, messages, final_response, api_call_count, _turn_exit_reason, interrupted, logger)
 
     # Response transforms apply only to real, uninterrupted responses.
-    if final_response and not interrupted:
+    if final_response and not interrupted and not safe_pause_stopped:
         final_response = _append_file_mutation_footer(agent, final_response, logger)
     if not interrupted:
         final_response = _explain_abnormal_exit(
@@ -666,7 +681,7 @@ def finalize_turn(
     _platform = getattr(agent, "platform", None) or ""
     _response_transformed = False
     _pre_transform_response = None
-    if final_response and not interrupted:
+    if final_response and not interrupted and not safe_pause_stopped:
         final_response, _response_transformed, _pre_transform_response = _apply_output_hooks(
             agent, final_response, logger, platform=_platform, effective_task_id=effective_task_id,
             turn_id=turn_id, original_user_message=original_user_message, messages=messages,
@@ -774,7 +789,7 @@ def finalize_turn(
     # External memory provider: sync the completed turn + queue next prefetch.
     agent._sync_external_memory_for_turn(
         original_user_message=original_user_message, final_response=final_response,
-        interrupted=interrupted, messages=messages,
+        interrupted=interrupted or safe_pause_stopped, messages=messages,
     )
 
     # Background memory/skill review runs AFTER delivery so it never competes with the
@@ -784,6 +799,7 @@ def finalize_turn(
     if (
         final_response
         and not interrupted
+        and not safe_pause_stopped
         and not getattr(agent, "skip_background_review", False)
         and (_should_review_memory or _should_review_skills)
     ):

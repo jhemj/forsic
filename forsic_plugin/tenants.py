@@ -264,6 +264,12 @@ class TenantRegistry:
             allowed_settings = ('independent_review', 'executive_followup', 'question_contract_version')
             plugin['entries'] = {'forsic': {'enabled': True, 'settings': {
                 k: deepcopy(_settings(source)[k]) for k in allowed_settings if k in _settings(source)}}}
+            ren = (_settings(source).get('connections') or {}).get('ren_llm')
+            if ren:
+                # Native key_env resolves only in the new profile's secret scope.
+                # Retain the connection reference; never clone the source .env.
+                plugin['entries']['forsic']['settings']['connections'] = {'ren_llm': {
+                    k: deepcopy(ren[k]) for k in ('enabled', 'base_url', 'model', 'key_env') if k in ren}}
             config['plugins'] = plugin
             old_plugin = source.get('plugins', {}).get('entries', {}).get('forsic', {})
             for key in ('allow_gateway_injection', 'allow_llm'):

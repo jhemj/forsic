@@ -1,5 +1,41 @@
 import {expect, it} from 'vitest'
 import {applyConversationEvent, conversationEventStatus, emptyConversation, fullSavedCalls, hydrateConversation, reconcileBufferedEvents, reconcileConversation, savedConversation} from './forsic-conversation'
+import {toolDetail, toolStatusLabel} from './forsic-tool-detail'
+
+it('keeps native bridge purpose and raw provenance across live, reloaded and compressed history projections', () => {
+  const args = {command: 'x'.repeat(13000), reason: 'Compare authentication records'}
+  const wrapper = {calls: [{name: 'forsic_shell', arguments: args}]}
+  const result = '{"error":"Command failed","command_outcome":{"status":"failed"},"execution":{"exit_code":1}}'
+  const messages = [
+    {row_id: 1, role: 'assistant', tool_calls: [{id: 'native-id', function: {name: 'tool_call', arguments: JSON.stringify(wrapper)}}]},
+    {row_id: 2, role: 'tool', tool_call_id: 'native-id', tool_name: 'forsic_shell', content: result},
+  ]
+  let live = applyConversationEvent(emptyConversation(), {type: 'tool.start', payload: {tool_id: 'native-id', name: 'forsic_shell', args}})
+  live = applyConversationEvent(live, {type: 'tool.complete', payload: {tool_id: 'native-id', name: 'forsic_shell', result_text: result}})
+  const reloaded = reconcileConversation(savedConversation(messages), live)
+  expect(reloaded.rows).toHaveLength(1)
+  for (const call of [live.rows[0].calls![0], reloaded.rows[0].calls![0], fullSavedCalls(messages)[0]]) {
+    expect(call).toMatchObject({id: 'native-id', name: 'forsic_shell', status: 'error', argumentsTruncated: false})
+    expect(toolDetail(call).purpose).toBe(args.reason)
+    expect(toolDetail(call).details).toContainEqual({label: '명령', value: args.command})
+    expect(toolStatusLabel(call)).toBe('실행 실패')
+  }
+  expect(reloaded.rows[0].calls![0].submittedRequest?.arguments).toBe(JSON.stringify(wrapper))
+  const compressed = fullSavedCalls([messages[0], {...messages[1], content: '{"pruned":true,"body_omitted":true}'}])[0]
+  expect(toolDetail(compressed).purpose).toBe(args.reason)
+  expect(compressed.status).toBe('unknown')
+})
+
+it('keeps a compressed native batch as one unknown parent record with requested operation labels', () => {
+  const argumentsText = JSON.stringify({calls: [{name: 'forsic_skill', arguments: {}}, {name: 'forsic_shell', arguments: {reason: 'Compare selected records'}}]})
+  const [row] = savedConversation([
+    {role: 'assistant', tool_calls: [{id: 'batch-id', function: {name: 'tool_call', arguments: argumentsText}}]},
+    {role: 'tool', tool_call_id: 'batch-id', tool_name: 'tool_call', content: '[tool_call] calls=[...] (270 chars result)'},
+  ])
+  expect(row.calls).toHaveLength(1)
+  expect(row.calls![0]).toMatchObject({id: 'batch-id', name: 'tool_call', arguments: argumentsText, status: 'unknown'})
+  expect(toolDetail(row.calls![0])).toMatchObject({label: '조사 스킬 읽기 · 분석 터미널', purpose: 'Compare selected records'})
+})
 
 it('separates native wait phases from actual deltas and tool execution without exposing callback text', () => {
   const current = {statusText: '조사 중', running: true}

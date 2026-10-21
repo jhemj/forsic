@@ -1504,6 +1504,10 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[Dict[str, Any]]:
     Returns a turn result dict when a phase ends the turn, else None once the loop is left
     (success, a restart armed on ``s._retry``, interrupt, or retries exhausted)."""
     while s.retry_count < s.max_retries:
+        from agent.goal_pause import SAFE_PAUSE_NOTICE, SAFE_PAUSE_REASON, settle_requested_goal_pause
+        if settle_requested_goal_pause(agent):
+            s.interrupted, s.final_response, s._turn_exit_reason = True, SAFE_PAUSE_NOTICE, SAFE_PAUSE_REASON
+            return None
         _ng = _run_phase(nous_rate_limit_guard, agent, s)
         if _ng.action == "return":
             return _ng.result
@@ -1511,6 +1515,9 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[Dict[str, Any]]:
             return None
         try:
             _run_phase(build_api_request, agent, s)
+            if settle_requested_goal_pause(agent):
+                s.interrupted, s.final_response, s._turn_exit_reason = True, SAFE_PAUSE_NOTICE, SAFE_PAUSE_REASON
+                return None
             if _run_phase(perform_api_call, agent, s).action == "break":
                 return None
             _rc = _run_phase(check_api_response, agent, s)
@@ -1654,6 +1661,8 @@ def _run_conversation_turn(
         early_result = _run_api_retry_loop(agent, s)
         if early_result is not None:
             return early_result
+        if s._turn_exit_reason == "safe_paused_by_user":
+            break
 
         _rs = _run_phase(apply_retry_restarts, agent, s)
         if _rs.action == "break":
@@ -1673,12 +1682,18 @@ def _run_conversation_turn(
             if _v.action == "return":
                 return _v.result
             if _v.action == "break":
+                if s._turn_exit_reason == "safe_paused_by_user":
+                    s.interrupted = True
                 break
             if _v.action == "continue":
                 continue
         except Exception as e:
             if _run_phase(handle_outer_loop_error, agent, s, e=e).action == "break":
                 break
+
+    if s._turn_exit_reason == "safe_paused_by_user" and s.final_response is None:
+        from agent.goal_pause import SAFE_PAUSE_NOTICE
+        s.final_response = SAFE_PAUSE_NOTICE
 
     # Post-loop finalization lives in agent/turn_finalizer.finalize_turn.
     result = finalize_turn(agent, **{

@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 import uuid
+from urllib.parse import urlencode
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -203,7 +204,7 @@ class TenantBoundaryTests(unittest.TestCase):
             response=self.client.get(self.prefix+path)
             self.assertEqual(response.status_code,400,(path,response.text))
 
-    def test_remote_entry_lists_served_tenant_and_resolves_without_admin_access(self):
+    def test_remote_entry_lists_registered_tenants_before_cases_or_sessions_exist(self):
         from forsic_plugin.remote_policy import ForsicRemoteAccessMiddleware,ForsicRemotePolicy
         app=FastAPI();app.state.initial_profile='default'
         app.include_router(plugin_api.router,prefix=self.prefix)
@@ -213,17 +214,24 @@ class TenantBoundaryTests(unittest.TestCase):
         before=self.files()
         listed=remote.get(self.prefix+'/tenants')
         self.assertEqual(listed.status_code,200,listed.text)
-        self.assertEqual([t['tenant_id'] for t in listed.json()['tenants']],[self.legacy['tenant_id']])
+        self.assertEqual([t['tenant_id'] for t in listed.json()['tenants']],
+                         [t['tenant_id'] for t in (self.legacy,self.a,self.b)])
         self.assertEqual(listed.json()['access'],{'can_create':False,'mode':'restricted'})
         selected=remote.get(self.prefix+'/tenants/resolve',params={'tenant_id':self.legacy['tenant_id']})
         self.assertEqual(selected.status_code,200,selected.text)
         self.assertEqual(selected.json()['profile'],'default')
-        # A known tenant ID must not bypass the fixed served profile by omitting
-        # profile=; reject it before opening its native session/case store.
+        for tenant in (self.a,self.b):
+            selected=remote.get(self.prefix+'/tenants/resolve',params=self.params(tenant))
+            self.assertEqual(selected.status_code,200,selected.text)
+            self.assertEqual(selected.json()['profile'],tenant['profile_name'])
+            self.assertFalse(Path(tenant['native_db']).exists())
+            self.assertFalse(Path(tenant['case_root']).exists())
+        # A known tenant does not authorize a different profile or a native
+        # profile that was never registered; reject before opening its data.
         with patch('forsic_plugin.tenants.assert_session_scope',side_effect=AssertionError('foreign data opened')):
-            for query in ({'tenant_id':self.a['tenant_id']},
-                          {'tenant_id':self.a['tenant_id'],'session_id':'foreign'},
-                          {'tenant_id':self.b['tenant_id'],'case_id':'foreign'}):
+            for query in ({'tenant_id':self.a['tenant_id'],'profile':self.b['profile_name']},
+                          {'tenant_id':self.a['tenant_id'],'profile':'unregistered','session_id':'foreign'},
+                          [('profile',self.a['profile_name']),('profile',self.b['profile_name'])]):
                 denied=remote.get(self.prefix+'/tenants/resolve',params=query)
                 self.assertIn(denied.status_code,(403,404))
         self.assertEqual(remote.post(self.prefix+'/tenants',json={}).status_code,403)
@@ -233,6 +241,160 @@ class TenantBoundaryTests(unittest.TestCase):
         local=self.client.get(self.prefix+'/tenants').json()
         self.assertEqual(len(local['tenants']),3)
         self.assertEqual(local['access'],{'can_create':True,'mode':'local'})
+
+    def test_named_remote_host_still_serves_only_its_registered_tenant(self):
+        from forsic_plugin.remote_policy import ForsicRemoteAccessMiddleware,ForsicRemotePolicy
+        app=FastAPI();app.state.initial_profile=self.a['profile_name']
+        app.include_router(plugin_api.router,prefix=self.prefix)
+        app.add_middleware(ForsicRemoteAccessMiddleware,policy=ForsicRemotePolicy(
+            {'remote_evidence_directory_only':True,'intake_root':self.a['intake_root']},
+            self.a['profile_home'],profile=self.a['profile_name']))
+        remote=TestClient(app,base_url='http://192.0.2.50:8860',client=('100.64.0.20',1234))
+        self.assertEqual([t['tenant_id'] for t in remote.get(self.prefix+'/tenants').json()['tenants']],
+                         [self.a['tenant_id']])
+        self.assertEqual(remote.get(self.prefix+'/tenants/resolve',params=self.params(self.a)).status_code,200)
+        for tenant in (self.b,self.legacy):
+            response=remote.get(self.prefix+'/tenants/resolve',params={'tenant_id':tenant['tenant_id']})
+            self.assertIn(response.status_code,(403,404))
+
+    def test_remote_default_host_selects_first_fresh_tenant_without_legacy_workspace(self):
+        from forsic_plugin.remote_policy import ForsicRemoteAccessMiddleware,ForsicRemotePolicy
+        from forsic_plugin.tenants import _atomic
+        _atomic(self.registry.path, {'schema':1,'tenants':[],'operations':{},'legacy_migration_complete':True})
+        fresh=self.registry.create('First fresh workspace',operation_id=str(uuid.uuid4()))
+        app=FastAPI();app.state.initial_profile='default'
+        app.include_router(plugin_api.router,prefix=self.prefix)
+        app.add_middleware(ForsicRemoteAccessMiddleware,policy=ForsicRemotePolicy(
+            {'remote_evidence_directory_only':True},self.root))
+        remote=TestClient(app,base_url='http://192.0.2.50:8860',client=('100.64.0.20',1234))
+        before=self.files()
+        with patch('forsic_plugin.tenants.assert_session_scope',side_effect=AssertionError('entry opened a session')):
+            for query in ({},{'profile':'default'}):
+                listed=remote.get(self.prefix+'/tenants',params=query)
+                self.assertEqual(listed.status_code,200,listed.text)
+                self.assertEqual([t['tenant_id'] for t in listed.json()['tenants']],[fresh['tenant_id']])
+            for query in ({'tenant_id':fresh['tenant_id']},self.params(fresh)):
+                resolved=remote.get(self.prefix+'/tenants/resolve',params=query)
+                self.assertEqual(resolved.status_code,200,resolved.text)
+                self.assertEqual(resolved.json()['profile'],fresh['profile_name'])
+            denied=remote.get(self.prefix+'/investigations',params={'profile':'default'})
+            self.assertIn(denied.status_code,(400,403,404),denied.text)
+        self.assertFalse(Path(fresh['native_db']).exists())
+        self.assertFalse(Path(fresh['case_root']).exists())
+        self.assertEqual(self.files(),before)
+
+    def bound_native_session(self, tenant, session_id, case_id):
+        from hermes_state import SessionDB
+        from forsic_plugin.intake import write_json
+        case=Path(tenant['case_root'])/case_id
+        manifest=case/'case.json'
+        (case/'evidence').mkdir(parents=True)
+        write_json(manifest,{'case_id':case_id,'tenant_id':tenant['tenant_id'],
+            'profile_name':tenant['profile_name'],'output_root':str(case/'results'),
+            'evidence_root':str(case/'evidence'),'synthetic':True})
+        binding=Path(tenant['intake_root'])/(hashlib.sha256(session_id.encode()).hexdigest()+'.json')
+        write_json(binding,{'manifest':str(manifest)})
+        with bind_scope(tenant):
+            Case(manifest)
+            db=SessionDB(Path(tenant['native_db']))
+            try:db.create_session(session_id,'web',profile_name=tenant['profile_name'])
+            finally:db.close()
+        return binding,manifest
+
+    def test_remote_same_native_session_id_stays_with_selected_tenant_and_case(self):
+        from forsic_plugin.remote_policy import ForsicRemoteAccessMiddleware,ForsicRemotePolicy
+        policy=ForsicRemotePolicy({'remote_evidence_directory_only':True},self.root)
+        a_binding,_=self.bound_native_session(self.a,'shared-session-id','case-a')
+        _,b_manifest=self.bound_native_session(self.b,'shared-session-id','case-b')
+        app=FastAPI();app.state.initial_profile='default'
+        app.include_router(plugin_api.router,prefix=self.prefix)
+        app.add_middleware(ForsicRemoteAccessMiddleware,policy=policy)
+        remote=TestClient(app,base_url='http://192.0.2.50:8860',client=('192.0.2.20',1234))
+        for tenant,case_id,foreign_case in ((self.a,'case-a','case-b'),(self.b,'case-b','case-a')):
+            selected=policy.select(profile=tenant['profile_name'])
+            self.assertTrue(selected.bound('shared-session-id'))
+            query={**self.params(tenant),'session_id':'shared-session-id','case_id':case_id}
+            resolved=remote.get(self.prefix+'/tenants/resolve',params=query)
+            self.assertEqual(resolved.status_code,200,resolved.text)
+            self.assertEqual(resolved.json()['tenant_id'],tenant['tenant_id'])
+            wrong=remote.get(self.prefix+'/tenants/resolve',params={**query,'case_id':foreign_case})
+            self.assertIn(wrong.status_code,(403,404),wrong.text)
+            scope={'path':'/api/sessions/shared-session-id/messages','method':'GET',
+                   'query_string':urlencode(self.params(tenant)).encode()}
+            self.assertTrue(policy.http_allowed(scope))
+        # The same row id in both databases cannot authorize another tenant's
+        # manifest, even if the binding itself is in the selected intake root.
+        a_binding.write_text(json.dumps({'manifest':str(b_manifest)}))
+        self.assertFalse(policy.select(profile=self.a['profile_name']).bound('shared-session-id'))
+        self.assertTrue(policy.select(profile=self.b['profile_name']).bound('shared-session-id'))
+
+    def test_remote_native_resume_and_controls_follow_runtime_home_and_reject_forged_ownership(self):
+        from forsic_plugin.remote_policy import ForsicRemotePolicy
+        from tui_gateway import server
+        policy=ForsicRemotePolicy({'remote_evidence_directory_only':True},self.root)
+        for tenant in (self.legacy,self.a,self.b):
+            self.bound_native_session(tenant,'shared-session-id','native-case')
+            self.assertTrue(policy.rpc_allowed({'method':'session.resume','params':{
+                'session_id':'shared-session-id','profile':tenant['profile_name']}}))
+        # Native deferred runtime records carry profile_home, not profile_name.
+        sessions={
+            'a-live':{'session_key':'shared-session-id','profile_home':self.a['profile_home']},
+            'b-live':{'session_key':'shared-session-id','profile_home':self.b['profile_home']},
+            'default-live':{'session_key':'shared-session-id','profile_home':None},
+            'forged-home':{'session_key':'shared-session-id','profile_home':str(self.root/'unregistered'),
+                           'profile_name':self.a['profile_name']},
+            'mismatched-name':{'session_key':'shared-session-id','profile_home':self.a['profile_home'],
+                               'profile_name':self.b['profile_name']},
+            'mismatched-default':{'session_key':'shared-session-id','profile_home':None,
+                                  'profile_name':self.a['profile_name']},
+        }
+        with patch.dict(server._sessions,sessions,clear=True):
+            for runtime,tenant in (('a-live',self.a),('b-live',self.b),('default-live',self.legacy)):
+                for selection in ({'profile':tenant['profile_name']},{}):
+                    for method,extra in (('session.control.read',{}),('session.activate',{}),
+                                         ('session.control',{'action':'goal.pause'}),
+                                         ('prompt.submit',{'text':'Continue this synthetic case'})):
+                        params={'session_id':runtime,**selection,**extra}
+                        self.assertTrue(policy.rpc_allowed({'method':method,'params':params}),(method,params))
+            for runtime,selection in (('a-live',{'profile':self.b['profile_name']}),
+                                      ('b-live',{'profile':self.a['profile_name']}),
+                                      ('forged-home',{}),('mismatched-name',{}),('mismatched-default',{}),
+                                      ('forged-home',{'profile':self.a['profile_name']}),
+                                      ('mismatched-name',{'profile':self.a['profile_name']})):
+                params={'session_id':runtime,**selection}
+                self.assertFalse(policy.rpc_allowed({'method':'session.control.read','params':params}),params)
+            self.assertTrue(policy.rpc_allowed({'method':'session.resume','params':{'session_id':'shared-session-id'}}))
+
+    def test_remote_native_http_requires_the_same_canonical_profile_as_the_handler(self):
+        from forsic_plugin.remote_policy import ForsicRemotePolicy
+        policy=ForsicRemotePolicy({'remote_evidence_directory_only':True},self.root)
+        root_binding,_=self.bound_native_session(self.legacy,'duplicate-id','default-case')
+        self.bound_native_session(self.a,'duplicate-id','tenant-case')
+        def allowed(query):
+            return policy.http_allowed({'path':'/api/sessions/duplicate-id/messages','method':'GET',
+                'query_string':urlencode(query).encode()})
+        # The native handler reads only profile=; aliases must not authorize a
+        # tenant store while the handler silently opens the launch store.
+        for query in (
+            {'tenant_id':self.a['tenant_id']},
+            {'profile_name':self.a['profile_name']},
+            {'tenant_id':self.a['tenant_id'],'profile':''},
+            {'profile_name':self.a['profile_name'],'profile':''},
+            {'profile_name':self.a['profile_name'],'profile':'default'},
+            [('profile',self.a['profile_name']),('profile','')],
+            [('profile',''),('profile',self.a['profile_name'])],
+            {'tenant_id':self.b['tenant_id'],'profile':self.a['profile_name']},
+        ):
+            with self.subTest(query=query):
+                self.assertFalse(allowed(query))
+        self.assertTrue(allowed(self.params(self.a)))
+        self.assertTrue(allowed({'profile':self.a['profile_name']}))
+        self.assertTrue(allowed({'profile':'default'}))
+        self.assertTrue(allowed({}))
+        root_binding.unlink()
+        self.assertFalse(allowed({}))
+        self.assertFalse(allowed({'tenant_id':self.a['tenant_id']}))
+        self.assertTrue(allowed(self.params(self.a)))
 
     def test_unregistered_native_profile_cannot_fall_back_to_global_intake_or_library(self):
         from forsic_plugin.tenants import current_scope

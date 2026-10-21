@@ -1,6 +1,8 @@
 """Offline native read -> selected evidence -> current judgment, without missions."""
 import json
 from copy import deepcopy
+from pathlib import Path
+import subprocess
 from unittest.mock import patch
 import unittest
 import test_efficiency_contracts as fixtures
@@ -67,6 +69,95 @@ class GroundedJudgmentTests(unittest.TestCase):
     def test_failed_reads_and_metadata_do_not_offer_body_refs(self):
         failed=self.call('forsic_read',{'path':'missing.log'});self.assertNotIn('presented_spans',failed)
         metadata=self.call('forsic_list',{'path':'.'});self.assertNotIn('presented_spans',metadata)
+
+    def failed_shell(self):
+        from forsic_plugin import shell_workspace as shell
+        work = Path(self.temp.name) / 'shell-work'
+        work.mkdir(exist_ok=True)
+        def run(argv, container, *_args, **_kwargs):
+            process = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', argv[-1]],
+                capture_output=True, cwd=work)
+            return {'stdout': process.stdout, 'stderr': process.stderr,
+                'execution': {'state': 'returned', 'backend': 'docker', 'container': container,
+                    'exit_code': process.returncode, 'termination_confirmed': True}}
+        with patch.object(shell, '_evidence_mounts', return_value=[]), \
+                patch.object(shell, '_workspace', return_value=work), \
+                patch.object(shell.os, 'getuid', return_value=1000), \
+                patch.object(shell, 'run_container', side_effect=run) as executed:
+            result = json.loads(self.case.invoke('forsic_shell',
+                {'command': "printf 'observed partial output\\n'; exit 1"}, 'synthetic-session',
+                request_context={'status': 'ready', 'goal_id': 'synthetic-goal', 'goal_status': 'active',
+                    'requested_session_id': 'synthetic-session', 'conversation_id': 'synthetic-session',
+                    'case_id': self.case.config['case_id']}))
+        self.assertEqual(executed.call_count, 1, result)
+        self.assertEqual(result['execution']['exit_code'], 1)
+        self.assertIn('error', result)
+        self.assertNotIn('presented_spans', result)
+        return result
+
+    def test_failed_output_citation_rejection_lookup_and_explicit_c1_retry(self):
+        from forsic_plugin.report_driven.host import source_record
+        valid = self.ref(self.read())
+        failed = self.failed_shell()
+        source = source_record(self.case.event(failed['evidence_id']))
+        invented = 'C2:' + source['id'] + ':' + source['version'] + ':0'
+        payload = self.payload([valid])
+        claim = deepcopy(payload['judgment']);claim['statement'] = payload['answer']
+        payload['judgment'] = {'claims': [deepcopy(claim), {**claim, 'citation_refs': [valid, invented]}]}
+        before = current(self.case)
+        rejected = self.call('forsic_question', payload)
+        self.assertEqual(rejected['error_code'], 'invalid_citation_selection')
+        self.assertEqual(rejected['failure_stage'], 'citation_validation')
+        self.assertFalse(rejected['write_applied'])
+        self.assertEqual(rejected['invalid_fields'][0]['path'], 'judgment.claims[1].citation_refs[1]')
+        self.assertNotIn('observed partial output', json.dumps(rejected))
+        for key in ('questions', 'claims', 'observations'):
+            self.assertEqual(current(self.case)[key], before[key])
+        lookup = rejected['recovery']['read_call']
+        self.assertEqual(lookup, {'tool': 'forsic_reporting', 'arguments': {
+            'action': 'source', 'source_id': source['id'], 'source_version': source['version'],
+            'pointer': '/stdout', 'offset': 0}})
+        page = self.call(lookup['tool'], lookup['arguments'])
+        self.assertNotIn('error', page, page)
+        self.assertTrue(page['citation_ref'].startswith('C1:'))
+        context = page['acquisition_context']['derivation']
+        self.assertEqual(context['exit_code'], 1)
+        self.assertTrue(context['output_may_be_generated'])
+        payload['judgment']['claims'][1]['citation_refs'][1] = page['citation_ref']
+        saved = self.call('forsic_question', payload)
+        self.assertNotIn('error', saved, saved)
+        observations = current(self.case)['observations']
+        selected = next(item for item in observations if item.get('literal') == 'observed partial output\n')
+        self.assertEqual(selected['acquisition_context']['derivation']['exit_code'], 1)
+        self.assertEqual(self.case.event(source['id'])['data']['execution']['exit_code'], 1)
+
+    def test_unavailable_unreturned_or_stale_failed_source_has_no_output_recovery(self):
+        from forsic_plugin.report_driven.host import source_record
+        failed = self.failed_shell()
+        original = self.case.event(failed['evidence_id'])['data']
+        variants = [
+            {'status': 'pending'},
+            {'execution': {'state': 'completion_unknown', 'exit_code': 1, 'termination_confirmed': False}},
+            {'execution': {'state': 'not_started', 'termination_confirmed': True}},
+            {'stdout': '', 'stderr': ''},
+            {'stdout': None, 'stderr': None},
+            {'execution_rejected': True},
+            {'started_id': '0' * 32},
+        ]
+        for index, changes in enumerate(variants):
+            with self.subTest(changes=changes):
+                data = {**deepcopy(original), **changes}
+                eid = self.case.record('tool_result', data, 'synthetic-session')
+                source = source_record(self.case.event(eid))
+                ref = 'C2:' + eid + ':' + source['version'] + ':0'
+                result = self.call('forsic_question', {**self.payload([ref]), 'operation_id': 'unavailable-' + str(index)})
+                self.assertEqual(result['error_code'], 'invalid_citation_selection')
+                self.assertNotIn('recovery', result)
+        for index, ref in enumerate(('C2:' + '0'*32 + ':' + '0'*64 + ':0',
+                'C2:' + failed['evidence_id'] + ':' + '0'*64 + ':0')):
+            result = self.call('forsic_question', {**self.payload([ref]), 'operation_id': 'bad-source-' + str(index)})
+            self.assertEqual(result['error_code'], 'invalid_citation_selection')
+            self.assertNotIn('recovery', result)
     def test_revision_and_owner_fences_are_unchanged(self):
         r=self.read();saved=self.call('forsic_question',self.payload([self.ref(r)]));q=find(current(self.case),'questions',saved['question']['question_id'])
         bad=self.payload([self.ref(r)]);bad.update(operation_id='stale',question_id=q['id'],expected_revision=q['revision']+1)

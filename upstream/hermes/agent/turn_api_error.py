@@ -79,6 +79,32 @@ def handle_api_error(
     if agent.thinking_callback:
         agent.thinking_callback("")
 
+    from agent.goal_pause import goal_pause_requested, settle_requested_goal_pause
+    if goal_pause_requested(agent):
+        # Stopping automatic work must retain the actual provider failure. Reuse
+        # native classification/summary and receipts, without any recovery attempt.
+        classified = classify_api_error(
+            api_error, provider=getattr(agent, "provider", "") or "",
+            model=getattr(agent, "model", "") or "", approx_tokens=approx_tokens,
+            context_length=getattr(getattr(agent, "context_compressor", None), "context_length", 200000),
+            num_messages=len(api_messages) if api_messages else 0,
+            base_url=str(getattr(agent, "base_url", "") or ""), api_key=getattr(agent, "api_key", None))
+        summary = agent._summarize_api_error(api_error)
+        agent._invoke_api_request_error_hook(
+            task_id=effective_task_id, turn_id=turn_id, api_request_id=api_request_id,
+            api_call_count=api_call_count, api_start_time=api_start_time, api_kwargs=api_kwargs,
+            error_type=type(api_error).__name__, error_message=str(api_error),
+            status_code=getattr(api_error, "status_code", None), retry_count=retry_count,
+            max_retries=max_retries, retryable=classified.retryable, reason=classified.reason.value)
+        settle_requested_goal_pause(agent, reason="provider request failed before safe pause")
+        agent._persist_session(messages, conversation_history)
+        from agent.turn_failure_copy import stamp_failure
+        return _verdict("return", stamp_failure({
+            "final_response": summary, "messages": messages, "api_calls": api_call_count,
+            "completed": False, "failed": True, "interrupted": False, "error": summary,
+            "turn_exit_reason": "api_error_during_safe_pause",
+        }, classified.reason.value, classified.retryable))
+
     _recovered, active_system_prompt = recover_before_classification(
         agent, api_error, messages=messages, api_messages=api_messages, api_kwargs=api_kwargs,
         active_system_prompt=active_system_prompt,

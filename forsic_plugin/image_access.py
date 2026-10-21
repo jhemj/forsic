@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 
 if __package__:
     from .image_reader import archive_origin, image_file_identity, image_segments, inspect, open_image
@@ -150,6 +151,7 @@ class Parser(argparse.ArgumentParser):
 def parser():
     result = Parser(description='E01 읽기 전용 접근 / read-only E01 access. Export creates one derived file under /work.',
                     epilog='Example: image_access.py /evidence/disk.e01 volumes. '
+                    'list requires a directory; stat/read_bytes inspect a selected file. '
                     'Exit 0: JSON result (check completeness); 1: JSON error; --help reads no evidence.')
     result.add_argument('image', help='/evidence/.../disk.e01 (원본 읽기 전용)')
     result.add_argument('action', choices=('volumes', 'list', 'stat', 'read', 'read_bytes', 'search', 'hash', 'export'))
@@ -182,8 +184,18 @@ def main(argv=None):
         code = 0
     except Exception as exc:
         result = {**getattr(exc, 'details', {}), 'error': str(exc), 'error_type': type(exc).__name__}
+        if result.get('observed_kind') == 'regular_file' and result.get('recovery_arguments'):
+            recovery = result['recovery_arguments']
+            result['recovery_argv'] = ['python', '/opt/forsic/image_access.py', recovery['path'],
+                'read_bytes', '--volume-offset', str(recovery['volume_offset']),
+                '--file-path', recovery['file_path'], '--offset', '0', '--length', '4096']
         code = 1
-    print(json.dumps(result, ensure_ascii=False))
+    encoded = json.dumps(result, ensure_ascii=False)
+    # Keep the completed receipt in native stderr when a caller discards stdout.
+    # This is still a derived command declaration, not verified image provenance.
+    if code == 0 and args['action'] == 'export' and result.get('complete_file') is True:
+        print(encoded, file=sys.stderr)
+    print(encoded)
     return code
 
 

@@ -49,7 +49,7 @@ def image_action_contract(action=None, *, actions=None):
             'path':{'type':'string','minLength':1,'description':'E01 segment path from forsic_list (e.g. disk.e01), not an internal image path.'},
             'action':{'type':'string','enum':list(exposed),'description':'Additional required fields: '+
                 '; '.join(name+'='+','.join(fields) for name,fields in exposed.items() if fields)+
-                ('. list defaults to the root.' if 'list' in exposed else '')+
+                ('. list accepts directories and defaults to the root; use stat or read_bytes for a selected file.' if 'list' in exposed else '')+
                 (' search requires an explicit file_path (use / deliberately for root).' if 'search' in exposed else '')+
                 (' volumes needs no internal path.' if 'volumes' in exposed else '')},
             'file_path':{'type':'string','minLength':1,'description':'Exact allocated path INSIDE the image. Required for '+
@@ -456,6 +456,17 @@ def inspect(image, args):
             preview = byte_preview(raw, offset, node.stat().st_size)
             return {**selected, **preview, 'complete_file': preview['complete_content']}
         if args['action'] == 'list':
+            info = node.lstat()
+            if stat.S_ISREG(info.st_mode):
+                error = NotADirectoryError('list requires a directory; the selected path is a regular file')
+                error.details = {**selected, 'file_path': args.get('file_path', '/'),
+                    'observed_kind': 'regular_file', 'representation': 'file_metadata',
+                    'content_not_measured': True, 'inode': info.st_ino, 'bytes': info.st_size,
+                    'mode': stat.filemode(info.st_mode),
+                    'recovery_arguments': {'action': 'read_bytes', 'path': str(path),
+                        'volume_offset': volume.offset, 'file_path': args.get('file_path', '/'),
+                        'offset': 0, 'length': 4096}}
+                raise error
             offset = max(0, int(args.get('offset', 0)))
             selected = {**selected, 'representation': 'directory_inventory', 'content_not_measured': True}
             rows = []
@@ -510,7 +521,7 @@ def main(argv=None):
     try:
         result = inspect(argv[0], args)
     except Exception as exc:
-        result = {'error': str(exc), 'error_type': type(exc).__name__}
+        result = {**getattr(exc, 'details', {}), 'error': str(exc), 'error_type': type(exc).__name__}
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

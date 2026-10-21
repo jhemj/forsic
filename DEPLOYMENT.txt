@@ -352,8 +352,16 @@ file creation and native goal completion alone do not prove a correct conclusion
 Safe update, backup and rollback
 -------------------------------
 Never hot-replace code or restart during an investigation turn or EWF verification.
-Prevent new web/Telegram inputs, use native /goal pause, and allow the current turn
-to finish. Run python3 deploy_forsic.py idle; it reads SQLite with mode=ro/query_only
+Prevent new web/Telegram inputs and use the UI's safe pause (native goal.pause_safe).
+It persists the request, finishes the in-flight response and accepted tool batch,
+saves results, and pauses before another model request or post-tool compaction.
+The button shows work finishing until the boundary settles, then offers Resume.
+Existing background verification may still be running: safe pause does not kill it.
+Immediate native interruption remains available for safety incidents; it is not
+safe completion. Pending/settled pauses survive restart and suppress automatic
+continuations. The externally delegated codex_app_server loop cannot supply this
+boundary and rejects safe pause while running. Run python3 deploy_forsic.py idle;
+it reads SQLite with mode=ro/query_only
 and verification receipts. Any goal/lease/running verification or unreadable state
 blocks an idle result. It does not expire a lease, kill a PID or resolve unknown
 delivery. This snapshot is NOT a lock; keep inputs disabled and recheck immediately
@@ -405,3 +413,9 @@ bound investigations remain readable/resumable even if their original scope was
 selected locally. The mount must also be accessible to the Docker daemon: a desktop
 file-manager mount visible to Python is not necessarily exported to Docker Desktop.
 Validate a read-only container bind before claiming image-analysis readiness.
+Environment registration now tests the exact preserved helper mounts and a
+disposable writable workspace in both pinned images before publishing a manifest.
+This qualifies those paths, not every future evidence or case path. Startup
+failure is reported separately from command exit using retained container state;
+exit 125 or error-looking program output alone does not prove failure to start.
+Unconfirmed execution remains uncertain and is never automatically replayed.

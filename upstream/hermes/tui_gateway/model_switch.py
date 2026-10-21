@@ -264,7 +264,8 @@ def _expensive_model_confirm(result, current_base_url: str, current_api_key, age
     return {"value": result.new_model, "warning": msg, "confirm_required": True, "confirm_message": msg}
 
 
-def _commit_agent_switch(sid: str, session: dict, agent, result, current_model: str, snapshot):
+def _commit_agent_switch(sid: str, session: dict, agent, result, current_model: str, snapshot,
+                         *, resolved_runtime: dict | None = None):
     """Swap the live agent in place, then restart/persist/mark/announce; a failed swap aborts."""
     try:
         agent.switch_model(
@@ -278,9 +279,16 @@ def _commit_agent_switch(sid: str, session: dict, agent, result, current_model: 
         # a session model_override, or persist to config — all of which would otherwise leave the session
         # pinned to a broken model and kill the conversation on the next turn (#50163). A failed switch is a
         # no-op; surface a clean error to the client.
-        logger.warning("In-place model switch failed for TUI agent: %s", exc)
-        raise ValueError(f"Model switch to {result.new_model} failed ({exc}); "
+        detail = type(exc).__name__ if resolved_runtime is not None else str(exc)
+        logger.warning("In-place model switch failed for TUI agent: %s", detail)
+        raise ValueError(f"Model switch to {result.new_model} failed ({detail}); "
                          f"staying on {getattr(agent, 'model', current_model)}.") from exc
+    if resolved_runtime is not None:
+        # Config resolution owns the credential choice. In particular an explicit key/keyless
+        # endpoint must not inherit the old pool or a generic pool loaded by switch_model.
+        agent._credential_pool = resolved_runtime.get("credential_pool")
+        from agent.agent_runtime_helpers import sync_credential_pool_entry_id
+        sync_credential_pool_entry_id(agent)
     _restart_slash_worker(sid, session)
     _persist_live_session_runtime(session)
     _persist_live_session_system_prompt(session)
@@ -434,6 +442,44 @@ def _sync_bot_capabilities(sid: str, session: dict) -> None:
         logger.warning("Bot capability sync failed for %s: %s", sid, e)
 
 
+def _configured_runtime_signature(model: str, runtime: dict) -> tuple:
+    """In-memory route identity; never retain a raw credential in the config-sync marker."""
+    import hashlib
+    key = str(runtime.get("api_key") or "")
+    return (model, runtime.get("provider") or "", str(runtime.get("base_url") or "").rstrip("/"),
+            runtime.get("api_mode") or "", hashlib.sha256(key.encode()).hexdigest())
+
+
+def _sync_configured_custom_runtime(sid: str, session: dict, target: tuple[str, str]) -> None:
+    """Resolve a configured custom route afresh, rather than /model's same-endpoint re-pick.
+
+    The caller runs on the turn thread with the owning profile's config and secret scopes bound.
+    Resolving each boundary also observes a changed key_env value when its reference is unchanged.
+    """
+    from hermes_cli.model_switch import ModelSwitchResult
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    model, provider = target
+    runtime = resolve_runtime_provider(requested=provider, target_model=model)
+    signature = (target, _configured_runtime_signature(model, runtime))
+    if session.get("config_model_runtime_seen") == signature:
+        return
+    agent = session["agent"]
+    current = {k: getattr(agent, k, "") for k in ("provider", "base_url", "api_key", "api_mode")}
+    if signature[1] != _configured_runtime_signature(getattr(agent, "model", ""), current):
+        result = ModelSwitchResult(
+            success=True, new_model=model, target_provider=runtime["provider"],
+            api_key=runtime.get("api_key") or "", base_url=runtime.get("base_url") or "",
+            api_mode=runtime.get("api_mode") or "", runtime_capabilities=runtime.get("capabilities"))
+        _commit_agent_switch(sid, session, agent, result, getattr(agent, "model", ""), None,
+                             resolved_runtime=runtime)
+    else:
+        agent._credential_pool = runtime.get("credential_pool")
+        from agent.agent_runtime_helpers import sync_credential_pool_entry_id
+        sync_credential_pool_entry_id(agent)
+    session["config_model_runtime_seen"] = signature
+    session["config_model_seen"] = target
+
+
 def _sync_agent_model_with_config(sid: str, session: dict) -> None:
     """Adopt a config.yaml model change at turn start (like gateways do per message). Sessions
     pinned with /model keep their choice; a failed switch keeps the current model."""
@@ -443,8 +489,9 @@ def _sync_agent_model_with_config(sid: str, session: dict) -> None:
     target = _config_model_target()
     if not target[0]:
         return
-    seen = session.get("config_model_seen")
-    if target == seen:
+    model, provider = target
+    custom_route = provider.lower() == "custom" or provider.lower().startswith("custom:")
+    if not custom_route and target == session.get("config_model_seen"):
         return
     superseded_pin = None
     if session.get("model_override"):
@@ -459,9 +506,25 @@ def _sync_agent_model_with_config(sid: str, session: dict) -> None:
         # the normal config-sync path switch now and prevents the old composer pick resurfacing on rebuild.
         superseded_pin = session.pop("model_override"), composer_profile
         session["composer_override_profile"] = None
+    if custom_route:
+        try:
+            _sync_configured_custom_runtime(sid, session, target)
+            if superseded_pin is not None:
+                _persist_live_session_runtime(session)
+        except Exception as exc:
+            if superseded_pin is not None:
+                session["model_override"], session["composer_override_profile"] = superseded_pin
+            # Resolution/client errors may include credential-bearing input. Report their class only.
+            logger.warning("Configured custom runtime could not be adopted for session %s (%s)",
+                           sid, type(exc).__name__)
+            from gateway.warning_notifications import render_notification
+            render_notification(
+                lambda: _emit("error", sid, {"message": "Could not apply configured model connection; keeping the current model."}),
+                platform="tui", user_config=getattr(agent, "_notification_config", None))
+        return
+    session.pop("config_model_runtime_seen", None)
     # Record first so a broken config gets one attempt per edit, not per turn.
     session["config_model_seen"] = target
-    model, provider = target
     # Already on the configured model (resumed before first sync, or a config revert after
     # a failed switch): adopt without switching.
     if model == getattr(agent, "model", "") and (not provider or provider == getattr(agent, "provider", "")):
