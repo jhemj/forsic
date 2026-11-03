@@ -162,7 +162,7 @@ def _unique_refs(refs):
 def material(state):
     """Short stable handles save the model from assembling source identities."""
     from .current_judgment import current_claims, authoring_judgment
-    claims = current_claims(state)
+    claims = current_claims(state, include_pending_candidates=True)
     by_claim = {c["id"]: c for c in claims}
     sources = {s["id"]: s for s in state["sources"]}
     records = []
@@ -269,6 +269,32 @@ def _dependency_hash(item):
     return _hash(item)
 
 
+def _judgment_matches(judgment, digest):
+    # Older drafts included this workflow gate in their content dependency.
+    # Accept only that exact, known bookkeeping difference; never strip prose,
+    # claim selections, scope, limits or evidence to revive a stale field.
+    return digest == _hash(judgment) or any(
+        digest == _hash({**judgment, 'review_required': flag}) for flag in (False, True))
+
+
+def _dependency_matches(item, digest):
+    if digest == _dependency_hash(item):
+        return True
+    if item['kind'] == 'question':
+        return any(digest == _dependency_hash({**item, 'current_judgment': {
+            **item['current_judgment'], 'review_required': flag}}) for flag in (False, True))
+    return False
+
+
+def _semantic_basis(selected, items):
+    """Report meaning, separately from question/workflow revision and review gates."""
+    return _hash({'material': [_dependency_hash(item) for item in items],
+                  'scope': selected['scope'], 'indicators': selected.get('indicators', []),
+                  'actions': selected.get('actions', []), 'template': TEMPLATE_VERSION,
+                  'declarations': {q['id']: {key: q.get(key) for key in ('forensic', 'report_slots')}
+                                   for q in selected['questions']}})
+
+
 def _latest(state, ids):
     matches = [r for r in state.get('report_narratives', []) if r['question_ids'] == ids]
     return max(matches, key=lambda r: r['revision'], default=None)
@@ -328,7 +354,7 @@ def _current_fields(latest, identity, choices):
         # Reuse only exact dependency matches. In particular, short key Q1 may
         # never silently change owner after selection/order/version changes.
         dependencies = value.get('dependencies', {})
-        valid = bool(dependencies) and all(key in choices and _dependency_hash(choices[key]) == digest
+        valid = bool(dependencies) and all(key in choices and _dependency_matches(choices[key], digest)
                                           for key, digest in dependencies.items())
         questions = {row['id']: row['current_judgment'] for row in choices.values()
                      if row['kind'] == 'question'}
@@ -338,7 +364,7 @@ def _current_fields(latest, identity, choices):
             # current answer. Preserve them only at their exact old basis.
             valid = False
         else:
-            valid = valid and all(qid in questions and _hash(questions[qid]) == digest
+            valid = valid and all(qid in questions and _judgment_matches(questions[qid], digest)
                 for qid, digest in judgment_dependencies.items())
         if latest['basis_id'] == identity or valid:
             fields[group] = deepcopy(value)
@@ -357,6 +383,7 @@ def status(state, ids=None):
     identity, selected = basis(state, ids)
     latest = _latest(state, ids)
     items = material(selected)
+    semantic_basis = _semantic_basis(selected, items)
     fields, stale_fields = _current_fields(latest, identity, {item['key']: item for item in items})
     used = {key for field in fields.values() for entry in field['entries'] for key in entry['basis_keys']}
     covered = {qid for item in items if item['key'] in used for qid in item['question_ids']}
@@ -371,7 +398,9 @@ def status(state, ids=None):
                for q in selected['questions'] if q.get('judgment_review_required')]
     draft_hash = _draft_hash(fields)
     review = latest.get('review') if latest else None
-    review_current = bool(review and review.get('comparisons') and not missing and review.get('basis_id') == identity
+    review_basis_current = bool(review and (review.get('semantic_basis_id') == semantic_basis
+        if review.get('semantic_basis_id') else review.get('basis_id') == identity))
+    review_current = bool(review and review.get('comparisons') and not missing and review_basis_current
                           and review.get('draft_hash') == draft_hash
                           and review.get('draft_revision') == latest.get('draft_revision'))
     review_complete = bool(review_current and authoring_policy.resolutions_complete(review)
@@ -379,7 +408,7 @@ def status(state, ids=None):
                            and not any(f['blocking'] for f in review['findings']))
     content_complete = not pending and not missing and not missing_gaps and set(ids) <= covered
     return {
-        'template_version': TEMPLATE_VERSION, 'basis_id': identity, 'question_ids': ids,
+        'template_version': TEMPLATE_VERSION, 'basis_id': identity, 'semantic_basis_id': semantic_basis, 'question_ids': ids,
         'revision': latest['revision'] if latest else 0,
         'draft_revision': latest.get('draft_revision', 0) if latest else 0,
         'draft_hash': draft_hash, 'ready': bool(content_complete and review_complete),
@@ -976,6 +1005,7 @@ def save(case, state, args):
                 if not set(finding['node_ids']) <= nodes:
                     raise ValueError('Review finding selects an unknown current template node')
             review = {**deepcopy(payload), 'basis_id': progress['basis_id'],
+                      'semantic_basis_id': progress['semantic_basis_id'],
                       'draft_revision': progress['draft_revision'], 'draft_hash': progress['draft_hash'],
                       'reviewer': 'native_agent', 'saved_at': saved_at}
             draft_revision = progress['draft_revision']
@@ -1040,9 +1070,13 @@ def save(case, state, args):
                     raise ReportAuthoringError(str(exc), progress, group,
                         problems=[{'path': 'draft.entries.' + entry['node_id'], 'requirement': str(exc)}]) from exc
                 dependencies.update({key: _dependency_hash(choices[key]) for key in entry['basis_keys']})
-                # Exact header metadata retains its direct source dependency.
-                # Semantic conclusions additionally depend on today's answer.
-                for qid in ({qid for key in entry['basis_keys'] for qid in choices[key]['question_ids']}
+                # Scope follows the analyst's actual selections. A retained
+                # source/claim does not depend on every sentence in its owner's
+                # answer. Select Q handles when the prose uses that synthesis.
+                # Changed/retracted selected claims still invalidate their own
+                # dependencies; a changed aggregate still requires final review.
+                for qid in ({qid for key in entry['basis_keys'] if choices[key]['kind'] == 'question'
+                             for qid in choices[key]['question_ids']}
                             if group != 'report_identity' else set()):
                     judgment_dependencies[qid] = _hash(authoring_judgment(selected, questions[qid]))
             fields[group] = {**payload, 'dependencies': dependencies,

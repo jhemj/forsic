@@ -3,6 +3,7 @@ from functools import partial
 from pathlib import Path
 import json
 import math
+import sqlite3
 
 from .evidence import Case
 
@@ -196,8 +197,9 @@ def register(ctx):
     description, properties, required = specs['reporting']
     properties['action']['enum'].append('finalize')
     properties['action']['enum'].append('execution')
+    properties['action']['enum'].append('execution_reconcile')
     properties['started_id'] = {'type':'string','minLength':1,
-        'description':'execution: copy started_id from execution_call. Reads committed results without rerunning; missing means unknown, not retry permission.'}
+        'description':'execution: copy started_id from execution_call for a ledger lookup. execution_reconcile: copy the returned reconcile_call to confirm the exact recorded shell container is absent and append a lifecycle receipt. Never reruns or stops work; original result remains unchanged. Missing/uncertain state is not retry permission.'}
     properties['bundle_id'] = {'type':'string','description':'finalize: copy render bundle_id; optional snapshot_id must match. Checks current content/file integrity. Select only the completed delivery copy for the approved case topic.'}
     properties['action']['enum'].append('review_inbox')
     properties['finding_id'] = {'type':'string','description':'review_inbox: filter one finding together with its review_id.'}
@@ -253,6 +255,22 @@ def register(ctx):
 
     def review_view(resolved):
         return automatic_review_context(review_state(resolved))
+
+    def with_judgment_checkpoint(result, sid):
+        # Navigation over retained state only. Never turn commentary or a tool
+        # result into a conclusion, dispatch a model, or mask a committed return.
+        from .investigation_context import resolve_context
+        from .judgment_checkpoint import model_checkpoint
+        try:
+            resolved = resolve_context(sid, **projection_options)
+            if resolved:
+                checkpoint = model_checkpoint(resolved)
+                if checkpoint['status'] in ('pending', 'unavailable'):
+                    return {**result, 'judgment_checkpoint': checkpoint}
+        except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
+            return {**result, 'judgment_checkpoint': {'status': 'unavailable',
+                'next_step': 'Read the current question before reconciling findings; this evidence return remains retained.'}}
+        return result
 
     def early_review(sid,tool,args,result,binding):
         if not independent_review_enabled or binding.get('goal_status')!='active':return None
@@ -412,10 +430,10 @@ def register(ctx):
                             'role':'independent_advice_not_source_evidence',
                             'context':'Early independent advice is unavailable; the evidence result is retained. Inspect current review state before deciding completion.'}
                     if advice is not None:result['independent_review']=automatic_review_context(advice)
-                    return json.dumps(result, ensure_ascii=False)
+                    return json.dumps(with_judgment_checkpoint(result, sid), ensure_ascii=False)
                 if tool == 'forsic_reporting' and args.get('action') == 'source':
                     from .report_driven.assessment_basis import citation_choices
-                    return json.dumps(citation_choices(case,json.loads(raw)), ensure_ascii=False)
+                    return json.dumps(with_judgment_checkpoint(citation_choices(case,json.loads(raw)), sid), ensure_ascii=False)
                 if independent_review_enabled and tool=='forsic_reporting' and args.get('action') in ('state','gaps'):
                     from .investigation_context import resolve_context
                     resolved=resolve_context(sid,**projection_options)

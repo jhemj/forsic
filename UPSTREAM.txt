@@ -64,6 +64,13 @@ Maintained integration areas
   classified error layer/code is retained; no raw provider text, extra judge,
   retry loop or budget reset is introduced. Bounded compression recovery keeps
   its existing path.
+- Transient provider recovery uses the existing native transport repair and
+  retry ladder with one optional elapsed-time allowance per logical request.
+  The normal first request keeps its configured timeout; recovery requests share
+  a bounded deadline enforced by the existing stream/socket watchdogs. Partial
+  delivery, cancellation and exhausted task allowances retain their native stops.
+  Goal resume preserves used turns by default; an explicit reset remains separate.
+  The native advisory action vocabulary includes bounded same-round review repair.
 - Native goal.pause_safe persists pause_requested in the existing goal record.
   The native response/tool boundary saves accepted work and stops before another
   provider, compression or goal-judge call. It does not signal running tools or

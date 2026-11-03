@@ -612,6 +612,9 @@ def _invoke(case,args):
     if action=='execution':
         from ..execution_contract import execution_view
         return execution_view(case,args.get('started_id'),args.get('_session_id',''))
+    if action=='execution_reconcile':
+        from ..execution_contract import reconcile_execution
+        return reconcile_execution(case,args.get('started_id'),args.get('_session_id',''))
     if action=='source':
         from .model_pages import source_view
         from .source_handles import resolve_source_handle

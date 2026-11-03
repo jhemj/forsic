@@ -124,8 +124,25 @@ class InvestigationViewTests(unittest.TestCase):
         result = self.project()
         self.assertEqual(result['task_focus']['status'], 'ready')
         self.assertEqual(result['task_focus']['tasks'][0]['id'], 'Q-n')
-        self.assertEqual(result['task_focus']['tasks'][0]['answer_is_model_assessment'], self.note['answer'])
+        self.assertEqual(result['questions'][0]['answer'], self.note['answer'])
+        self.assertNotIn('answer_is_model_assessment', result['task_focus']['tasks'][0])
         self.assertEqual(result['report_authoring']['status'], 'drafting')
+        self.assertEqual(before, self.case.db.read_bytes())
+
+    def test_long_current_answer_does_not_hide_its_check_progress(self):
+        answer = 'A qualified interpretation with retained scope and counterevidence. ' * 180
+        self.append('note', {**self.note, 'revision': 2, 'answer': answer})
+        before = self.case.db.read_bytes()
+        result = self.project()
+        question = result['questions'][0]
+        self.assertEqual(question['answer'], answer)
+        task = result['task_focus']['tasks'][0]
+        self.assertEqual((task['id'], str(task['revision'])), (question['id'], question['version']))
+        self.assertEqual(task['check_counts'], {'completed': 0, 'pending_or_recheck': 0})
+        self.assertEqual(task['checks'], [])
+        self.assertEqual(result['task_focus']['omitted_tasks'], 0)
+        self.assertNotIn('answer_is_model_assessment', task)
+        self.assertNotIn('judgments', task)
         self.assertEqual(before, self.case.db.read_bytes())
 
     def observation(self,ident='O-current'):

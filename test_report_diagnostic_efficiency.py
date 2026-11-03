@@ -58,7 +58,15 @@ class ReportDiagnosticEfficiencyTests(unittest.TestCase):
         missing_snapshot = {key: value for key, value in review.items() if key != 'snapshot_id'}
         self.rejected(missing_snapshot, 'coordinate_missing')
         self.rejected({**review, 'snapshot_id': 'old'}, 'snapshot_mismatch')
-        self.review()
+        unchanged, request = self.review()
+        self.assertEqual(unchanged['revision'], root['revision'])
+        # Identical review saves are intentional no-ops. Change actual review
+        # content to exercise the stale historical coordinate contract.
+        request['operation_id'] += '-changed'
+        request['review']['summary'] += ' 추가 설명 대조 결과 반영.'
+        changed = self.host(request)
+        self.assertTrue(changed['saved'], changed)
+        self.assertGreater(changed['revision'], root['revision'])
         result, recovered = self.rejected(review, 'revision_mismatch')
         self.assertIn('review changed', result['error'])
         self.assertNotIn('error', self.host(recovered['previous_review']['read_call']['arguments']))

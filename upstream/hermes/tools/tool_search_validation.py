@@ -136,6 +136,13 @@ def validate_deferred_call_args(name: str, args: Dict[str, Any]) -> Optional[str
         return None
 
 
+_TYPED_CALL_RECOVERY = (
+    "The tool was NOT invoked. Retry using a calls ARRAY and an arguments OBJECT, "
+    "not JSON-encoded strings. Replace the example name and fill arguments from the tool's schema:\n"
+    '```json\n{"calls":[{"name":"<exact tool name>","arguments":{}}]}\n```'
+)
+
+
 def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """Normalize ``tool_call`` arguments into a ``calls[]`` list of entries.
 
@@ -157,7 +164,7 @@ def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, An
         try:
             raw_calls = json.loads(raw_calls)
         except json.JSONDecodeError as e:
-            return [], f"tool_call 'calls' is not valid JSON: {e}"
+            return [], f"tool_call 'calls' is not valid JSON: {e}. {_TYPED_CALL_RECOVERY}"
     if isinstance(raw_calls, dict):
         raw_calls = [raw_calls]
     if not isinstance(raw_calls, list) or not raw_calls:
@@ -183,7 +190,7 @@ def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, An
             try:
                 raw_args = json.loads(raw_args)
             except json.JSONDecodeError as e:
-                return [], f"tool_call calls[{position}].arguments is not valid JSON: {e}"
+                return [], f"tool_call calls[{position}].arguments is not valid JSON: {e}. {_TYPED_CALL_RECOVERY}"
         if not isinstance(raw_args, dict):
             return [], f"tool_call calls[{position}].arguments must be an object"
         entries.append({"name": name, "arguments": raw_args})

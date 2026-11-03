@@ -113,11 +113,16 @@ class AuthoringDependencyContractTests(unittest.TestCase):
     draft = authored.ReportNarrativeTests.draft
     write = authored.ReportNarrativeTests.write
     review = authored.ReportNarrativeTests.review
-    def test_direct_source_only_entry_is_stale_after_own_answer_or_limits_change(self):
+    finish = authored.ReportNarrativeTests.finish
+    def test_direct_source_only_entry_survives_answer_edit_but_changed_meaning_requires_review(self):
+        self.finish()
         state = current(self.case)
         items = material(basis(state, [state['questions'][0]['id']])[1])
         source = next(item for item in items if item['kind'] == 'source')
         self.write('scope', keys=[source['key']])
+        self.review()
+        original = status(current(self.case))
+        self.assertTrue(original['ready'])
         for mutation in ('answer', 'limit', 'gap'):
             changed = deepcopy(current(self.case))
             if mutation == 'answer':
@@ -128,7 +133,14 @@ class AuthoringDependencyContractTests(unittest.TestCase):
             else:
                 changed['gaps'][0]['disposition'] = 'resolved'
             with self.subTest(mutation=mutation):
-                self.assertIn('scope', status(changed)['stale_fields'])
+                progress = status(changed)
+                self.assertIn('scope', progress['fields'])
+                self.assertNotEqual(progress['semantic_basis_id'], original['semantic_basis_id'])
+                self.assertEqual(progress['review_status'], 'required')
+                self.assertFalse(progress['ready'])
+        changed = deepcopy(current(self.case))
+        find(changed, 'sources', source['id'])['version'] = 'changed-retained-source'
+        self.assertIn('scope', status(changed)['stale_fields'])
 
     def test_exact_header_values_and_unrelated_questions_keep_their_dependencies(self):
         state = current(self.case)
@@ -136,11 +148,13 @@ class AuthoringDependencyContractTests(unittest.TestCase):
         source = next(item for item in items if item['kind'] == 'source')
         self.write('report_identity', keys=[source['key']])
         self.write('scope', keys=[source['key']])
+        self.write('major_findings', keys=['Q1'])
         changed = deepcopy(current(self.case))
         changed['questions'][0]['answer'] += ' A materially changed answer'
         progress = status(changed)
         self.assertIn('report_identity', progress['fields'])
-        self.assertIn('scope', progress['stale_fields'])
+        self.assertIn('scope', progress['fields'])
+        self.assertIn('major_findings', progress['stale_fields'])
         unrelated = deepcopy(current(self.case))
         other = deepcopy(unrelated['questions'][0])
         other.update(id='Q-unrelated', answer='Unrelated answer', claim_refs=[], remaining_gap_ids=[])

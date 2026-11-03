@@ -92,6 +92,29 @@ class IndependentReviewTests(unittest.TestCase):
         self.assertNotIn('A provisional interpretation',self.calls[0]['messages'][1]['content'])
         self.assertTrue(result['requires_followup'])  # Saving an answer is no approval.
 
+    def test_review_metadata_cannot_overflow_unchanged_bounded_report_prose(self):
+        self.setup_review()
+        resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
+        questions = review._question_records(resolved)
+        draft = {'schema':'forsic-report-narrative-2', 'question_ids':[questions[0]['id']],
+            'goal_id':resolved['goal_id'], 'basis_id':'retained-basis', 'draft_revision':4,
+            'draft_hash':'unchanged', 'fields':{'scope':{'text':'한정된 현재 보고서 본문'}}, 'review':None}
+        self.case.record('report_narrative', draft, self.sid)
+        original = review._report_draft(resolved, questions)
+        identity = review.freshness(resolved)['evaluation_fingerprint']
+        reviewed = {**draft, 'review':{'comparisons':['retained comparison ' * 20000]}}
+        event = self.case.record('report_narrative', reviewed, self.sid)
+        self.assertGreater(len(json.dumps(reviewed).encode()), review.MAX_RECEIPT)
+        self.assertEqual(review._report_draft(resolved, questions), original)
+        self.assertEqual(review.freshness(resolved)['evaluation_fingerprint'], identity)
+        self.assertEqual(self.case.event(event)['data'], reviewed)
+        self.fake.assert_not_called()
+
+        # The same bound still applies to the actual authored content, in UTF-8 bytes.
+        self.case.record('report_narrative', {**draft, 'fields':{'scope':{'text':'가' * review.MAX_RECEIPT}}}, self.sid)
+        with self.assertRaisesRegex(ValueError, 'bounded review record budget'):
+            review._report_draft(resolved, questions)
+
     def test_report_finalize_reviews_its_selected_draft_and_other_scope_edits_do_not_replace_it(self):
         from forsic_plugin.report_driven import host
         self.setup_review()

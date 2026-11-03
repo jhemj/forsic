@@ -18,6 +18,40 @@ from test_report_driven import fixture
 
 
 class InvestigationContextTests(unittest.TestCase):
+    def test_no_compose_receipts_does_not_replay_report_state(self):
+        from forsic_plugin.report_continuation import projection
+        resolved = context.resolve_context(**self.kwargs())
+        with patch('forsic_plugin.report_driven.narrative.status',
+                   side_effect=AssertionError('No report view was delivered')):
+            self.assertIsNone(projection(resolved, {}, ['Q-' + self.note['note_id']]))
+
+    def test_unsaved_public_update_survives_compression_and_later_save(self):
+        import time
+        self.case.record('post_api_request', dict(api_request_id='public-checkpoint',
+            assistant_content_chars=50), self.sid)
+        self.case.record('tool_start', dict(tool='forsic_read',
+            native_call={'api_request_id': 'public-checkpoint'}), self.sid)
+        self.session(self.sid, goal=self.goal, end='compression')
+        self.session('checkpoint-child', parent=self.sid)
+        before = current(self.case)
+        result = context.post_context_compaction(**self.kwargs('checkpoint-child'))
+        body = json.loads(result['context'])
+        self.assertEqual(body['answer_updates']['checkpoint']['status'], 'pending')
+        self.assertEqual(body['answer_updates']['questions'][0]['expected_revision'], self.note['revision'])
+        self.assertIn(self.note['answer'], result['context'])
+        self.assertEqual(current(self.case), before)
+        # A later analyst commit supersedes the pending navigation, while the
+        # original public/source history and native ownership remain intact.
+        self.note['updated_at'] = time.time()
+        self.note['judgment_updated_at'] = self.note['updated_at']
+        self.note['answer'] = 'Corrected interpretation with an explicit remaining check'
+        self.save_note(next_checks=['Read the retained completion receipt'])
+        saved = current(self.case)
+        restored = context.post_context_compaction(**self.kwargs('checkpoint-child'))
+        self.assertNotIn('checkpoint', json.loads(restored['context'])['answer_updates'])
+        self.assertIn(self.note['answer'], restored['context'])
+        self.assertEqual(current(self.case), saved)
+
     def test_selected_delivery_phase_outranks_old_compose_after_compression(self):
         state, packet, _ = self.report_receipt()
         resolved = context.resolve_context(**self.kwargs())

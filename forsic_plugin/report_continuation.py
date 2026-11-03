@@ -39,6 +39,10 @@ def projection(resolved, state, question_ids):
             "AND COALESCE(json_extract(r.data,'$.error'),'')='' "
             "AND COALESCE(json_extract(r.data,'$.execution_rejected'),0)=0 "
             "ORDER BY r.rowid DESC LIMIT 64", (*sessions, goal.created_at)).fetchall()
+    if not rows:
+        # No delivered compose view means there is nothing to resume. Avoid
+        # replaying/hashing a report merely because another tool returned.
+        return None
     ids = sorted(question_ids)
     progress = status(state, ids)
     snapshot = _review_identity(progress)

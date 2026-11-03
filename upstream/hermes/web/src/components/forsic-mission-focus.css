@@ -1,11 +1,13 @@
-.forsic-mission-focus {padding: 14px; border-bottom: 1px solid var(--border-color, #ddd); font-size: 13px;}
-.forsic-mission-focus h3 {margin: 0 0 12px; font-size: 14px;}
-.forsic-mission-focus article {padding: 12px 0; border-top: 1px solid var(--border-color, #ddd);}
-.forsic-mission-focus small, .forsic-mission-focus li > span {display: block; margin-top: 5px;}
+.forsic-mission-focus {margin-top: 22px; font-size: var(--forsic-font-secondary, 13px);}
+.forsic-mission-focus h4 {margin: 0 0 10px; font-size: var(--forsic-font-control, 14px); font-weight: 650;}
+.forsic-mission-focus li > span {display: block; margin-top: 5px; color: var(--forsic-muted);}
 .forsic-mission-focus p {margin: 8px 0; overflow-wrap: anywhere;}
 .forsic-mission-focus ul {padding-left: 18px;}
 .forsic-mission-focus li {margin: 10px 0;}
-.forsic-mission-focus details {margin-top: 8px;}
+.forsic-mission-focus details {margin-top: 12px;}
 .forsic-mission-focus summary {cursor: pointer;}
 .forsic-mission-focus pre {max-height: 250px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;}
-.forsic-completed-checks {color: var(--text-secondary, #68717d);}
+.forsic-completed-checks {color: var(--forsic-muted);}
+.forsic-check-counts {display: flex; flex-wrap: wrap; gap: 8px;}
+.forsic-check-counts > span {padding: 7px 10px; background: var(--forsic-inset); border-radius: 6px; color: var(--forsic-muted);}
+.forsic-check-counts strong {color: var(--forsic-text); font-weight: 600;}

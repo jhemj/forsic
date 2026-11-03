@@ -4,6 +4,32 @@ Forsic keeps one Hermes conversation loop, retry budget, compressor and goal lif
 The following changes repair transport and storage contracts; they do not choose a forensic
 conclusion, force a scanner, or add a second judgment store.
 
+## Recovery boundaries and reusable work
+
+The deployment enables two native automatic recovery cycles after transient provider
+failure. Primary transport repair and these cycles share 600 seconds after the first
+failure; each recovery request is capped at 180 seconds. A normal first request keeps its
+existing timeout. No new provider is selected. User stops, delivery uncertainty and the
+goal's recorded time/call allowances remain separate constraints. Resuming a goal preserves
+its used-turn count unless an explicit reset is requested.
+
+Executive review retains validated questions when another item has an invalid exact source
+handle. The logical round still requires five valid, answered questions. One bounded repair
+of missing items may append a separate receipt using the ordinary review allowance; original
+responses, valid finding IDs, answers and consumed calls are preserved. Unknown delivery is
+not a format error and must not trigger an automatic resend.
+
+Operational progress belongs to existing work-state/reason and report receipts. An incident
+answer, analytical next checks and selected evidence remain semantic inputs. Directly selected
+source/claim groups retain their own dependencies; groups using a question's synthesis select
+that question explicitly. Meaningful changes still invalidate the affected text and final
+semantic review. Saved-judgment receipts describe actual committed selections, not approval.
+
+Native frozen system prompts and historical API sidecars remain byte-stable. The fresh
+admission clock follows retained per-turn context, and report review fingerprints distinguish
+meaningful content from bookkeeping. Provider cache-hit improvement is measured from actual
+usage receipts; an offline stable-prefix test alone is not a measured speedup.
+
 ## Returned context exhaustion
 
 A provider `length` response with tool calls and a provider-confirmed filled context uses

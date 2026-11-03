@@ -12,9 +12,11 @@ Keep user-facing answers and report text in clear Korean: short qualified headli
 nominal sentences that explain meaning to a nontechnical reader. Exact quotations remain unchanged.
 Use references/style_and_wording.md for writing and filename labels, and references/audiences.md for body/appendix roles.
 
-The initial user question may remain provisional while investigation proceeds. Save meaningful findings
-and changed limits in that same owned question before reporting; neither final certainty nor a fixed
-hypothesis count is required. Reads and report views do not create analytical conclusions.
+The initial user question may remain provisional until a meaningful bounded answer is available. Save each
+material change in understanding, limits or next checks in that same owned question during investigation,
+before announcing the finding or moving to unrelated collection. Do not defer these checkpoints to reporting;
+neither final certainty nor a fixed hypothesis count is required. Reads and report views do not create
+analytical conclusions. Reuse unchanged adopted claims rather than reauthoring the full evidence set.
 
 ## Lookup and seven assessment dimensions
 
@@ -122,6 +124,11 @@ When later results correct an earlier failure, scope or interpretation, use
 before writing. A successful extraction, completed search and negative finding are different outcomes.
 Read the returned current judgment projection; old review prose and execution failures remain history,
 not competing current answers. An unresolved material conflict keeps the affected interpretation qualified.
+Report drafting/rendering failures and completion status belong to the existing report/tool receipts and
+question work disposition, not the incident answer. Do not append them to `answer` or analytical `next_checks`.
+Select Q basis handles when prose relies on the aggregate interpretation; select the actual C/S/O/T/G handles
+for specific claims, source facts, times or gaps. The host keeps unchanged directly supported groups across
+unrelated answer edits, while changed selected material and the final meaning review still require rechecking.
 
 Before producing a reader report, read `forsic_reporting(action=compose)`. Follow its current
 writing groups and returned node IDs. Read `references/completion_and_answerability.md` for source-scoped

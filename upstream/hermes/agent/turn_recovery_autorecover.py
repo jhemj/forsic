@@ -14,6 +14,9 @@ overload backoff path.
 from __future__ import annotations
 
 import logging
+import math
+import time
+from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 from agent.error_classifier import FailoverReason
@@ -44,6 +47,69 @@ _DEFAULT_STOP_HINT = "send /stop to cancel"
 def auto_recovery_cycles(agent: Any) -> int:
     """Configured ``agent.auto_recovery_cycles`` (0 disables the ladder)."""
     return max(int(getattr(agent, "_auto_recovery_cycles", 0) or 0), 0)
+
+
+def configure_recovery_budget(agent: Any, config: dict) -> None:
+    """Optional post-failure budget, shared by transport repair and the native ladder."""
+    for key in ("auto_recovery_budget_seconds", "auto_recovery_request_timeout_seconds"):
+        try:
+            value = float(config.get(key, 0))
+        except (TypeError, ValueError):
+            value = 0.0
+        setattr(agent, "_" + key, value if math.isfinite(value) and value > 0 else 0.0)
+
+
+def begin_recovery_budget(agent: Any, retry: Any, classified: Any) -> None:
+    """Do not shorten a healthy first request. First transient failure starts the clock.
+
+    The deadline belongs to the existing logical API request, not to each physical retry;
+    a completed response creates the next TurnRetryState with a fresh allowance.
+    """
+    budget = getattr(agent, "_auto_recovery_budget_seconds", 0.0)
+    if (isinstance(budget, (int, float)) and budget > 0 and ladder_eligible(agent, classified)
+            and getattr(retry, "recovery_deadline", None) is None):
+        retry.recovery_deadline = time.monotonic() + budget
+
+
+def recovery_remaining(retry: Any) -> Optional[float]:
+    deadline = getattr(retry, "recovery_deadline", None)
+    return max(0.0, deadline - time.monotonic()) if isinstance(deadline, (int, float)) else None
+
+
+def cap_recovery_timeout(agent: Any, timeout: float) -> float:
+    """Use the existing request watchdog/socket limit; never alter provider input content."""
+    deadline = getattr(agent, "_native_recovery_request_deadline", None)
+    if not isinstance(deadline, (int, float)):
+        return timeout
+    return min(timeout, max(0.001, deadline - time.monotonic()))
+
+
+def recovery_request_expired(agent: Any) -> bool:
+    return recovery_deadline_expired(getattr(agent, "_native_recovery_request_deadline", None))
+
+
+def recovery_deadline_expired(deadline: Any) -> bool:
+    return isinstance(deadline, (int, float)) and time.monotonic() >= deadline
+
+
+@contextmanager
+def recovery_request_scope(agent: Any, retry: Any):
+    """Bound each recovery request, restoring cached agent state on every exit."""
+    deadline = getattr(retry, "recovery_deadline", None)
+    previous = getattr(agent, "_native_recovery_request_deadline", None)
+    if isinstance(deadline, (int, float)):
+        if recovery_remaining(retry) == 0:
+            raise TimeoutError("Provider recovery time allowance exhausted")
+        per_request = getattr(agent, "_auto_recovery_request_timeout_seconds", 0.0)
+        if isinstance(per_request, (int, float)) and per_request > 0:
+            deadline = min(deadline, time.monotonic() + per_request)
+    agent._native_recovery_request_deadline = deadline
+    try:
+        yield
+        if recovery_request_expired(agent):
+            raise TimeoutError("Provider recovery request time allowance exhausted")
+    finally:
+        agent._native_recovery_request_deadline = previous
 
 
 def _retry_after_seconds(api_error: Any) -> Optional[float]:
@@ -95,6 +161,7 @@ def auto_recover_after_exhaustion(
 
     if not ladder_eligible(agent, classified):
         return None
+    begin_recovery_budget(agent, _retry, classified)
     total = auto_recovery_cycles(agent)
     used = int(getattr(_retry, "auto_recovery_cycles_used", 0) or 0)
     if used >= total:
@@ -103,8 +170,12 @@ def auto_recover_after_exhaustion(
         )
         return None
     cycle = used + 1
-    _retry.auto_recovery_cycles_used = cycle
     wait_s = ladder_wait_seconds(cycle, api_error)
+    remaining = recovery_remaining(_retry)
+    if remaining is not None and wait_s >= remaining:
+        agent._emit_diagnostic_status("⏳ Automatic recovery time allowance exhausted; partial work is preserved.")
+        return None
+    _retry.auto_recovery_cycles_used = cycle
     notice = ladder_notice(agent, wait_s=wait_s, cycle=cycle, total=total)
     # Durable line on every surface (CLI print, TUI status.update, gateway bubble, api_server SSE)
     # plus the live wait line (spinner / thinking.delta / activity heartbeat).

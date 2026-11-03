@@ -130,7 +130,7 @@ DEFAULT_CONFIG = {
         # See #63078.
         "build_wait_timeout": 600,
         # Hermes-level retry attempts for API errors (connection drops, timeouts, 5xx) wrapping the
-        # whole call; the OpenAI SDK also retries transient errors (max_retries=2). Set 1 for fast
+        # whole call; request-local SDK retries are disabled so this loop owns recovery. Set 1 for fast
         # failover to fallback providers; raise to tolerate longer provider hiccups.
         "api_max_retries": 3,
         # Once api_max_retries AND the fallback chain are spent on a transient outage (5xx,
@@ -139,6 +139,10 @@ DEFAULT_CONFIG = {
         # visible "retrying automatically" countdown instead of ending the turn. Esc/interrupt stops
         # the wait; auth/format/billing/policy errors never enter. 0 disables.
         "auto_recovery_cycles": 5,
+        # 0 preserves upstream patience; a positive budget bounds all retries after
+        # the first transient failure, including primary transport repair.
+        "auto_recovery_budget_seconds": 0,
+        "auto_recovery_request_timeout_seconds": 0,
         # Seconds the Codex/Responses stream may keep reading after its terminal frame so the relay
         # finalizer can run. Relays that never close the SSE socket after response.completed would
         # otherwise wedge the turn until the idle watchdog discards the already-billed response

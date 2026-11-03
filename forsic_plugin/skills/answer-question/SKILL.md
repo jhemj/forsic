@@ -11,15 +11,29 @@ paused goal. User steering takes priority while retaining the investigation goal
 
 ## One question record
 
-forsic_question handles creation and updates with flat JSON arguments. For a new question, send operation_id,
+forsic_question handles creation and updates with structured JSON arguments. When invoked through tool_call,
+use a calls array and an arguments object, not a JSON-encoded string containing the entire request.
+For a new question, send operation_id,
 question, scope, and answer. For updates, use the returned question_id and current expected_revision. Reuse the
 same operation_id and content only to retry the same request; use a new ID for changes. On conflict, read the
 latest question and preserve other changes. Questions owned by another conversation are reference-only.
 
-An initial scoped question may have no judgment or selected evidence. At meaningful findings, compare returned
-observations with that question's answer and relevant independent review questions. Update the same record when
-its answer, limits, or next check changes; do not wait for certainty or save one note per tool call. Context
+An initial scoped question may have no judgment or selected evidence. Before announcing a meaningful finding
+or moving to an unrelated inquiry, compare returned observations with that question's answer and relevant
+independent review questions. Commit changed answer, limits and next_checks through the same record and
+verify the receipt before the public explanation. A bounded provisional finding is ready to save; do not wait
+for the final report or certainty. For incremental claims, keep unchanged current claims using exact
+retain_claim_ref and author only new/corrected claims with their returned citations. The full answer remains
+your coherent current explanation. The runtime judgment_checkpoint identifies public explanations newer
+than saved judgments: reconcile material changes, not tool counts or progress-only messages. Do not save one
+note per tool call or rewrite unchanged judgments to clear a reminder. Context
 navigation carries update IDs/revisions, not a judgment. Read the current question if its scope or limits are unclear.
+The returned `saved_judgment` receipt states the actual committed claim count, selected IDs, answer fingerprint
+and remaining review gate. Confirm it before saying that claims were saved or retained; a reason saying
+"claims retained" does not select them. Use retained result read calls after interruption instead of collecting again.
+Keep execution errors, report revision/render/finalize progress and retry plans out of `answer` and analytical
+`next_checks`. Those describe the incident. Existing `work_state`/`reason` and report/tool receipts describe work
+progress. A work-state update does not save a new interpretation or clear pending meaningful findings.
 After a meaningful success or correction, reconcile previously declared gaps and selected claim limits as part
 of the same update. Keep failed attempts as history; do not leave the old failure as the current answer when a
 different authorized path succeeded. Acquisition, interpretation and search coverage remain separate. Use the
@@ -41,7 +55,7 @@ may guide a check; it is not independent event evidence or a citation proving th
 
 ## Shared reader explanation
 
-At a meaningful change in understanding, optionally save `reader_explanation` in the same `forsic_question`
+At a meaningful change in understanding, save a short `reader_explanation` in the same `forsic_question`
 update. This is the explanation shown beside the investigation and reused in the report appendix, not the final
 report's front matter. Keep `answer` as the bounded canonical answer; explain in a few clear paragraphs what was
 observed, why it favors the interpretation, what alternatives remain, and what cannot yet be concluded. Preserve

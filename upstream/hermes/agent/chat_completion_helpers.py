@@ -673,7 +673,8 @@ def _cloud_stale_timeout(base: float, api_kwargs: dict) -> float:
 def _derive_stream_stale_timeout(agent, api_kwargs: dict) -> float:
     """Stale-stream patience for a provider that is never a local endpoint (Bedrock):
     the OpenAI/Anthropic stale detector's budget minus its local branch."""
-    return _cloud_stale_timeout_for(agent, api_kwargs)
+    from agent.turn_recovery_autorecover import cap_recovery_timeout
+    return cap_recovery_timeout(agent, _cloud_stale_timeout_for(agent, api_kwargs))
 
 
 def cap_to_run_budget(agent, timeout: float) -> float:
@@ -873,11 +874,12 @@ def _resolve_direct_stale_timeout(agent, api_kwargs: dict) -> float:
     resolver = getattr(agent, "_compute_non_stream_stale_timeout", None)
     value = resolver(api_kwargs) if callable(resolver) else None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return float("inf")
+        value = float("inf")
     base_url = getattr(agent, "base_url", None)
     if getattr(agent, "api_mode", None) == "codex_responses" and not (base_url and is_local_endpoint(base_url)):
-        return _bound_openai_codex_stale_timeout(float(value), estimate_request_context_tokens(api_kwargs))
-    return float(value)
+        value = _bound_openai_codex_stale_timeout(float(value), estimate_request_context_tokens(api_kwargs))
+    from agent.turn_recovery_autorecover import cap_recovery_timeout
+    return cap_recovery_timeout(agent, float(value))
 
 
 def _inline_nonstream_hard_timeout(stale_timeout: float):
@@ -1273,6 +1275,8 @@ def _resolve_nonstream_watchdogs(agent, api_kwargs: dict) -> _NonStreamWatchdogs
     idle_explicit = env_float("HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS", -1.0) != -1.0
     idle_timeout = env_float("HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS", idle_default)
     progress_gated = codex and openai_codex_backend and codex_floor > 0 and not idle_explicit
+    from agent.turn_recovery_autorecover import cap_recovery_timeout
+    stale_timeout = cap_recovery_timeout(agent, stale_timeout)
     return _NonStreamWatchdogs(stale_timeout=stale_timeout, codex=codex, est_tokens=est_tokens,
         ttfb_enabled=ttfb_enabled, ttfb_timeout=ttfb_timeout, idle_enabled=codex and idle_timeout > 0,
         idle_timeout=idle_timeout, idle_requires_progress=progress_gated,
@@ -2634,6 +2638,7 @@ class _BedrockStream:
 
     def __init__(self, agent, api_kwargs: dict, on_first_delta):
         self.agent = agent
+        self.recovery_deadline = getattr(agent, "_native_recovery_request_deadline", None)
         self.api_kwargs = api_kwargs
         self.on_first_delta = on_first_delta
         self.result = {"response": None, "error": None}
@@ -2776,7 +2781,8 @@ class _BedrockStream:
             t.join(timeout=0.3)
             self._raise_if_interrupted("Agent interrupted during Bedrock API call", worker=t)
             stale_elapsed = time.time() - self.last_event
-            if stale_elapsed > self.stale_timeout:
+            from agent.turn_recovery_autorecover import recovery_deadline_expired
+            if stale_elapsed > self.stale_timeout or recovery_deadline_expired(self.recovery_deadline):
                 self._on_stale(stale_elapsed)
                 break
         # The Bedrock callback returns a PARTIAL response on interrupt without raising
@@ -2867,6 +2873,7 @@ class _StreamingCall(StreamingWaitMonitor):
 
     def __init__(self, agent, api_kwargs: dict, on_first_delta):
         self.agent = agent
+        self.recovery_deadline = getattr(agent, "_native_recovery_request_deadline", None)
         self.api_kwargs = api_kwargs
         self.on_first_delta = on_first_delta
         self.worker = None  # request thread; None in inline mode
@@ -3086,10 +3093,11 @@ class _StreamingCall(StreamingWaitMonitor):
         ``request_timeout_seconds`` wins over HERMES_API_TIMEOUT (1800s) and
         HERMES_STREAM_READ_TIMEOUT (120s); connect/pool cover the handshake, not
         inference: 30s, or capped at 60s when configured."""
+        from agent.turn_recovery_autorecover import cap_recovery_timeout
         cfg = get_provider_request_timeout(self.agent.provider, self.agent.model)
         base = cfg if cfg is not None else env_float("HERMES_API_TIMEOUT", 1800.0)
         if cfg is not None:
-            return base, cfg, min(base, 60.0)
+            return tuple(cap_recovery_timeout(self.agent, value) for value in (base, cfg, min(base, 60.0)))
         read = env_float("HERMES_STREAM_READ_TIMEOUT", 120.0)
         stale = self._stream_stale_timeout
         if read == 120.0 and self.agent.base_url and is_local_endpoint(self.agent.base_url):
@@ -3100,7 +3108,7 @@ class _StreamingCall(StreamingWaitMonitor):
             # tolerates that, so the raw read timeout must not fire first.
             read = stale
             logger.debug("Cloud reasoning stream — read timeout raised to %.0fs to match stale-stream detector", read)
-        return base, read, 30.0
+        return tuple(cap_recovery_timeout(self.agent, value) for value in (base, read, 30.0))
 
     @staticmethod
     def _choiceless_chunk(chunk, finish_reason):
@@ -3884,6 +3892,10 @@ class _StreamingCall(StreamingWaitMonitor):
         try:
             while _stream_attempt < _max_stream_retries + self._compat_retries:
                 _stream_attempt += 1
+                from agent.turn_recovery_autorecover import recovery_deadline_expired
+                if recovery_deadline_expired(self.recovery_deadline):
+                    self.result["error"] = TimeoutError("Provider recovery request time allowance exhausted")
+                    return
                 stream_attempt_id = self._start_stream_attempt()
                 # Otherwise /stop closes the connection and the retry opens a
                 # FRESH one, blocking up to a full read timeout per attempt.
@@ -4038,13 +4050,14 @@ class _StreamingCall(StreamingWaitMonitor):
         HERMES_LOCAL_STREAM_STALE_TIMEOUT — an infinite one stalled sessions on a
         crashed endpoint forever. Cloud values scale with context size and are
         floored for known reasoning models (else BrokenPipeError from the gateway)."""
+        from agent.turn_recovery_autorecover import cap_recovery_timeout
         base = _configured_stale_base(self.agent)
         if base == 180.0 and self.agent.base_url and is_local_endpoint(self.agent.base_url):
-            self._stream_stale_timeout = _local_stream_stale_timeout_default()
+            self._stream_stale_timeout = cap_recovery_timeout(self.agent, _local_stream_stale_timeout_default())
             logger.debug("Local provider detected (%s) — stale stream timeout set to %.0fs",
                 self.agent.base_url, self._stream_stale_timeout)
             return
-        self._stream_stale_timeout = _cloud_stale_timeout_for(self.agent, self.api_kwargs)
+        self._stream_stale_timeout = cap_recovery_timeout(self.agent, _cloud_stale_timeout_for(self.agent, self.api_kwargs))
 
     def _partial_stream_stub(self):
         """Tokens already reached the platform: a finish_reason="length" stub fires the

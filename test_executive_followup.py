@@ -254,9 +254,6 @@ class ExecutiveFollowupTests(unittest.TestCase):
         self.assertEqual(result['executive_followup']['rounds'][0]['round'],1)
 
     def test_completed_generic_rounds_require_current_report_review_without_restarting_dialogue(self):
-        from test_report_narrative import ReportNarrativeTests, answerability_checks
-        from forsic_plugin.report_driven.narrative import material, status
-        from forsic_plugin.report_driven.template_contract import WRITING_ORDER, REVIEW_CHECKS
         self.prepare()
         for number in range(1,4):
             self.call()
@@ -265,6 +262,13 @@ class ExecutiveFollowupTests(unittest.TestCase):
             self.answer(findings)
         self.assertTrue(review.review_state(self.resolved())['executive_followup']['complete'])
         self.assertEqual(len(self.calls),3)
+        self.compose_report_and_finalize()
+
+    def compose_report_and_finalize(self):
+        from test_report_narrative import ReportNarrativeTests, answerability_checks
+        from forsic_plugin.report_driven.narrative import material, status
+        from forsic_plugin.report_driven.template_contract import WRITING_ORDER, REVIEW_CHECKS
+        calls_before=len(self.calls)
         native={'_session_id':self.resolved()['conversation_id'],'_goal_id':self.resolved()['goal_id'],
             '_independent_review_options':{'enabled':True,'executive_followup':True,'session_id':self.sid,
                 'intake_root':str(self.intake),'native_db':str(self.native)}}
@@ -303,7 +307,7 @@ class ExecutiveFollowupTests(unittest.TestCase):
         report=host.invoke(self.case,{'action':'render',**native})
         result=host.invoke(self.case,{'action':'finalize','bundle_id':report['bundle_id'],**native})
         self.assertTrue(result['finalized'])
-        self.assertEqual(len(self.calls),4)
+        self.assertEqual(len(self.calls),calls_before+1)
 
     def test_invalid_question_count_and_duplicate_or_unpresented_anchor_never_advance(self):
         self.prepare()
@@ -325,7 +329,14 @@ class ExecutiveFollowupTests(unittest.TestCase):
         self.assertEqual(state['executive_followup']['rounds'][0]['question_count'],0)
         self.answer(state['pending_findings'],limited=True)
         self.call()
-        self.assertEqual(self.fake.call_count,1)
+        # A complete received shape failure gets one accounted same-round repair;
+        # a second invalid response still cannot advance or loop indefinitely.
+        self.assertEqual(self.fake.call_count,2)
+        state=review.review_state(self.resolved())
+        self.answer(state['pending_findings'],limited=True)
+        self.call()
+        self.assertEqual(self.fake.call_count,2)
+        self.assertEqual(len(state['executive_followup']['rounds']),1)
         self.assertFalse(review.review_state(self.resolved())['final_review_current'])
 
     def test_pause_cancel_and_failed_delivery_never_start_or_repeat_round(self):

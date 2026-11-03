@@ -14,6 +14,15 @@ NOTE_FIELDS = ('question', 'target_proposition', 'scope', 'answer', 'evidence_id
                'alternatives', 'gaps', 'critical_gaps', 'next_checks', 'timeline', 'correction_reason', 'forensic', 'report_slots', 'reader_explanation')
 
 
+def judgment_material(note):
+    """Explicit analyst content, excluding task state and review delivery receipts."""
+    investigation = note.get('investigation', {})
+    return {**{key: note.get(key) for key in (
+        'question', 'target_proposition', 'scope', 'answer', 'evidence_ids',
+        'alternatives', 'gaps', 'critical_gaps', 'next_checks', 'timeline', 'forensic', 'reader_explanation')},
+        'assessment': investigation.get('assessment'), 'claim_refs': investigation.get('claim_refs', [])}
+
+
 def hash_value(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
@@ -193,7 +202,7 @@ def save_note_locked(case, db, args, *, question_update=None):
             case, current(case), value, args['_review_responses'],
             lineage=args.get('_session_lineage') or [args.get('_session_id', '')],
             native_options=args.get('_independent_review_options'))
-    if not args.get('_judgment') and 'report_slots' not in args and '_report_slot_updates' not in args and old and all(old.get(k) == value.get(k) for k in value if k not in ('correction_reason', 'updated_at', 'revision')):
+    if not args.get('_judgment') and not args.get('_judgment_changed') and 'report_slots' not in args and '_report_slot_updates' not in args and old and all(old.get(k) == value.get(k) for k in value if k not in ('correction_reason', 'updated_at', 'revision')):
         return {'note': old, 'reused': True}
     value['revision'] = old['revision'] + 1 if old else 1
     value['updated_at'] = time.time()
@@ -255,6 +264,11 @@ def save_note_locked(case, db, args, *, question_update=None):
         if 'forensic' in args:
             from .forensic_workbench import validate as validate_forensic
             value['forensic'] = validate_forensic(case, provisional, value, args['forensic'])
+    # An operational disposition/review acknowledgement is not a saved new
+    # investigation interpretation. It must not clear the pending checkpoint.
+    value['judgment_updated_at'] = (value['updated_at']
+        if not old or args.get('_judgment_changed') or judgment_material(old) != judgment_material(value)
+        else old.get('judgment_updated_at', old['updated_at']))
     db.execute('INSERT INTO events VALUES (?,?,?,?,?)', (uuid.uuid4().hex, value['updated_at'], 'note', '', json.dumps(value, ensure_ascii=False)))
     if '_new_gap_dispositions' in args:
         from .host import ref, current, find
@@ -273,12 +287,23 @@ def save_note_locked(case, db, args, *, question_update=None):
 
 
 def question_receipt(note):
+    investigation = note.get('investigation', {})
+    selected = investigation.get('claim_refs', [])
     return {'question_id': 'Q-' + note['note_id'], 'revision': note['revision'],
             'contract_version': note.get('question_contract_version', 'v1'),
             'definition_version': note['definition_version'],
             'work_state': note.get('investigation', {}).get('work_state', 'open'),
             'read_call': {'tool': 'forsic_reporting', 'arguments': {'action': 'state', 'question_id': 'Q-' + note['note_id']}},
             'gap_lookup': {'tool': 'forsic_reporting', 'arguments': {'action': 'gaps', 'question_id': 'Q-' + note['note_id']}},
+            'saved_judgment': {
+                'answer_sha256': hashlib.sha256(note['answer'].encode('utf-8')).hexdigest(),
+                'selected_claim_count': len(selected), 'selected_claim_ids': [item['id'] for item in selected[:3]],
+                'omitted_selected_claims': max(0, len(selected)-3),
+                'retained_source_count': len(note.get('evidence_ids', [])),
+                'assessment': investigation.get('assessment', 'undetermined'),
+                'review_required': investigation.get('judgment_review_required', False),
+                'updated_at': note.get('judgment_updated_at', note['updated_at']),
+                'meaning': 'Committed selections, not semantic approval. Check this receipt before claiming a judgment was retained.'},
             'semantic_approval': False}
 
 
@@ -1079,6 +1104,8 @@ def update_question(case, state, payload, host_args):
             raise ValueError('A new grounded judgment replaces the current claim; retain/retract cannot be combined')
         args['_judgment']=deepcopy(payload['judgment'])
         args['_claim_action']='replace'
+    if gap_changes:
+        args['_judgment_changed'] = True
     if not old or question_id=='Q-intake':
         with case.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -1095,11 +1122,9 @@ def update_question(case, state, payload, host_args):
     change={'question_ref':ref('question',old),'records':{'gaps':gap_changes}}
     # The same atomic writer handles note compatibility, report records and CAS.
     receipt=write(case,state,change,note_update={'args':args,'question_update':update})
-    from .host import current
-    now=find(current(case),'questions',old['id'])
-    return {'receipt':receipt,'question':{**{k:now[k] for k in ('id','revision','definition_version','work_state')},
-        'read_call':{'tool':'forsic_reporting','arguments':{'action':'state','question_id':now['id']}},
-        'gap_lookup':{'tool':'forsic_reporting','arguments':{'action':'gaps','question_id':now['id']}}},'semantic_approval':False}
+    with case.connect() as db:
+        saved = latest_note(db, old['id'].removeprefix('Q-'))
+    return {'receipt': receipt, 'question': {**question_receipt(saved), 'id': old['id']}, 'semantic_approval': False}
 
 
 def validate_retained_mission(payload):

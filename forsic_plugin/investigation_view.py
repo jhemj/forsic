@@ -198,6 +198,9 @@ def _strings(value):
 
 def _question_details(db, prefix, params, note, question, observation_versions=None):
     """Expose declared analysis only; missing fields are not reviewed-empty lists."""
+    from .judgment_checkpoint import answer_status
+    question.update(answer_status=answer_status(note), updated_at=note.get('updated_at'),
+                    correction_reason=note.get('correction_reason', ''))
     for field, stored in [('counterarguments','alternatives'), ('next_checks','next_checks')]:
         if stored in note:
             question[field] = _strings(note[stored])
@@ -414,7 +417,6 @@ def _reports(case, case_id, result, counts, *, current_basis=_UNREAD_REPORT_BASI
 def _review_questions(resolved, notes, result, counts):
     """Bounded case-local advice receipts; these never become main-owned questions."""
     from . import independent_review as review
-    from .independent_review_state import _presented, _presented_handles
     from .report_driven.investigation_state import definition_version
     from .report_driven.review_responses import validate_saved
     from .investigation_context import _compression_link
@@ -500,9 +502,8 @@ def _review_questions(resolved, notes, result, counts):
             body = json.loads(next(message['content'] for message in request['messages']
                                    if message.get('role') == 'user'))
             rejected = []
-            findings = review._parse(response['raw_advice'],_presented(request),request['request_id'],rejected,
-                review_refs=_presented_handles(request),executive_round=request.get('executive_round',0),
-                previous_questions=body.get('executive_followup',{}).get('previous_questions',()))
+            from .independent_review_repair import parse_receipt
+            findings = parse_receipt(request, response, rejected)
             invalid += len(rejected)
             for finding in findings:
                 answer = None
@@ -558,6 +559,8 @@ def project_view(resolved, *, profile=''):
                   scope='case', questions=[], sources=[], observations=[], timeline=[],
                   reports=[], sessions=[], review_questions=[])
     with closing(_connection(case)) as db:
+        from .judgment_checkpoint import checkpoint
+        result['judgment_checkpoint'] = checkpoint(resolved, db=db)
         for key, query in {
             'questions': 'SELECT count(*) FROM owned',
             'observations': 'SELECT count(*) FROM observations WHERE value IS NOT NULL',
@@ -717,12 +720,12 @@ def project_view(resolved, *, profile=''):
         from .task_focus import project_tasks
         versions = {(q['id'],q['version']) for q in result['questions']}
         matching = [q for q in basis['questions'] if (q['id'],str(q['revision'])) in versions]
-        result['task_focus'] = project_tasks(basis,matching)
+        result['task_focus'] = project_tasks(basis,matching,include_judgment=False)
         result['task_focus']['omitted_tasks'] += max(0, counts['questions']-len(matching))
     _reports(case,resolved['case_id'],result,counts,current_basis=report_basis,draft=draft)
     result['report_workspace'] = workspace(result['report_authoring'], result['reports'])
     kept = {key: [] for key in counts}
-    budget = len(json.dumps([result['task_focus'],result['report_authoring'],result['report_workspace']],ensure_ascii=False).encode())
+    budget = len(json.dumps([result['task_focus'],result['report_authoring'],result['report_workspace'],result['judgment_checkpoint']],ensure_ascii=False).encode())
     for key, limit in [('reports',MAX_REPORTS),('questions',MAX_QUESTIONS),('sources',MAX_SOURCES),
                        ('observations',MAX_OBSERVATIONS),('timeline',MAX_TIMES),
                        ('sessions',MAX_SESSIONS),

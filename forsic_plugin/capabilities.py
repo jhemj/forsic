@@ -20,7 +20,8 @@ def capability(tool, arguments):
     return {'comparison_readonly': readonly, 'repeatable_poll': poll or tool == 'forsic_reporting' and action == 'execution',
             'target_write': False, 'case_ledger_write': True, 'workspace_write': shell and not retained_query and not static_scan,
             'evidence_read': tool in READ_TOOLS - {'forsic_case'} or image or shell and not static_scan,
-            'subprocess': shell and not retained_query or image or tool == 'forsic_image_info' or tool == 'forsic_verify' and action == 'start',
+            'subprocess': shell and not retained_query or image or tool == 'forsic_image_info' or tool == 'forsic_verify' and action == 'start'
+                          or tool == 'forsic_reporting' and action == 'execution_reconcile',
             'network': tool == 'forsic_intel', 'target_code_execution': shell and not typed_scan and not retained_query,
             'meaning': 'Declared handler effects, not execution proof or authority expansion.'}
 

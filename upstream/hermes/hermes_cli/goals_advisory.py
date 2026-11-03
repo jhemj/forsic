@@ -130,6 +130,8 @@ def goal_advisory_context(**kwargs):
 # Actions describe the provider's current obligation, not permission to run it.
 # Missing actions retain the legacy response contract; unknown actions stay explicit.
 _FOLLOWUP_INSTRUCTIONS = {
+    'repair_review': ('Repair only the rejected items of the existing review round through its provided recovery call. '
+                      'Preserve valid questions, original receipts, dispositions and spent budget; do not restart the dialogue.'),
     'respond': ('Assess pending findings within the current user-authorized task, reusing preserved results first. '
                 'Record an explicit answer and disposition with reasons through the existing tools; revise the answer as needed.'),
     'revise_judgment': ('Assess the current judgment against preserved sources and update it with reasons through the existing tools.'),

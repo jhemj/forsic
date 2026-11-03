@@ -80,6 +80,18 @@ class CurrentJudgmentTests(unittest.TestCase):
         self.update(answer='Aggregate explanation A (same meaning)',reason='Wording only',claim_action='retain')
         self.assertEqual(self.q()['claim_refs'],before['claim_refs']);self.assertEqual(self.q()['assessment'],before['assessment'])
         self.assertEqual(definition(self.state()['tests']),definition(tests))
+    def test_pending_gate_does_not_change_legacy_authoring_dependency_or_adopt_candidate(self):
+        from forsic_plugin.report_driven.current_judgment import authoring_judgment, question_claims
+        state = self.state(); question = state['questions'][0]
+        question['claim_refs'] = []
+        question['judgment_review_required'] = False
+        before = authoring_judgment(state, question)
+        self.assertTrue(question_claims(state, question))
+        question['judgment_review_required'] = True
+        self.assertEqual(authoring_judgment(state, question), before)
+        self.assertFalse(question_claims(state, question))
+        question['answer'] += ' A different conclusion.'
+        self.assertNotEqual(authoring_judgment(state, question), before)
     def test_second_synthesis_replaces_only_current_claim(self):
         p=self.synthesize();old=self.q()['claim_refs'][0]['id']
         p['mission_version']=self.state()['missions'][0]['version']

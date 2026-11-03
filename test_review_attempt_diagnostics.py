@@ -39,11 +39,11 @@ class ReviewAttemptDiagnosticsTests(unittest.TestCase):
 
     def draft(self, marker='first'):
         self.case.record('report_narrative', {'schema': 'forsic-report-narrative-2',
-            'question_ids': self.ids, 'goal_id': self.resolved['goal_id'], 'draft_revision': 1,
+            'question_ids': self.ids, 'goal_id': self.resolved['goal_id'], 'revision': 1, 'draft_revision': 1,
             'draft_hash': marker, 'basis_id': 'synthetic-basis', 'fields': {},
             'sections': {'scope': {'text': 'Synthetic authored report ' + marker}}}, self.sid)
 
-    def fail(self):
+    def retain_failure(self):
         with patch.object(review, 'goal_advisory_context', return_value=self.failure) as call:
             result = gate.context(self.case, host.current(self.case), self.args,
                                   dispatch=True, question_ids=self.ids)
@@ -53,7 +53,7 @@ class ReviewAttemptDiagnosticsTests(unittest.TestCase):
     def test_failure_survives_finalize_and_inbox_without_becoming_pending(self):
         before = self.case.db.read_bytes()
         canonical = review.review_state(self.scoped)
-        context = self.fail()
+        context = self.retain_failure()
         self.assertEqual(context['attempt']['diagnostic']['code'], 'executive_history_budget')
         projection, blocked = _review_gate(self.case, host.current(self.case),
             {'bundle_id': 'synthetic'}, context)
@@ -81,7 +81,7 @@ class ReviewAttemptDiagnosticsTests(unittest.TestCase):
     def test_failure_does_not_hide_material_pending_findings(self):
         self.fake.side_effect = fixtures.IndependentReviewTests.response.__get__(self)
         review.goal_advisory_context(**self.kwargs(stage='final', report_question_ids=self.ids))
-        self.fail()
+        self.retain_failure()
         inbox = review_actions.inbox(self.case, self.args)
         self.assertGreater(inbox['pending_count'], 0)
         self.assertTrue(inbox['findings'])
@@ -90,28 +90,33 @@ class ReviewAttemptDiagnosticsTests(unittest.TestCase):
         self.assertEqual(inbox['diagnostic']['code'], 'executive_history_budget')
 
     def test_retained_failure_is_not_replayed_after_report_source_or_scope_change(self):
-        self.fail()
+        self.retain_failure()
         self.assertIsNotNone(gate.retained_attempt(self.scoped))
         self.assertIsNone(gate.retained_attempt({**self.scoped, 'goal_id': 'foreign-goal'}))
         self.assertIsNone(gate.retained_attempt(self.resolved))  # exact selected scope only
         self.draft('changed')
         self.assertIsNone(gate.retained_attempt(self.scoped))
-        self.fail()
+        self.retain_failure()
         self.add_sources(1)
+        self.assertIsNotNone(gate.retained_attempt(self.scoped))  # Unselected reads do not change this report.
+        with self.case.connect() as db:
+            source_id=db.execute("SELECT id FROM events WHERE kind='tool_result' ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+        self.note['evidence_ids'].append(source_id)
+        self.save_note()  # Explicitly adopt the new source into the selected question.
         self.assertIsNone(gate.retained_attempt(self.scoped))
 
     def test_response_progress_invalidates_failure_without_staling_semantic_review(self):
         self.fake.side_effect = fixtures.IndependentReviewTests.empty_response.__get__(self)
         review.goal_advisory_context(**self.kwargs(stage='final', report_question_ids=self.ids))
         before = review.freshness(self.scoped)
-        context = self.fail()
+        context = self.retain_failure()
         self.save_note()  # same answer, new question revision (as with focused response writes)
         self.assertEqual(review.freshness(self.scoped), before)
         self.assertIsNone(gate.retained_attempt(self.scoped))
         self.assertIsNone(gate.attempt_for_context(context))
 
     def test_fresh_dispatch_is_not_suppressed_and_success_replaces_failure(self):
-        self.fail()
+        self.retain_failure()
         with patch.object(review, 'goal_advisory_context', return_value={
                 'status': 'received', 'review_id': 'repaired', 'requires_followup': False}) as call:
             context = gate.context(self.case, host.current(self.case), self.args,
@@ -133,7 +138,7 @@ class ReviewAttemptDiagnosticsTests(unittest.TestCase):
 
     def test_only_bounded_routing_metadata_is_cached(self):
         self.failure.update(raw_response='PRIVATE_PROVIDER_BODY', request='PRIVATE_REQUEST')
-        self.fail()
+        self.retain_failure()
         text = gate._attempt_path(self.scoped).read_text()
         self.assertNotIn('PRIVATE_', text)
         huge = deepcopy(self.failure)

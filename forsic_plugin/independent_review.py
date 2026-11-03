@@ -67,6 +67,18 @@ def _json(value):
     return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))
 
 
+def _prompt_json(body):
+    """Keep retained source/context prefixes before volatile workflow metadata.
+
+    Key order affects provider prefix caching, not canonical receipt fingerprints.
+    Values and byte bounds are unchanged; runtime clocks remain in the packet.
+    """
+    canonical=json.loads(_json(body))
+    fixed=('approved_scope','goal','notice','requested_question','sources')
+    ordered={key:canonical.pop(key) for key in fixed if key in canonical}
+    return json.dumps({**ordered,**canonical},ensure_ascii=False,separators=(',',':'))
+
+
 def _hash(value):
     return hashlib.sha256(_json(value).encode()).hexdigest()
 
@@ -231,7 +243,8 @@ def _packet_failure(exc, phase, resolved, max_chars):
                        for key in ('draft_hash', 'draft_revision'))):
             return result
         limit = _call_budget(resolved)
-        used = sum(not request.get('executive_round') for _, request in _receipts(resolved))
+        from .independent_review_repair import ordinary_receipts
+        used = len(ordinary_receipts(_receipts(resolved)))
         if limit is not None and used >= limit:
             reason = f'Current report review remains incomplete; the ordinary review budget of {limit} calls is exhausted.'
             result.update(status='budget_exhausted', context=reason[:max_chars])
@@ -384,12 +397,21 @@ def executive_receipt_sequence(resolved, receipts):
     ranks = {item['goal_id']: index for index, item in enumerate(
         [*reversed(ancestors), resolved])}
     policy, restarts, restarted_by_goal = [], [], {}
+    repaired=set()
     for path, request in receipts:
         number = request.get('executive_round')
         if not number:
             continue
         if type(number) is not int or not 1 <= number <= EXECUTIVE_ROUNDS:
             raise ValueError('Invalid executive round sequence')
+        if parent := request.get('executive_repair_of'):
+            original=next((r for _,r in policy if r['request_id']==parent),None)
+            if (original is None or parent in repaired or original['executive_round']!=number
+                    or type(request.get('executive_repair_count')) is not int
+                    or not 1 <= request['executive_repair_count'] <= EXECUTIVE_QUESTIONS):
+                raise ValueError('Invalid executive repair sequence')
+            repaired.add(parent)
+            continue
         if number == len(policy)+1:
             policy.append((path, request))
         elif (ancestors and number <= len(policy)
@@ -411,7 +433,8 @@ def _source_rows(db, lineage):
 def _evaluation_fingerprint(questions):
     # A response records followthrough, not a new substantive answer. Revision
     # advances for both kinds of writes and must not make a review stale alone.
-    return _hash([{k:v for k,v in question.items() if k not in ('revision','review_responses')}
+    return _hash([{k:v for k,v in question.items() if k not in
+                  ('revision','review_responses','work_state','priority','judgment_review_required')}
                   for question in questions])
 
 
@@ -475,7 +498,11 @@ def _report_draft(resolved, questions):
     selection_sql = " AND json(json_extract(data,'$.question_ids'))=json(?)" if scoped is not None else ''
     selection_params = (_json(scoped),) if scoped is not None else ()
     with resolved['case'].connect() as db:
-        rows = db.execute("SELECT length(cast(data AS BLOB)) AS size,substr(data,1,?) AS data "
+        # A saved comparison/disposition is not authored prose and is excluded
+        # from the returned fingerprint below. Exclude it before the same byte
+        # bound too; otherwise acknowledging a bounded draft can poison its inbox.
+        rows = db.execute("SELECT length(cast(json_remove(data,'$.review') AS BLOB)) AS size,"
+            "substr(json_remove(data,'$.review'),1,?) AS data "
             "FROM events WHERE kind='report_narrative' AND session IN (" +
             ','.join('?' for _ in resolved['session_lineage']) +
             ") AND json_extract(data,'$.goal_id')=?" + selection_sql + " ORDER BY rowid DESC LIMIT 16",
@@ -496,13 +523,25 @@ def _report_draft(resolved, questions):
 
 def _review_evaluation(resolved, questions):
     question_identity = _evaluation_fingerprint(questions)
-    draft = _report_draft(resolved, questions)
+    draft = _draft_identity(_report_draft(resolved, questions))
     if resolved.get('_report_question_ids') is not None:
         return _hash({'questions': question_identity, 'report_draft': draft,
                       'report_review_contract': REPORT_REVIEW_CONTRACT,
                       'report_question_ids': resolved['_report_question_ids']})
     return (_hash({'questions': question_identity, 'report_draft': draft,
                    'report_review_contract': REPORT_REVIEW_CONTRACT}) if draft else question_identity)
+
+
+def _draft_identity(draft):
+    # CAS/rebase metadata is retained for navigation, not a change to prose.
+    # Current selected judgments/evidence have their own semantic fingerprints.
+    if draft is None:return None
+    result={k:v for k,v in draft.items() if k not in ('basis_id','draft_revision')}
+    if isinstance(result.get('fields'),dict):
+        result['fields']={key:{k:v for k,v in field.items()
+            if k not in ('saved_at','dependencies','judgment_dependencies')}
+            for key,field in result['fields'].items()}
+    return result
 
 
 def _material_fingerprints(resolved, sources_sha256, questions, inventory):
@@ -521,7 +560,7 @@ def _material_fingerprints(resolved, sources_sha256, questions, inventory):
             'timeline', 'actions', 'indicators', 'sources')}
         immutable = {item['id'] for item in material['sources']} | {material['scope']['id']}
         for question in material['questions']:
-            for key in ('revision', 'review_responses'):
+            for key in ('revision', 'review_responses', 'work_state', 'priority', 'judgment_review_required'):
                 question.pop(key, None)
         def substantive(value):
             if isinstance(value, dict):
@@ -534,7 +573,7 @@ def _material_fingerprints(resolved, sources_sha256, questions, inventory):
                     'goal': resolved['goal'].goal, 'selected_material': substantive(material)}),
             'evaluation_fingerprint': _review_evaluation(resolved, questions),
             'report_draft_fingerprint': _hash({'contract': REPORT_REVIEW_CONTRACT,
-                'draft': _report_draft(resolved, questions)})}
+                'draft': _draft_identity(_report_draft(resolved, questions))})}
     selected_ids=sorted({sid for question in questions for sid in
         [*question.get('evidence_ids',[]),*question.get('temporal_summary',{}).get('selected_source_ids',[])]})
     selected_digest=hashlib.sha256()
@@ -551,7 +590,7 @@ def _material_fingerprints(resolved, sources_sha256, questions, inventory):
         'evaluation_fingerprint':_review_evaluation(resolved,questions)}
     if resolved.get('_report_question_ids') is not None:
         result['report_draft_fingerprint'] = _hash({'contract':REPORT_REVIEW_CONTRACT,
-            'draft':_report_draft(resolved, questions)})
+            'draft':_draft_identity(_report_draft(resolved, questions))})
     return result
 
 
@@ -973,7 +1012,7 @@ def _collect(resolved,stage='checkpoint',draft_response='',*,runtime_clock=None,
             coordinate=_review_coordinate(source,field)
             handle=_field_handle(source,field)
             field['review_ref']=handle;review_refs[handle]=coordinate
-    prompt=_json(body)
+    prompt=_prompt_json(body)
     if len(prompt)+len(system)>input_limit:raise ValueError('Independent review input budget exceeded')
     if report and count and not review_refs:
         raise ValueError('Complete report prose leaves no room for preserved source fields; no partial final review was sent. Reduce repeated editorial text or use a supported larger-scope review workflow.')
@@ -1068,14 +1107,17 @@ def _active(session_id,goal_id,goal_text,intake_root,native_db):
     return resolved
 
 
-def _parse(text,refs,review_id='',rejected=None,*,review_refs=None,executive_round=0,previous_questions=()):
+def _parse(text,refs,review_id='',rejected=None,*,review_refs=None,executive_round=0,previous_questions=(),allow_partial=False,expected_count=None):
     """Validate coordinates and exact quote occurrence per item, never semantic implication."""
     value=json.loads(text)
     # The previous prompt allowed an array. Normalize only this lossless
     # envelope; item counts, exact handles and field validation stay identical.
     if isinstance(value,list):value={'findings':value}
+    count=expected_count if expected_count is not None else EXECUTIVE_QUESTIONS
+    if type(count) is not int or not 1 <= count <= EXECUTIVE_QUESTIONS:raise ValueError('Invalid executive question count')
     if (not isinstance(value,dict) or set(value)!={'findings'} or not isinstance(value['findings'],list)
-            or (len(value['findings'])!=EXECUTIVE_QUESTIONS if executive_round else len(value['findings'])>3)):
+            or ((len(value['findings'])>count if allow_partial else len(value['findings'])!=count)
+                if executive_round else len(value['findings'])>3)):
         raise ValueError('Invalid independent advice shape')
     findings=[];seen={' '.join(q.casefold().split()) for q in previous_questions}
     for index,finding in enumerate(value['findings']):
@@ -1124,7 +1166,7 @@ def _parse(text,refs,review_id='',rejected=None,*,review_refs=None,executive_rou
                     for key in ('review_ref','source_id','pointer','question','next_check'):
                         if isinstance(finding.get(key),str):failure[key]=finding[key][:1000]
                 rejected.append(failure)
-    if executive_round and len(findings)!=EXECUTIVE_QUESTIONS:
+    if executive_round and not allow_partial and len(findings)!=count:
         raise ValueError('Executive round requires exactly five valid distinct questions')
     return findings
 
@@ -1239,7 +1281,7 @@ def _executive_snapshot(resolved,snapshot,round_number,projection):
                           'questions':history,'main_answers':list(main_answers.values())}}
     if len(_json(body))+len(EXECUTIVE_SYSTEM)>MAX_INPUT:
         _budget_executive_body(body)
-    prompt=_json(body)
+    prompt=_prompt_json(body)
     if len(prompt)+len(EXECUTIVE_SYSTEM)>MAX_INPUT:
         raise ValueError('Complete executive question/answer history exceeds the review input bound')
     retained={f['review_ref'] for source in body['sources'] for f in source['fields']}
@@ -1328,7 +1370,8 @@ def _with_state(result,resolved,max_chars=3500):
         if progress['complete']:
             if resolved.get('_report_question_ids') is not None and not state['final_review_current']:
                 result['context']='임원 독자 3회·15개 질문의 답과 처분은 보존했습니다. 현재 선택 보고서 본문은 별도 최종 검토가 필요합니다. 다음 native 최종 경계에서 기존 ordinary 예산으로 현재 본문만 검토하며 3회 질문을 다시 시작하지 않습니다.'
-                ordinary = [request for _, request in _receipts(resolved) if not request.get('executive_round')]
+                from .independent_review_repair import ordinary_receipts
+                ordinary = ordinary_receipts(_receipts(resolved))
                 limit = _call_budget(resolved)
                 if limit is not None and len(ordinary) >= limit:
                     result.update(status='budget_exhausted', followup_actionable=False, followup_action='repair',
@@ -1338,6 +1381,10 @@ def _with_state(result,resolved,max_chars=3500):
                 return result
             result['status']='received'
             result['context']='임원 독자 3회·15개 질문의 현재 답과 근거·한계 처분을 보존했습니다. 후속 대화의 완료이며 독립 승인·전체 자료 검사 완료가 아닙니다.'
+            return result
+        if state.get('review_repair') and not state['pending_findings']:
+            result['review_repair']=state['review_repair']
+            result['context']='검증된 기존 질문과 답은 보존했습니다. 다음 native 최종 경계에서 같은 회차의 누락 질문만 한 차례 복구합니다. 정확 참조·다섯 질문 완료 요건과 기존 호출 예산을 유지합니다.'
             return result
         if progress.get('status')=='blocked' and not state['pending_findings']:
             # Availability disposition records a limitation, not the missing
@@ -1479,6 +1526,7 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
             try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             except BlockingIOError:return _in_progress(resolved,max_chars)
             receipts=_receipts(resolved)
+            repair_original=None
             executive_mode=executive_followup or any(r.get('executive_round') for _,r in receipts)
             if stage!='final' and any(r.get('executive_round') for _,r in receipts):
                 return _latest_result(resolved,max_chars)
@@ -1493,13 +1541,18 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
                     return _with_state(_result('executive_waiting','기존 검토 질문을 주 조사에서 먼저 답하고 근거 또는 한계를 저장하세요.',max_chars),resolved,max_chars)
                 if rounds:
                     prior_path,prior=rounds[-1];response=_response_for(prior_path,prior)
+                    if projection.get('review_repair'):
+                        repair_original=next(r for _,r in receipts if r['request_id']==projection['review_repair']['review_id'])
                     recovered=any(r['review_id']==prior['request_id'] for r in projection.get('recovered_receipts',[]))
-                    if not response or response.get('status')!='received' and not recovered:
+                    if not repair_original and (not response or response.get('status')!='received' and not recovered) and not all(r['complete'] for r in projection.get('executive_followup',{}).get('rounds',[])):
                         return _with_state(_advice(prior,response,max_chars),resolved,max_chars)
                     progress=projection.get('executive_followup',{})
-                    if not all(r['complete'] for r in progress.get('rounds',[])):
+                    if not repair_original and not all(r['complete'] for r in progress.get('rounds',[])):
                         return _with_state(_result('executive_waiting','이전 임원 검토의 다섯 질문을 모두 답해야 다음 회차로 진행합니다.',max_chars),resolved,max_chars)
-                if len(rounds)>=EXECUTIVE_ROUNDS:
+                if repair_original:
+                    from .independent_review_repair import snapshot as repair_snapshot
+                    snapshot=repair_snapshot(resolved,repair_original,projection,snapshot)
+                elif len(rounds)>=EXECUTIVE_ROUNDS:
                     if projection['final_review_current']:
                         return _with_state(_result('received','임원 독자 3회·15개 질문의 현재 답과 근거·한계 처분을 보존했습니다. 독립 승인이나 전체 자료 검사 완료를 뜻하지 않습니다.',max_chars),resolved,max_chars)
                     # Completed dialogue is retained. A changed authored report
@@ -1520,8 +1573,9 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
                     return _with_state(_result('unavailable','Independent review state is unavailable; inspect existing records before requesting another review.',max_chars),resolved,max_chars)
                 if projection['pending_findings']:
                     return _latest_result(resolved,max_chars)
-            ordinary=[(p,r) for p,r in receipts if not r.get('executive_round')]
-            if not snapshot.get('executive_round') and limit is not None and len(ordinary)>=limit:
+            from .independent_review_repair import ordinary_receipts
+            ordinary=ordinary_receipts(receipts)
+            if (not snapshot.get('executive_round') or snapshot.get('executive_repair_of')) and limit is not None and len(ordinary)>=limit:
                 return _with_state(_result('budget_exhausted',f'독립 검토의 목표별 {limit}회 한도를 사용했습니다. 보존된 의견의 처분과 현재 한계를 반영해 판단하세요.',max_chars),resolved,max_chars)
             if any(not path.with_name(path.name.replace('-request.json','-response.json')).exists()
                    for path,_ in receipts):
@@ -1549,7 +1603,9 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
             fresh=_active(session_id,goal_id,goal_text,intake_root,native_db)
             fresh=report_review_scope(fresh,resolved.get('_report_question_ids'))
             fresh_snapshot=_collect(fresh,stage,draft_response,runtime_clock=snapshot['runtime_clock'])
-            if snapshot.get('executive_round'):
+            if repair_original:
+                fresh_snapshot=repair_snapshot(fresh,repair_original,review_state(fresh),fresh_snapshot)
+            elif snapshot.get('executive_round'):
                 fresh_snapshot=_executive_snapshot(fresh,fresh_snapshot,snapshot['executive_round'],review_state(fresh))
             if stage!='final':
                 fresh_state=review_state(fresh)
@@ -1567,6 +1623,9 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
                 'evaluation_fingerprint':snapshot['evaluation_fingerprint'],'input_fingerprint':snapshot['input_fingerprint'],'messages':[{'role':'system','content':system},
                 {'role':'user','content':snapshot['prompt']}],'delivery_status':'unconfirmed','automatic_adoption':False}
             if snapshot.get('executive_round'):request['executive_round']=snapshot['executive_round']
+            if repair_original:
+                request.update(executive_repair_of=snapshot['executive_repair_of'],
+                               executive_repair_count=snapshot['executive_repair_count'])
             if resolved.get('_report_question_ids') is not None:
                 request['report_question_ids']=resolved['_report_question_ids']
                 request['report_draft_fingerprint']=snapshot['report_draft_fingerprint']
@@ -1631,15 +1690,20 @@ def _complete_review(resolved,snapshot,request,request_path,response_path,*,sess
         if response.get('finish_reason')!='stop':response['status']='incomplete'
         else:
             response['rejected_findings']=[]
-            response['findings']=_parse(response['raw_advice'],snapshot['refs'],rid,response['rejected_findings'],
-                                        review_refs=snapshot['review_refs'],executive_round=request.get('executive_round',0),
-                                        previous_questions=snapshot.get('previous_questions',()))
-            response['status']='invalid_advice' if response['rejected_findings'] and not response['findings'] else 'received'
+            from .independent_review_repair import parse_receipt
+            response['findings']=parse_receipt(request,response,response['rejected_findings'])
+            expected=request.get('executive_repair_count',EXECUTIVE_QUESTIONS)
+            incomplete=bool(request.get('executive_round') and len(response['findings'])!=expected)
+            response['status']='invalid_advice' if incomplete or response['rejected_findings'] and not response['findings'] else 'received'
         try:
             fresh=_active(session_id,goal_id,goal_text,intake_root,native_db)
             fresh=report_review_scope(fresh,resolved.get('_report_question_ids'))
             fresh_snapshot=_collect(fresh,stage,draft_response,runtime_clock=snapshot['runtime_clock'])
-            if request.get('executive_round'):
+            if request.get('executive_repair_of'):
+                # The immutable repair deliberately uses the original packet;
+                # later judgment changes remain visible through freshness.
+                fresh_snapshot=snapshot
+            elif request.get('executive_round'):
                 fresh_snapshot=_executive_snapshot(fresh,fresh_snapshot,request['executive_round'],review_state(fresh))
             current=_identity(fresh)==_identity(resolved) and fresh_snapshot['input_fingerprint']==snapshot['input_fingerprint']
         except (OSError,ValueError,KeyError,TypeError,sqlite3.Error):current=False

@@ -78,8 +78,11 @@ reader all 5 prior questions and Forsic responses, the latest report, and source
 Forsic responses are analyst input, distinct from original evidence. Do not repeat equivalent questions to fill a quota.
 Finish after 3 rounds and 15 responses; do not request a fourth review.
 
-The runtime manages round and question counts and validates prior responses. On incomplete returns, cancellation,
-manual stop, exhausted call budget, or unknown delivery status, do not resend or resume automatically.
+The runtime manages round and question counts and validates prior responses. A complete received response with
+invalid fields preserves its valid questions; answer those first. With repair_review, return to the existing native
+final boundary for at most one repair of only the missing questions in the same round. This repair consumes the
+existing ordinary review allowance and never changes the exact five-question completion requirement or prior answers.
+On truncated returns, cancellation, manual stop, exhausted call budget, or unknown delivery status, do not resend or resume automatically.
 Report preserved state and limitations. Completion of 15 responses completes the follow-up conversation;
 it does not establish every hypothesis, independent analyst approval, or case closure. If answers change,
 update existing notes and reports from the same snapshot and follow the existing finalize procedure.

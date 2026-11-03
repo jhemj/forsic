@@ -120,7 +120,6 @@ def _responses(case, conversation):
 
 def project_history(resolved, *, profile='', offset=0, limit=30, snapshot=None):
     from . import independent_review as review
-    from .independent_review_state import _presented, _presented_handles
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 50:
         raise ValueError('Invalid history page')
     case = resolved['case']
@@ -159,9 +158,8 @@ def project_history(resolved, *, profile='', offset=0, limit=30, snapshot=None):
                 metadata['report_draft_revision'] = draft.get('draft_revision')
             metadata['report_version'] = request.get('report_draft_fingerprint')
             rejected = []
-            findings = review._parse(response['raw_advice'], _presented(request), rid, rejected,
-                review_refs=_presented_handles(request), executive_round=request.get('executive_round', 0),
-                previous_questions=body.get('executive_followup', {}).get('previous_questions', ()))
+            from .independent_review_repair import parse_receipt
+            findings = parse_receipt(request, response, rejected)
             for rejected_finding in rejected:
                 issues.append({**metadata, 'status': 'unvalidated_finding',
                     'message': '검토 의견의 원문 연결을 검증하지 못했습니다.',

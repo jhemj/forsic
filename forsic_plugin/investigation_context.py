@@ -512,6 +512,16 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
                         'other_goal_or_unbound_questions': len(state['questions']) - len(questions)},
             'preserved_history': {'excluded_records':state['meta'].get('excluded_history_records',0), 'meaning':'Old definitions retained; note(get, include_history=true).'},
             'retrieval': 'forsic_reporting(state/source), forsic_note(get).'}
+    from .judgment_checkpoint import checkpoint
+    checkpoint_state = checkpoint(resolved)
+    if checkpoint_state['status'] in ('pending', 'unavailable'):
+        body['answer_updates']['checkpoint'] = {key: checkpoint_state[key] for key in
+            ('status', 'pending_briefings', 'latest_briefing_at', 'latest_saved_at')}
+        if checkpoint_state.get('retained_results'):
+            body['answer_updates']['checkpoint']['retained_results'] = checkpoint_state['retained_results']
+        body['answer_updates']['checkpoint']['next_step'] = (
+            'Reconcile meaningful public findings in the same question before unrelated collection; '
+            'reuse retained evidence. Unchanged progress needs no duplicate answer.')
     entries = {'active_questions': [], 'closed_index': [], 'active_missions': [], 'unassessed_results': [],
                'observed_scope': recent_observed_scope(resolved, state),
                'observed_targets': inventory['targets']}

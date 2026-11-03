@@ -1478,6 +1478,8 @@ def _apply_agent_section(agent, _agent_cfg):
         agent._auto_recovery_cycles = max(int(_agent_section.get("auto_recovery_cycles", 5)), 0)
     except (TypeError, ValueError):
         agent._auto_recovery_cycles = 5
+    from agent.turn_recovery_autorecover import configure_recovery_budget
+    configure_recovery_budget(agent, _agent_section)
 
 
 def _positive_int(raw: Any, *, reject: tuple = ()) -> Optional[int]:

@@ -1439,7 +1439,7 @@ class GoalManager:
         return True
 
     @_goal_state_mutation
-    def resume(self, *, reset_budget: bool = True) -> Optional[GoalState]:
+    def resume(self, *, reset_budget: bool = False) -> Optional[GoalState]:
         if not self._state:
             return None
         if self._state.runtime_budget_seconds is not None and not self._state.runtime_accounting_known:

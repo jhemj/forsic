@@ -379,6 +379,21 @@ def settle_unrecovered_error(
             base_url=_base, model=_model, delivered=_delivered,
         ))
 
+    from agent.turn_recovery_autorecover import begin_recovery_budget, recovery_remaining
+    begin_recovery_budget(agent, _retry, classified)
+    if recovery_remaining(_retry) == 0:
+        agent._emit_diagnostic_status("⏳ Provider recovery time allowance exhausted; partial work is preserved.")
+        _delivered = settle_delivered_partial(agent, messages, current_turn_user_idx)
+        result = max_retries_exhausted_result(
+            agent, api_error, classified, max_retries=max_retries, is_rate_limited=is_rate_limited,
+            error_msg=error_msg, api_kwargs=api_kwargs, api_messages=api_messages,
+            messages=messages, conversation_history=conversation_history,
+            api_call_count=api_call_count, approx_tokens=approx_tokens, provider=_provider,
+            base_url=_base, model=_model, delivered=_delivered,
+        )
+        result["recovery_exhausted"] = "time_budget"
+        return _verdict("return", result)
+
     if retry_count >= max_retries:
         # Before fallback, rebuild the primary client once per API call block for
         # transient transport errors (stale pool, TCP reset).
@@ -427,6 +442,9 @@ def settle_unrecovered_error(
         is_rate_limited=is_rate_limited, is_zai_coding_overload=_is_zai_coding_overload,
         base_url=_base, model=_model,
     )
+    remaining = recovery_remaining(_retry)
+    if remaining is not None:
+        wait_time = min(wait_time, remaining)
     # Same preserve-redirect rule as the invalid-response wait: a steering correction
     # must survive backoff, not die as "Operation interrupted".
     _interrupted = interruptible_backoff_sleep(

@@ -2,14 +2,14 @@
 from copy import deepcopy
 
 
-def question_claims(state, question):
+def question_claims(state, question, *, include_pending_candidates=False):
     """Select the note-owned current claims, never historical adoption receipts."""
     selected = {r['id'] for r in question.get('claim_refs', [])}
     if selected:
         registry={c['id']:c for c in state['claims']}
         return [registry[r['id']] for r in question['claim_refs'] if r['id'] in registry
                 and registry[r['id']]['status'] not in ('retracted', 'superseded')]
-    if question.get('judgment_review_required', False):
+    if question.get('judgment_review_required', False) and not include_pending_candidates:
         return []
     return [c for c in state['claims'] if c['id'] == 'F-' + question['id'][2:]
             and c['status'] == 'candidate']
@@ -29,8 +29,8 @@ def analysis_declaration(claim):
             'undeclared_analysis_fields':list(fields) if declared is None else [k for k in fields if k not in declared]}
 
 
-def current_judgment(state, question):
-    claims = question_claims(state, question)
+def current_judgment(state, question, *, include_pending_candidates=False):
+    claims = question_claims(state, question, include_pending_candidates=include_pending_candidates)
     tests={t['id']:t for t in state['tests'] if t['question_ref']['id']==question['id']}
     # Local test reasoning is explicitly separate from the aggregate judgment.
     local=[{'id':a['id'],'version':a['version'],'test_id':a['test_ref']['id'],'outcome':a['outcome'],
@@ -67,17 +67,21 @@ def current_judgment(state, question):
             'detail_pointer':'/questions/'+str(state['questions'].index(question))}
 
 
-def current_claims(state):
-    selected={c['id'] for q in state['questions'] for c in question_claims(state,q)}
+def current_claims(state, *, include_pending_candidates=False):
+    selected={c['id'] for q in state['questions'] for c in question_claims(
+        state, q, include_pending_candidates=include_pending_candidates)}
     return [c for c in state['claims'] if c['id'] in selected]
 
 
 def authoring_judgment(state, question):
     """Material answer dependency, without navigation or unrelated note revisions."""
-    full = current_judgment(state, question)
+    # A review gate may hide an unadopted legacy candidate from readers, but
+    # must not pretend its underlying statement changed. This dependency view
+    # does not adopt it; status()/save() still enforce the pending judgment gate.
+    full = current_judgment(state, question, include_pending_candidates=True)
     result = {key: deepcopy(full[key]) for key in
             ('question_id', 'definition_version', 'target_proposition', 'scope', 'answer',
-             'assessment', 'review_required', 'claim_refs', 'judgments', 'remaining_gaps', 'resolved_gaps',
+             'assessment', 'claim_refs', 'judgments', 'remaining_gaps', 'resolved_gaps',
              'alternatives', 'next_checks', 'reopen_conditions', 'local_assessments')}
     def stable(value):
         if isinstance(value, dict):

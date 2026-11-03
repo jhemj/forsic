@@ -25,7 +25,7 @@ it('renders retained facts and opens only the selected immutable source at its e
   try {
     await act(async () => {root.render(<ForsicInvestigation data={data} loading={false} error={null} readSource={readSource}/>)})
     expect(readSource).not.toHaveBeenCalled()
-    expect(host.textContent).toContain('저장된 실제 질문'); expect(host.textContent).toContain('관측 1건 생략')
+    expect(host.querySelector('[aria-label="저장된 질문과 답"]')).toBeNull(); expect(host.textContent).toContain('관측 1건 생략')
     expect(host.querySelector('[data-kind=metadata]')?.textContent).toContain('ctime')
     const button = [...host.querySelectorAll('button')].find(item => item.textContent?.includes('보존 원문 보기'))!
     await act(async () => {button.click()})
@@ -175,16 +175,15 @@ it('keeps semantic summaries separate from identifiers and enriches only after a
   } finally {fetch.mockRestore()}
 })
 
-it('leads with the saved answer, keeps technical diagrams optional, and leaves Ren outside reading-mode styles', async () => {
+it('keeps records below the unified judgment, with optional diagrams and exact relationships', async () => {
   await withMonitor(async host => {
-    const answer=host.querySelector('[aria-label="사건의 현재 답"]')!
+    expect(host.querySelector('.fi-case-summary')).toBeNull()
     const diagram=host.querySelector('details.fi-optional-chart') as HTMLDetailsElement
-    expect(Boolean(answer.compareDocumentPosition(diagram) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
     expect(diagram.open).toBe(false)
+    await clickText(host,'연결 지도')
+    const answer=host.querySelector('[aria-label="사건의 현재 답"]')!
     expect(answer.textContent).toContain('명령 기록은 있으나 성공 미확인')
     expect(answer.querySelectorAll('.fi-judgment-context li').length).toBe(3)
-    expect(host.querySelector('.fi-question code')?.closest('details.fi-technical')?.hasAttribute('open')).toBe(false)
-    await clickText(host,'연결 지도')
     const chain=host.querySelector('[aria-label="판단에 연결된 근거"]')!
     expect(chain.textContent).toContain('명령 반환')
     expect(chain.textContent).toContain('관측-O-a')

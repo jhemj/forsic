@@ -13,7 +13,6 @@ import sqlite3
 import threading
 
 from . import independent_review as review
-from .independent_review_state import _presented, _presented_handles
 
 MAX_RECEIPTS = 24
 MAX_SCAN_FILES = 256
@@ -24,6 +23,7 @@ _LOCK = threading.Lock()
 _STATUS = {
     'in_progress': '검토 중', 'delivery_unconfirmed': '검토 응답 수신 미확인',
     'invalid_advice': '검토 응답 형식 또는 참조 확인 실패', 'incomplete': '검토 응답 불완전',
+    'partial_advice': '일부 질문 확인 완료 · 나머지 질문 복구 필요',
     'cancelled': '검토 취소됨', 'stale': '이전 자료 기준 검토',
     'unavailable': '검토 기록을 확인할 수 없음', 'received': '추가 질문 없음',
 }
@@ -102,17 +102,18 @@ def _project(resolved, paths):
             historical=not current_goal, semantic_approval=False, response_ref=None)
         findings, rejected = [], []
         parsed = False
-        if request.get('schema_version') in (2, 3) and response and response.get('finish_reason') == 'stop' and status not in ('invalid_advice', 'incomplete', 'cancelled'):
+        if request.get('schema_version') in (2, 3) and response and response.get('finish_reason') == 'stop' and status not in ('incomplete', 'cancelled'):
             try:
                 body = json.loads(next(m['content'] for m in request['messages'] if m.get('role') == 'user'))
-                findings = review._parse(response['raw_advice'], _presented(request), rid, rejected,
-                    review_refs=_presented_handles(request), executive_round=number or 0,
-                    previous_questions=body.get('executive_followup', {}).get('previous_questions', ()))
+                from .independent_review_repair import parse_receipt
+                findings = parse_receipt(request, response, rejected)
                 parsed = True
             except (ValueError, KeyError, TypeError, StopIteration):
                 status = 'invalid_advice'
         if status == 'received' and (not parsed or rejected and not findings):
             status = 'invalid_advice'
+        if number and findings and len(findings) < request.get('executive_repair_count', review.EXECUTIVE_QUESTIONS):
+            status = 'partial_advice'
         base['receipt_state'] = status if status in _STATUS else 'unavailable'
         if goal not in questions_by_goal:
             owned = dict(resolved, goal_id=goal)

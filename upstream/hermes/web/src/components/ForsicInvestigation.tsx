@@ -1,6 +1,6 @@
 import {useEffect, useLayoutEffect, useRef, useState} from 'react'
 import {ArrowLeft, ChevronRight, Clock3, FileText, Link2, X, Network} from 'lucide-react'
-import {timeContext, type InvestigationObservation, type InvestigationQuestion, type InvestigationSource, type InvestigationRef, type InvestigationSourcePage, type InvestigationSourceRequest, type InvestigationTime, type InvestigationView} from '@/lib/forsic-investigation'
+import {timeContext, type InvestigationObservation, type InvestigationSource, type InvestigationRef, type InvestigationSourcePage, type InvestigationSourceRequest, type InvestigationTime, type InvestigationView} from '@/lib/forsic-investigation'
 import {fetchJSON} from '@/lib/api'
 import {ForsicTimeline} from './ForsicTimeline'
 import {ForsicRelationMap, QuestionJudgment} from './ForsicRelationMap'
@@ -13,20 +13,11 @@ interface Props {
   error: string | null
   readSource: (request: InvestigationSourceRequest) => Promise<InvestigationSourcePage>
 }
-const ASSESSMENT: Record<string, string> = {supported: '지지됨', refuted: '반박됨', conflicting: '상충', undetermined: '판단 유보', not_recorded: '평가 미기록'}
 const TIME_ROLE: Record<string, string> = {event_occurrence: '사건 발생 시각', source_timestamp: '출처에 적힌 시각', record_timestamp: '기록 시각', file_metadata: '파일 필드 시각', collection_time: '수집 시각', unknown: '의미 미확인'}
-const WORK: Record<string, string> = {open: '열림', active: '조사 중', held: '보류', scoped_closed: '범위 종결', blocked_internal: '확인 필요', blocked_external: '외부 자료 필요', budget_deferred: '보류'}
-function questionSources(question: InvestigationQuestion, sources: InvestigationSource[]): InvestigationRef[] {
-  const refs = question.evidence_refs ?? question.evidence_ids.map(id => {
-    const matches = sources.filter(item => item.id === id)
-    return {kind: 'source', id, version: matches.length === 1 ? matches[0].version : ''}
-  })
-  return [...refs, ...question.evidence_ids.filter(id => !refs.some(ref => ref.id === id)).map(id => ({kind: 'source', id, version: ''}))]
-}
 const displayTime = (value: string) => value.replace('T', ' ')
 const readableSession = (id: string | undefined, data: MonitorView) => data.sessions?.find(session => session.id === id)?.label || (id ? '제목이 없는 대화' : '출처 대화 미기록')
 
-function SourcePreview({request: initial, source, readSource, onClose}: {source?: InvestigationSource; request: InvestigationSourceRequest; readSource: Props['readSource']; onClose: () => void}) {
+export function SourcePreview({request: initial, source, readSource, onClose}: {source?: InvestigationSource; request: InvestigationSourceRequest; readSource: Props['readSource']; onClose: () => void}) {
   const [request, setRequest] = useState(initial)
   const [page, setPage] = useState<InvestigationSourcePage | null>(null)
   const [error, setError] = useState(false)
@@ -92,7 +83,6 @@ function OriginLink({sessionId, data}: {sessionId?: string; data: MonitorView}) 
 
 export function ForsicInvestigation({data: originalData, loading, error, readSource}: Props) {
   const [sessionId, setSessionId] = useState('')
-  const [summaryKey, setSummaryKey] = useState('')
   const [view, setView] = useState<'time' | 'map'>('time')
   const [visibleKeys, setVisibleKeys] = useState<string[] | null>(null)
   const [originSession, setOriginSession] = useState<string | undefined>(undefined)
@@ -117,7 +107,6 @@ export function ForsicInvestigation({data: originalData, loading, error, readSou
     }
   }
   const data = monitor ? filterSession(monitor, sessionId) : null
-  const summary = data?.questions.find(question => recordKey(question) === summaryKey) || data?.questions[0]
   const timeline = data?.timeline.filter(row => !visibleKeys || visibleKeys.includes(recordKey(row)) || !timelineMark(row)) ?? []
 
   const [selection, setSelection] = useState<InvestigationSourceRequest | null>(null)
@@ -142,8 +131,7 @@ export function ForsicInvestigation({data: originalData, loading, error, readSou
       <div className="fi-session-filter"><label htmlFor="fi-session-scope">기록 범위</label><select id="fi-session-scope" aria-label="조사 세션 필터" value={sessionId} onChange={event => {setSessionId(event.target.value); setSelectedTime(null); setSelection(null); setVisibleKeys(null)}}><option value="">사건 전체 · 모든 세션</option>{(monitor.sessions ?? []).map((session,index) => <option key={session.id} value={session.id}>{session.label || `대화 ${index+1} · 제목 미기록`}</option>)}</select></div>
       <div className="fi-overview" aria-label="연결된 전체 기록 수" aria-live="polite" aria-atomic="true"><span><strong>{monitor.counts?.main_questions ?? monitor.counts?.questions ?? monitor.questions.length}</strong>핵심 질문</span><span><strong>{monitor.counts?.review_questions ?? monitor.review_questions?.length ?? 0}</strong>독립 검토 질문<small> · 사건 전체</small></span><span><strong>{monitor.counts?.observations ?? monitor.observations.length}</strong>관측</span><span><strong>{monitor.counts?.timeline ?? monitor.timeline.length}</strong>시간 기록</span></div>
       {data.partial && <p className="fi-notice">일부 기록을 표시하고 있어요.{data.omitted_counts && Object.entries(data.omitted_counts).filter(([, count]) => count > 0).map(([kind, count]) => ` ${{questions: '질문', sources: '출처', observations: '관측', timeline: '시간 기록', unavailable_references: '확인할 수 없는 근거 연결'}[kind] || kind} ${count}건 생략.`).join('')}</p>}
-      <nav className="fi-view-tabs" aria-label="조사 모니터 보기"><button type="button" aria-pressed={view === 'time'} onClick={() => setView('time')}><Clock3 size={14}/>시간 흐름</button><button type="button" aria-pressed={view === 'map'} onClick={() => setView('map')}><Network size={14}/>연결 지도</button></nav>
-      {view === 'time' && summary && <section className="fi-case-summary" aria-label="사건의 현재 답"><div className="fi-summary-heading"><h3 className="fi-readable-heading">현재 판단</h3><span>{WORK[summary.work_state] || summary.work_state} · {ASSESSMENT[summary.assessment] || summary.assessment}</span></div>{data.questions.length > 1 ? <select aria-label="현재 답의 기준 질문" value={recordKey(summary)} onChange={event => setSummaryKey(event.target.value)}>{data.questions.map(question => <option key={recordKey(question)} value={recordKey(question)}>{question.question}</option>)}</select> : <h4>{summary.question}</h4>}<QuestionJudgment question={summary} onSource={openSource}/><small className="fi-origin">기록 출처 · {readableSession(sessionOf(summary), monitor)}</small> <OriginLink sessionId={sessionOf(summary)} data={monitor}/></section>}
+      <nav className="fi-view-tabs" aria-label="조사 기록 보기"><button type="button" aria-pressed={view === 'time'} onClick={() => setView('time')}><Clock3 size={14}/>시간 흐름</button><button type="button" aria-pressed={view === 'map'} onClick={() => setView('map')}><Network size={14}/>연결 지도</button></nav>
       {view === 'time' && <details className="fi-optional-chart"><summary>시간축으로 비교하기 <span>확대·범위 선택</span></summary><ForsicTimeline rows={data.timeline} selectedKey={selectedTime ? recordKey(selectedTime) : undefined} onSelect={selectTime} onVisibleRows={setVisibleKeys}/></details>}
       {view === 'map' && <ForsicRelationMap data={data} onSource={openSource}/>}
       {selectedTime && view === 'time' && <section className="fi-selected-clue" aria-label="선택한 시간 단서"><header><strong>선택한 단서</strong><button type="button" aria-label="시간 단서 선택 해제" onClick={() => {setSelectedTime(null); setSelection(null)}}><X size={14}/></button></header><h4>{displayTitle(selectedTime, selectedTime.explanation)}</h4><p>{displaySummary(selectedTime, selectedTime.explanation)}</p>{selectedTime.display_origin === 'model_summary' && <small className="fi-summary-origin">모델이 정리한 표시용 요약</small>}<small>기록 출처 · {readableSession(sessionOf(selectedTime), monitor)}</small><OriginLink sessionId={sessionOf(selectedTime)} data={monitor}/>{data.observations.filter(item => selectedTime.observation_ref?.kind === 'observation' && item.id === selectedTime.observation_ref.id && item.version === selectedTime.observation_ref.version).map(observation => <blockquote key={recordKey(observation)}>{observation.literal}<small>{observation.interpretation_limit}</small></blockquote>)}{data.questions.filter(question => question.id === selectedTime.question_id).map(question => <div key={recordKey(question)}><h4>{question.question}</h4><QuestionJudgment question={question} onSource={openSource}/></div>)}</section>}
@@ -154,10 +142,6 @@ export function ForsicInvestigation({data: originalData, loading, error, readSou
         {monitorTimeGroups(timeline).map(group => <section className="fi-time-group" key={group.key} data-kind={group.kind} aria-label={group.label}><h4>{group.label}</h4>{group.kind === 'metadata' && <p className="fi-caption">ctime·mtime 등 파일 필드의 시각입니다. 같은 시계 기준 안에서 필드 시각을 비교할 수 있지만 사건 발생이나 실행을 입증하지 않습니다.</p>}{group.kind !== 'comparable' && group.kind !== 'metadata' && <p className="fi-caption">아래 항목의 배치 순서는 사건의 발생 순서를 뜻하지 않아요.</p>}
           {group.rows.map(row => <TimeDetail key={`${row.id}@${row.version}`} row={row} selected={selectedTime ? recordKey(selectedTime) === recordKey(row) : false} onSelect={selectTime} observation={data.observations.find(item => row.observation_ref?.kind === 'observation' && item.id === row.observation_ref.id && item.version === row.observation_ref.version)} onSource={openSource}/>)}
         </section>)}
-      </section>}
-      {<section className="fi-section" aria-label="저장된 질문과 답"><h3>핵심 질문과 현재 답</h3>
-        {!data.questions.length && <p className="fi-caption">아직 저장된 질문과 답이 없어요.</p>}
-        {data.questions.map(question => <details className="fi-question" key={`${question.id}@${question.version}`}><summary><span><small>{WORK[question.work_state] || question.work_state} · {ASSESSMENT[question.assessment] || question.assessment} · {readableSession(sessionOf(question), monitor)}</small><strong>{question.question}</strong></span><ChevronRight size={14} className="forsic-disclosure" aria-hidden="true"/></summary><div><QuestionJudgment question={question} onSource={openSource}/><div className="fi-source-links">{questionSources(question, data.sources).map(reference => {const id = reference.id; const source = reference.kind === 'source' ? data.sources.find(item => item.id === id && item.version === reference.version) : undefined; return source ? <button type="button" className="fi-reference" key={`${id}@${reference.version}`} title={`${source.id} · ${source.version}`} onClick={event => openSource({kind: 'source', id: source.id, version: source.version}, undefined, event.currentTarget)}><Link2 size={12} aria-hidden="true"/>{displayTitle(source, source.label || '보존된 출처')}</button> : <details className="fi-technical" key={`${id}@${reference.version}`}><summary>상세를 표시할 수 없는 근거</summary><code>{id} · {reference.version || '버전 미확인'}</code></details>})}</div><details className="fi-technical"><summary>판단 기록 식별 정보</summary><code className="fi-record-id">{question.id} · {question.version}</code></details></div></details>)}
       </section>}
       {<section className="fi-section" aria-label="출처에 연결된 관측"><h3><Link2 size={15} aria-hidden="true"/>연결된 관측</h3>
         {!data.observations.length && <p className="fi-caption">아직 원문 위치에 연결된 관측이 없어요.</p>}

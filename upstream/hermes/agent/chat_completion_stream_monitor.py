@@ -69,9 +69,19 @@ class StreamingWaitMonitor:
             wait_notice=wn.WaitNoticeState(),
         )
         _is_local_base = bool(self.agent.base_url) and is_local_endpoint(self.agent.base_url)
+        recovery_deadline_killed = False
         while not self._call_done.is_set():
             self._call_done.wait(timeout=0.3)
             _hb_now = time.time()
+            if self.agent._interrupt_requested:
+                self._abort_for_interrupt(_hb_now - self.last_chunk_time["t"])
+                return
+            from agent.turn_recovery_autorecover import recovery_deadline_expired
+            if not recovery_deadline_killed and recovery_deadline_expired(getattr(self, "recovery_deadline", None)):
+                # Unlike the idle timer this deadline cannot be renewed by pings,
+                # partial arguments or an internal transport retry.
+                recovery_deadline_killed = True
+                self._kill_stale_stream(_hb_now - self.last_chunk_time["t"])
             if _is_local_base and self._poll_local_load_notice(_hb_now):
                 continue
             # Reasoning callbacks do not clear the classic CLI spinner. The empty

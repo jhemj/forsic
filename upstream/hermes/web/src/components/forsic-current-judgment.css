@@ -1,0 +1,18 @@
+.fcj-panel {overflow-wrap: anywhere;}
+.fcj-card {border: 1px solid var(--forsic-border); border-radius: 12px; padding: 18px; background: var(--forsic-surface);}
+.fcj-card > header {border-bottom: 1px solid var(--forsic-border); margin-bottom: 18px;}
+.fcj-card h3 {margin: 7px 0 12px; font-size: var(--forsic-font-body, 16px); line-height: 1.7; font-weight: 650;}
+.fcj-eyebrow {font-size: var(--forsic-font-meta, 12px); color: var(--forsic-accent);}
+.fcj-section {margin-top: 22px;}
+.fcj-section h4 {font-size: var(--forsic-font-control, 14px); font-weight: 650; margin: 0 0 10px;}
+.fcj-section ul {padding-left: 21px; margin: 0; white-space: pre-wrap;}
+.fcj-section li + li {margin-top: 8px;}
+.fcj-history {margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--forsic-border); font-size: var(--forsic-font-secondary, 13px); color: var(--forsic-muted);}
+.fcj-history summary {cursor: pointer; color: var(--forsic-text);}
+.fcj-history p {white-space: pre-wrap;}
+.fcj-checked {margin-top: 16px;}
+.fcj-records {margin-top: 18px; border: 1px solid var(--forsic-border); border-radius: 12px; overflow: hidden;}
+.fcj-records > summary {cursor: pointer; padding: 16px 18px; font-size: var(--forsic-font-control, 14px); font-weight: 600;}
+.fcj-records > summary span {display: block; margin-top: 5px; color: var(--forsic-muted); font-size: var(--forsic-font-secondary, 13px); font-weight: 400;}
+.fcj-records > .forsic-investigation-panel {padding: 0 18px 18px;}
+@media (max-width: 600px) {.fcj-card {padding: 14px;} .fcj-history summary {padding: 8px 0;}}

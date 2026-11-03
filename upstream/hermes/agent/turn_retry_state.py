@@ -46,6 +46,8 @@ class TurnRetryState:
     auth_failover_attempted: bool = False
     # Post-exhaustion auto-recovery cycles spent on this API call (agent.auto_recovery_cycles caps it).
     auto_recovery_cycles_used: int = 0
+    # Monotonic deadline after the first transient failure; never reset by a retry.
+    recovery_deadline: float | None = None
 
     # Restart signals (read by the outer loop after the attempt)
     restart_with_compressed_messages: bool = False

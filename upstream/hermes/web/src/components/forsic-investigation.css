@@ -149,19 +149,14 @@
 .forsic-investigation-panel button:focus-visible,.forsic-investigation-panel select:focus-visible,.forsic-investigation-panel input:focus-visible,.fi-origin-link:focus-visible {outline:2px solid var(--forsic-focus); outline-offset:3px;}
 @media (max-width:600px) {.fi-case-header h3 {font-size:18px;} .fi-chart-toolbar {flex-wrap:wrap;} .fi-view-tabs button {padding:10px; font-size:var(--forsic-font-secondary, 13px);} .fi-timeline-workspace,.fi-map-workspace {padding:12px;} .fi-chart-actions button {width:36px;height:36px;} .fi-judgment > div {grid-template-columns:1fr;gap:0;}}
 @media (prefers-reduced-motion:reduce) {.fi-timeline-workspace,.fi-map-workspace,.fi-selected-clue {animation:none;}}
-.fi-case-summary {border:1px solid var(--forsic-border); border-radius:10px; padding:15px 17px; margin-top:18px; background:var(--forsic-surface);}
-.fi-summary-heading {display:flex; align-items:center; justify-content:space-between; gap:10px;}
-.fi-summary-heading > span:last-child {font-size:var(--forsic-font-meta, 12px); color:var(--forsic-muted);}
-.fi-case-summary h4 {margin:10px 0 0; font-size:var(--forsic-font-body, 15px); font-weight:600;}
-.fi-case-summary > select {width:100%; margin-top:10px; padding:8px; background:var(--forsic-inset); color:var(--forsic-text); border:1px solid var(--forsic-border); border-radius:6px; font:inherit; font-size:var(--forsic-font-control, 14px);}
 .fi-time-event.is-selected > summary .fi-time-heading > span {color:var(--forsic-accent);}
 .fi-time-event.is-selected .fi-time-marker {box-shadow:0 0 0 3px var(--forsic-accent-soft);}
 
 /* Preserve reading hierarchy inside the independently scrolling monitor. */
 .forsic-investigation-panel,.fi-judgment p,.fi-question > div > p,.fi-observation > div > p,.fi-observation blockquote,.fi-selected-clue blockquote {font-size:var(--forsic-font-body,15px);}
-.fi-section h3,.fi-source-preview > header strong,.fi-case-summary h4,.fi-selected-clue h4 {font-size:var(--forsic-font-heading,18px);}
+.fi-section h3,.fi-source-preview > header strong,.fi-selected-clue h4 {font-size:var(--forsic-font-heading,18px);}
 .fi-question summary strong,.fi-chart-toolbar strong {font-size:var(--forsic-font-body,15px);}
-.fi-case-header,.fi-summary-heading,.fi-clock-domain header,.fi-clock-domain footer {flex-wrap:wrap;}
+.fi-case-header,.fi-clock-domain header,.fi-clock-domain footer {flex-wrap:wrap;}
 /* SVG coordinates stay fixed; scroll the chart at a readable scale. */
 .fi-time-chart {min-width:948px;}
 .fi-relation-chart {min-width:984px;}
@@ -198,10 +193,7 @@
 
 /* Reading mode is limited to time/evidence views; Ren's review stays unchanged. */
 .fi-human-panel {font-size:15px;line-height:1.8;}
-.fi-human-panel .fi-case-summary {margin:0 0 20px;padding:20px;background:var(--forsic-surface);}
-.fi-human-panel .fi-summary-heading {align-items:flex-start;gap:12px;}
 .fi-human-panel .fi-readable-heading {margin:0;font-size:19px;font-weight:650;color:var(--forsic-text);}
-.fi-human-panel .fi-case-summary > h4 {font-size:17px;line-height:1.65;margin-top:14px;}
 .fi-human-panel .fi-case-header p,.fi-human-panel .fi-source-identity code {overflow-wrap:anywhere;}
 .fi-human-panel .fi-technical {margin:12px 0;color:var(--forsic-muted);font-size:13px;line-height:1.7;}
 .fi-human-panel .fi-technical > summary {cursor:pointer;min-height:32px;display:list-item;}
@@ -250,7 +242,7 @@
 .fi-chain-observation {margin-top:12px;border-top:1px solid var(--forsic-border);padding-top:12px;}
 .fi-chain-observation > summary {font-size:14px;line-height:1.8;cursor:pointer;}
 .fi-human-panel summary:focus-visible {outline:2px solid var(--forsic-focus);outline-offset:3px;}
-@media (max-width:600px) {.fi-human-panel .fi-case-summary {padding:16px;}.fi-human-panel .fi-summary-heading {flex-direction:column;}.fi-human-panel .fi-overview > span {padding-inline:10px;}.fi-human-panel .fi-question-picker {align-items:stretch;flex-direction:column;}}
+@media (max-width:600px) {.fi-human-panel .fi-overview > span {padding-inline:10px;}.fi-human-panel .fi-question-picker {align-items:stretch;flex-direction:column;}}
 
 .fi-reader-explanation {margin:16px 0;padding:16px;border:1px solid var(--forsic-border);border-radius:10px;background:var(--forsic-surface);}
 .fi-reader-explanation > h4 {font-size:15px;color:var(--forsic-text);}

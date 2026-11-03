@@ -32,23 +32,31 @@ def check_records(state, question):
     return records
 
 
-def project_tasks(state, questions, *, max_bytes=8000):
-    """Omit whole cards/fields with counts; never shorten a qualified answer."""
+def project_tasks(state, questions, *, max_bytes=8000, include_judgment=True):
+    """Omit whole cards/fields; UI check progress can use its separate canonical answer."""
     body = {'status':'ready', 'role':'analyst_judgment_not_source_evidence', 'tasks':[],
             'omitted_tasks':len(questions), 'details_call':{'tool':'forsic_reporting','arguments':{'action':'state'}}}
     def size():
         return len(json.dumps(body,ensure_ascii=False,separators=(',',':')).encode())
     for question in questions:
         card = navigation_view(state, question)
-        # A card either carries the whole qualified answer or is omitted with
-        # an exact lookup. Navigation placeholders must not become UI answers.
-        full = current_judgment(state, question)
-        card['answer_is_model_assessment'] = full['answer']
-        card['scope'] = full['scope']
-        card['judgments'] = [{**judgment,
-            'counterevidence_ref_count':len(judgment['counterevidence_refs']),
-            'source_ref_count':len(judgment['source_refs'])} for judgment in full['judgments']]
-        card['question'] = question['question']
+        if include_judgment:
+            # A context card carries the whole qualified answer or is omitted.
+            # Navigation placeholders must not become UI answers.
+            full = current_judgment(state, question)
+            card['answer_is_model_assessment'] = full['answer']
+            card['scope'] = full['scope']
+            card['judgments'] = [{**judgment,
+                'counterevidence_ref_count':len(judgment['counterevidence_refs']),
+                'source_ref_count':len(judgment['source_refs'])} for judgment in full['judgments']]
+            card['question'] = question['question']
+        else:
+            # The unified UI already carries the exact answer, evidence and
+            # next checks. Duplicating them can consume the progress budget
+            # and hide an otherwise small check card after a meaningful save.
+            card = {key: card[key] for key in (
+                'id', 'revision', 'definition_version', 'review_required',
+                'remaining_gap_count', 'remaining_gap_examples', 'details_call', 'omitted_details')}
         card['work_state'] = question['work_state']
         card['checks'] = []
         checks = check_records(state, question)

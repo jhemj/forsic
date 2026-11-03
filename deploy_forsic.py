@@ -31,7 +31,7 @@ ROOT_FILES = (
     'test_current_judgment_navigation.py',
     'test_efficiency_metrics.py',
     'test_evidence_delivery_boundary.py',
-    'test_executive_synthesis.py',
+    'test_executive_synthesis.py', 'test_executive_review_repair.py', 'test_execution_reconciliation.py',
     'test_export_triage_contract.py',
     'test_finalization_model_view.py',
     'test_integrated_report.py',
@@ -100,7 +100,7 @@ ROOT_FILES = (
               'test_collection_api.py', 'WORKBENCH_DATA.txt',
               'test_release_profiles.py', 'test_dashboard_skill_locale.py', 'RELEASE_PROFILES.txt', 'test_schema_presentation.py', 'test_image_search_entry.py', 'test_specialist_contracts.py', 'HARNESS_ACCEPTANCE.txt', 'HARNESS_ACCEPTANCE.json', 'test_projection_recovery.py', 'HARNESS_P3.txt', 'test_execution_contract.py', 'HARNESS_P2.txt', 'test_question_v2.py', 'test_question_recovery.py', 'HARNESS_P1.txt', 'test_acquisition_context.py', 'test_search_selection.py', 'test_context_result_refs.py', 'test_grounded_judgment.py', 'test_recovery_integration.py', 'AGENTS.md', '.hermes.md', 'run.py', 'telegram_mirror.py', 'telegram_mentions.py', 'telegram_reports.py',
               'test_onboarding.py', 'test_remote_evidence_access.py', 'test_remote_policy.py', 'test_executive_followup.py', 'test_investigation_view.py', 'test_investigation_display.py', 'test_investigation_enrichment.py', 'test_prompt_efficiency.py', 'test_turn_context_efficiency.py', 'test_context_read_efficiency.py', 'test_private_lan_dashboard.py',
-              'test_existing_question_gap_recovery.py', 'test_inventory_scope.py', 'test_note_projection_memory.py',
+              'test_existing_question_gap_recovery.py', 'test_inventory_scope.py', 'test_note_projection_memory.py', 'test_judgment_checkpoint.py',
               'test_question_bootstrap.py', 'test_image_reference.py', 'test_source_handles.py', 'test_question_reference_integration.py',
               'test_goal_advisory.py', 'test_independent_review.py', 'test_skill_consolidation.py', 'test_forensic_skill_loading.py',
               'verify_dashboard_skills.py', 'test_artifact_recipes.py', 'test_structured_query.py', 'test_login_records.py', 'test_delivery_fidelity.py',
@@ -138,6 +138,10 @@ REQUIRED_PUBLIC = ('README.md', 'docs/ARCHITECTURE.md', 'docs/TOOLS_AND_SKILLS.m
 CONFIG_FILES = ('SOUL.md', 'AGENTS.md', 'skin.yaml', 'forsic-theme.yaml', 'config.example.yaml', 'bundled-skills/README.txt')
 FIXTURES = ('notes.txt', 'cron.log', 'change.txt')
 UPSTREAM_ADDITIONS = (
+    'tests/agent/test_bounded_native_recovery.py',
+    'tests/hermes_cli/test_goal_resume_preserves_usage.py',
+    'web/src/components/ForsicCurrentJudgment.tsx',
+    'web/src/components/forsic-current-judgment.css',
     'tests/agent/test_compaction_notice_locale.py',
     'tests/agent/test_failed_turn_locale.py',
     'tests/agent/test_stream_transport_observability.py',
@@ -304,7 +308,8 @@ def initial_config(base_url, model, *, wizard=False):
                       'title': dict(local), 'compression': {**local, 'timeout': 1200},
                       'title_generation': {'enabled': False, 'model_upgrade_enabled': False}},
         'platform_toolsets': {name: ['forsic', 'clarify'] for name in ('cli', 'api', 'web', 'desktop', 'telegram')},
-        'agent': {'max_turns': 64, 'api_max_retries': 1, 'auto_recovery_cycles': 0,
+        'agent': {'max_turns': 64, 'api_max_retries': 1, 'auto_recovery_cycles': 2,
+                  'auto_recovery_budget_seconds': 600, 'auto_recovery_request_timeout_seconds': 180,
                   'coding_context': 'off', 'execution_guidance': False,
                   'run_budget_seconds': 86400, 'local_stream_stale_timeout': 1800},
         'goals': {'max_turns': 32},

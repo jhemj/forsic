@@ -481,6 +481,48 @@ class TestBridgeDispatch:
 
 class TestHandleFunctionCallIntegration:
 
+    @pytest.mark.parametrize("encoded_field", ["calls", "arguments"])
+    def test_malformed_encoded_call_recovers_with_typed_values_without_dispatch(self, encoded_field):
+        """A parse failure must teach a usable envelope, without repairing or executing it."""
+        import re
+        import model_tools
+        from jsonschema import validate
+        from tools.registry import registry
+        from tools.tool_search import bridge_tool_schemas
+
+        seen = []
+        name, toolset = "mcp_typed_recovery_save", "mcp-typed-recovery"
+        arguments = {"answer": '확인된 "관측"과 경로 \\work\\sample',
+                     "judgment": {"claims": [{"statement": "잠정 판단", "refs": ["source:1"]}]}}
+
+        def save(args, **kwargs):
+            seen.append(args)
+            return json.dumps({"saved": True})
+
+        registry.register(name=name, toolset=toolset, handler=save,
+                          schema=_td(name, "Save a structured judgment.",
+                                     {"answer": {"type": "string"}, "judgment": {"type": "object"}}))
+        broken = '{"private-evidence-not-for-error":"value", "nested": [{"x":1}]'
+        request = ({"calls": broken} if encoded_field == "calls" else
+                   {"calls": [{"name": name, "arguments": broken}]})
+        result = json.loads(model_tools.handle_function_call(
+            "tool_call", request, enabled_toolsets=[toolset]))
+        assert seen == [] and "error" in result
+        error = result["error"]
+        assert "private-evidence-not-for-error" not in error and len(error) < 900
+        example = re.search(r"```json\n(.*?)\n```", error, re.S)
+        assert example, "Rejected encoded input needs a machine-readable typed retry shape"
+        retry = json.loads(example.group(1))
+        assert isinstance(retry["calls"], list) and len(retry["calls"]) == 1
+        assert isinstance(retry["calls"][0]["arguments"], dict)
+        retry["calls"][0].update(name=name, arguments=arguments)
+        schema = next(t["function"]["parameters"] for t in bridge_tool_schemas(1)
+                      if t["function"]["name"] == "tool_call")
+        validate(retry, schema)
+        saved = json.loads(model_tools.handle_function_call(
+            "tool_call", retry, enabled_toolsets=[toolset]))
+        assert saved == {"saved": True} and seen == [arguments]
+
     def test_tool_search_emits_one_terminal_hook(self, monkeypatch):
         """Inline bridge results still complete the tool lifecycle."""
         import model_tools

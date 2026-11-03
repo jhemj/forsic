@@ -4,7 +4,7 @@ import {displayTitle, displaySummary, judgmentCard, exactQuestionRefs, recordKey
 
 interface Props {data: MonitorView; onSource: (source: InvestigationRef, observation?: InvestigationObservation) => void}
 const shorten = (value: string, max = 24) => value.length > max ? `${value.slice(0, max)}…` : value
-export function QuestionJudgment({question, onSource}: {question: InvestigationQuestion; onSource?: (ref: InvestigationRef) => void}) {
+export function QuestionJudgment({question, onSource, showReferences = true}: {question: InvestigationQuestion; onSource?: (ref: InvestigationRef) => void; showReferences?: boolean}) {
   const explanation = question.reader_explanation
   const readable = explanation && ['current', 'provisional'].includes(explanation.status)
   const {paragraphs, limits, objections, references, freshness} = judgmentCard(question)
@@ -22,7 +22,7 @@ export function QuestionJudgment({question, onSource}: {question: InvestigationQ
       </div>)}
     </section>}
     {explanation?.status === 'stale' && <p className="fi-reader-status" role="status">답·범위 또는 근거가 바뀌어 이전 설명의 갱신이 필요합니다. 위에는 현재 저장된 답을 표시합니다.</p>}
-    {references.length > 0 && <details className="fi-technical"><summary>현재 답에 연결된 근거 · {references.length}건</summary>{references.map(ref => <div key={`${ref.kind}:${ref.id}@${ref.version}`}>
+    {showReferences && references.length > 0 && <details className="fi-technical"><summary>현재 답에 연결된 근거 · {references.length}건</summary>{references.map(ref => <div key={`${ref.kind}:${ref.id}@${ref.version}`}>
       {onSource ? <button type="button" className="fi-reference" onClick={() => onSource(ref)}>이 답의 출처 보기</button> : null}<code>{ref.kind} · {ref.id} · {ref.version}</code>
     </div>)}</details>}
     <details className="fi-technical"><summary>현재 판단의 버전</summary><code>{question.id} · {question.version}</code></details>

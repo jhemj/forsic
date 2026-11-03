@@ -10,6 +10,12 @@ def section_id(procedure):
 
 
 def _json(value):
+    # The clock must be fresh, but does not belong before retained case content.
+    # Keep the reusable snapshot prefix identical when only admission time changes.
+    # Native api_content still freezes the complete envelope for this turn/replay.
+    if isinstance(value, dict) and 'runtime_clock' in value:
+        value = {**{key: item for key, item in value.items() if key != 'runtime_clock'},
+                 'runtime_clock': value['runtime_clock']}
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
 
 

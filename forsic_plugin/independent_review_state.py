@@ -113,9 +113,8 @@ def review_state(resolved,state=None):
                 if isinstance(raw,str) and response.get('finish_reason')=='stop':
                     try:
                         body=json.loads(next(m['content'] for m in request['messages'] if m.get('role')=='user'))
-                        validated=review._parse(raw,_presented(request),rid,rejected,review_refs=_presented_handles(request),
-                            executive_round=request.get('executive_round',0),
-                            previous_questions=body.get('executive_followup',{}).get('previous_questions',()))
+                        from .independent_review_repair import parse_receipt
+                        validated=parse_receipt(request,response,rejected)
                         parsed=True
                         result['rejected_findings'].extend(dict(item,review_id=rid) for item in rejected)
                     except (ValueError,KeyError,TypeError,StopIteration) as exc:
@@ -123,6 +122,7 @@ def review_state(resolved,state=None):
                             'role':'rejected_advice_not_evidence',
                             'recovery':'Use retained source evidence in the current question and record an explicit limitation; do not resubmit this review.'})
             recovered=(receipt_status=='invalid_advice' and parsed and not rejected
+                       and (not request.get('executive_round') or len(validated)==request.get('executive_repair_count',review.EXECUTIVE_QUESTIONS))
                        and isinstance(json.loads(response['raw_advice']),list))
             if recovered:
                 # Revalidate the immutable raw response against its original
@@ -143,7 +143,7 @@ def review_state(resolved,state=None):
                     and request.get('identity') == review._identity(resolved)
                     and current==request.get('material_fingerprint')
                     and snapshot['evaluation_fingerprint']==request.get('evaluation_fingerprint'))
-            if request.get('executive_round'):
+            if request.get('executive_round') and not request.get('executive_repair_of'):
                 number=request['executive_round']
                 answered=sum((rid,f['finding_id']) in answers for f in validated)
                 draft = body.get('analyst_state', {}).get('report_draft')
@@ -166,7 +166,7 @@ def review_state(resolved,state=None):
             result['findings'].extend(validated)
             availability_key=(rid,'availability-'+rid[:24])
             if (not live and not validated and receipt_status in ('delivery_unconfirmed','incomplete','invalid_advice')
-                    or recovered and availability_key in answers):
+                    or availability_key in answers):
                 result['findings'].append({'review_id':rid,'finding_id':'availability-'+rid[:24],
                     'kind':'availability','impact':'material','question':'독립 검토 결과의 이용 가능성과 현재 답의 한계를 확인하세요.',
                     'why':'검토 호출은 기록됐지만 검증 가능한 완전한 조언이 수신되지 않았습니다.',
@@ -186,6 +186,20 @@ def review_state(resolved,state=None):
         result['pending_finding_ids']=[f['finding_id'] for f in result['pending_findings']]
         result['requires_followup']=bool(result['pending_findings'] or result['inflight_review_ids'] or result['judgment_review_questions'])
         if executive:
+            # A repair adds only missing questions to its original logical round.
+            # Every item retains the receipt/finding identity used by dispositions.
+            for entry in executive:
+                round_ids={entry['review_id']} | {r['request_id'] for _,r in receipts
+                    if r.get('executive_repair_of')==entry['review_id']}
+                items=[f for f in result['findings'] if f.get('kind')=='executive_question'
+                       and f['review_id'] in round_ids]
+                entry['question_count']=len(items)
+                entry['answered']=sum((f['review_id'],f['finding_id']) in answers for f in items)
+                entry['repair_review_ids']=sorted(round_ids-{entry['review_id']})
+                entry['repair_attempts_used']=len(entry['repair_review_ids'])
+                entry['complete']=len(items)==review.EXECUTIVE_QUESTIONS and entry['answered']==review.EXECUTIVE_QUESTIONS
+                if len(items)==review.EXECUTIVE_QUESTIONS:entry['status']='received'
+                elif items:entry['status']='partial_advice'
             complete=len(executive)==review.EXECUTIVE_ROUNDS and all(r['complete'] for r in executive)
             blocked=next((r for r in executive if r['status'] not in ('received','in_progress')),None)
             result['executive_followup']={'round_limit':review.EXECUTIVE_ROUNDS,'questions_per_round':review.EXECUTIVE_QUESTIONS,
@@ -215,6 +229,9 @@ def review_state(resolved,state=None):
                 result['requires_followup'] = True
             if complete and resolved.get('_report_question_ids') is not None and not result['final_review_current']:
                 result['requires_followup'] = True
+            from .independent_review_repair import plan
+            repair=plan(resolved,receipts,executive)
+            if repair:result['review_repair']=repair
         if result['judgment_review_questions']:result['final_review_current']=False
         # A native final boundary may re-enter only after durable review,
         # current question or report changes. Unadopted reads and assistant
@@ -229,6 +246,7 @@ def review_state(resolved,state=None):
         action = ('respond' if result['pending_findings'] else
                   'revise_judgment' if result['judgment_review_questions'] else
                   'wait' if result['inflight_review_ids'] else
+                  'repair_review' if result.get('review_repair') else
                   'next_review_round' if executive and not result['executive_followup']['complete']
                     and all(r['complete'] for r in executive) else
                   'final_report_review' if executive and result['executive_followup']['complete']
@@ -247,7 +265,7 @@ def review_state(resolved,state=None):
                 action = 'create_continuation_question'
                 result['recovery'] = recovery
         result.update(followup_action=action, followup_actionable=action in
-                      ('respond', 'revise_judgment', 'next_review_round', 'final_report_review', 'wait', 'compose_report', 'create_continuation_question'))
+                      ('respond', 'revise_judgment', 'repair_review', 'next_review_round', 'final_report_review', 'wait', 'compose_report', 'create_continuation_question'))
         return result
     except (OSError,ValueError,KeyError,TypeError,StopIteration,sqlite3.Error) as exc:
         # Unknown read state is not evidence of no pending findings.

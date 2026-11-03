@@ -17,6 +17,28 @@ import test_investigation_context as context_fixture
 
 
 class TurnContextEfficiencyTests(unittest.TestCase):
+    def test_clock_only_change_preserves_complete_snapshot_prefix(self):
+        from forsic_plugin.turn_context import assemble, section_id
+        snapshot = {'provider': 'forsic', 'status': 'ready', 'revision': 'same',
+            'context': json.dumps({'answer_updates': {'answer': 'retained judgment ' * 100},
+                                   'runtime_clock': {'obsolete': True}})}
+        original = deepcopy(snapshot)
+        arguments = dict(section_ids=(section_id('stable procedure'),), projection=snapshot,
+                         max_chars=10000, advice='retained review')
+        with patch('forsic_plugin.turn_context.current_context',
+                return_value={'current_datetime': '2032-01-01T00:00:01+00:00'}):
+            first = assemble('stable procedure', **arguments)
+        with patch('forsic_plugin.turn_context.current_context',
+                return_value={'current_datetime': '2032-01-02T12:34:56+00:00'}):
+            second = assemble('stable procedure', **arguments)
+        first_body, second_body = json.loads(first), json.loads(second)
+        self.assertNotEqual(first_body.pop('runtime_clock'), second_body.pop('runtime_clock'))
+        self.assertEqual(first_body, second_body)
+        self.assertEqual(first.rsplit(',"runtime_clock":', 1)[0],
+                         second.rsplit(',"runtime_clock":', 1)[0])
+        self.assertGreater(first.index(',"runtime_clock":'), 1700)
+        self.assertEqual(snapshot, original)
+
     def test_memory_correction_reaches_native_turn_without_rewriting_frozen_prompt(self):
         from forsic_plugin.tenants import TenantRegistry, bind_scope
         from forsic_plugin.tenant_memory import MemoryService, native_policy, trusted_ui_source

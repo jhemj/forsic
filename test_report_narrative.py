@@ -331,7 +331,7 @@ class ReportNarrativeTests(unittest.TestCase):
             invoke(self.case, {'action': 'compose'})
         self.assertEqual(target.read_bytes(), b'x' * 32)
 
-    def test_dependency_matching_reuses_only_unchanged_material_and_invalidates_review(self):
+    def test_dependency_matching_reuses_direct_claim_and_invalidates_changed_synthesis(self):
         self.write('major_findings', keys=['Q1'])
         self.write('scope', keys=['C1'])
         state = current(self.case)
@@ -339,10 +339,68 @@ class ReportNarrativeTests(unittest.TestCase):
         progress = status(state)
         self.assertIn('major_findings', progress['stale_fields'])
         self.assertNotIn('major_findings', progress['fields'])
-        self.assertIn('scope', progress['stale_fields'])
-        self.assertNotIn('scope', progress['fields'])
+        self.assertNotIn('scope', progress['stale_fields'])
+        self.assertIn('scope', progress['fields'])
         self.assertFalse(progress['ready'])
         self.assertEqual(progress['review_status'], 'required')
+
+    def test_workflow_revision_reuses_prose_review_but_pending_gate_still_blocks(self):
+        self.finish()
+        state = current(self.case)
+        original = status(state)
+        question = state['questions'][0]
+        question.update(revision=question['revision']+1, version='workflow-revision',
+                        work_state='held', deferred_reason='Report renderer recovery in progress')
+        question['review_responses'] = []
+        progress = status(state)
+        self.assertNotEqual(original['basis_id'], progress['basis_id'])
+        self.assertEqual(original['semantic_basis_id'], progress['semantic_basis_id'])
+        self.assertEqual(progress['fields'], original['fields'])
+        self.assertEqual(progress['review_status'], 'complete')
+        self.assertTrue(progress['ready'])
+        question['judgment_review_required'] = True
+        pending = status(state)
+        self.assertEqual(pending['fields'], progress['fields'])
+        self.assertEqual(pending['semantic_basis_id'], progress['semantic_basis_id'])
+        self.assertEqual(pending['review_status'], 'complete')
+        self.assertFalse(pending['ready'])
+        self.assertTrue(pending['judgment_review_questions'])
+
+    def test_direct_claim_edit_invalidates_its_groups_and_final_review(self):
+        self.write('scope', keys=['C1'])
+        state = current(self.case)
+        from forsic_plugin.report_driven.current_judgment import current_claims
+        current_claims(state)[0]['statement'] += ' Material counterevidence changes this claim.'
+        progress = status(state)
+        self.assertIn('scope', progress['stale_fields'])
+        self.assertFalse(progress['ready'])
+
+    def test_current_declaration_change_requires_review_even_when_prose_is_unchanged(self):
+        self.finish()
+        state = current(self.case)
+        original = status(state)
+        state['questions'][0]['report_slots'] = [{'slot_id': 'synthetic-slot', 'text': 'Changed analyst declaration'}]
+        changed = status(state)
+        self.assertNotEqual(original['semantic_basis_id'], changed['semantic_basis_id'])
+        self.assertEqual(original['draft_hash'], changed['draft_hash'])
+        self.assertEqual(changed['review_status'], 'required')
+        self.assertFalse(changed['ready'])
+
+    def test_old_gate_digest_compatibility_does_not_revive_changed_answer(self):
+        self.write('major_findings', keys=['Q1'])
+        state = current(self.case)
+        from forsic_plugin.report_driven.narrative import material, basis, _hash, _dependency_hash
+        selected = basis(state, [state['questions'][0]['id']])[1]
+        question_item = next(item for item in material(selected) if item['key'] == 'Q1')
+        old_judgment = {**question_item['current_judgment'], 'review_required': True}
+        saved = state['report_narratives'][-1]
+        field = saved['fields']['major_findings']
+        field['dependencies']['Q1'] = _dependency_hash({**question_item, 'current_judgment': old_judgment})
+        field['judgment_dependencies'][question_item['id']] = _hash(old_judgment)
+        saved['basis_id'] = 'older-workflow-basis'
+        self.assertIn('major_findings', status(state)['fields'])
+        state['questions'][0]['answer'] += ' Different event interpretation.'
+        self.assertIn('major_findings', status(state)['stale_fields'])
 
     def test_material_gaps_and_questions_cannot_silently_disappear(self):
         self.finish()

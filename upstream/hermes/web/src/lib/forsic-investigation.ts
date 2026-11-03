@@ -13,6 +13,7 @@ export interface ReaderExplanation {
 }
 export interface InvestigationQuestion {
   id: string; version: string; question: string; answer: string; assessment: string; work_state: string; evidence_ids: string[]; evidence_refs?: InvestigationRef[]
+  next_checks?: string[]; updated_at?: number; correction_reason?: string; answer_status?: 'not_saved' | 'recorded' | 'needs_recheck'
   session_id?: string; counterarguments?: string[]; limitations?: string[]; gaps?: string[]; reader_explanation?: ReaderExplanation
 }
 interface TemporalCandidate {earliest?: string | null; latest?: string | null; basis: string}
@@ -33,6 +34,7 @@ export interface InvestigationReviewQuestion {id: string; question: string; disp
 export interface InvestigationView {
   case_id: string; session_id?: string; profile?: string; questions: InvestigationQuestion[]; sources: InvestigationSource[]; observations: InvestigationObservation[]; timeline: InvestigationTime[]
   review_questions?: InvestigationReviewQuestion[]; review_question_coverage?: {current_goal_questions?: number; historical_goal_questions?: number}; timeline_empty_reason?: string
+  judgment_checkpoint?: {status: 'pending' | 'current' | 'unavailable'; pending_briefings: number | null; latest_briefing_at: number | null; latest_saved_at: number | null}
   task_focus?: InvestigationTaskFocus
   report_workspace?: InvestigationReportWorkspace
   report_authoring?: InvestigationReportAuthoring
@@ -82,10 +84,8 @@ export interface InvestigationCheck {
   result_ref: InvestigationRef | null; assessment_ref: InvestigationRef | null; outcome: string | null
 }
 export interface InvestigationTask {
-  id: string; revision: number; definition_version: string; question: string; work_state: string
-  assessment: string; review_required: boolean; answer_is_model_assessment: string; scope: string
-  judgments: {inference_strength: string; assumptions: string[]; limitations: string[]; counterevidence_refs: InvestigationRef[]; counterevidence_ref_count: number}[]
-  alternatives: string[]; next_checks: string[]; remaining_gap_count: number
+  id: string; revision: number; definition_version: string; work_state: string
+  review_required: boolean; remaining_gap_count: number
   remaining_gap_examples: {id: string; reason: string; disposition: string}[]
   checks: InvestigationCheck[]; check_counts: {completed: number; pending_or_recheck: number}; omitted_checks: number; omitted_details: number
   details_call: {tool: string; arguments: Record<string, string>}

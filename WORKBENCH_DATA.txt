@@ -1,6 +1,18 @@
 Read-only review chat and case evidence collection
 ================================================
 
+The current-judgment tab reads the existing question-owned answer, exact evidence
+versions, next checks and correction metadata from the investigation projection.
+It adds no separate finding store. Material discoveries are committed through
+forsic_question before a public explanation; corrections retain note history and
+unchanged adopted claims. The same saved answer is restored after compression.
+
+Public tool-round explanations newer than the last saved answer produce a bounded
+reconciliation hint in evidence returns, compressed context and the UI. The hint
+is navigation, not evidence or proof of an unsaved discovery: progress-only and
+unchanged commentary require no duplicate save. Missing data is unavailable, not
+up to date. Viewing the tab never runs evidence tools or calls a model.
+
 The native conversation remains the execution/history authority. Review cards
 are display projections of immutable request/response receipts. "렌" identifies
 validated public questions from the existing independent reviewer; the main
@@ -59,3 +71,10 @@ input. Foreign namespaces do not inherit a similarly named Forsic translation.
 These are display and packaging features. Successful contract tests are distinct
 from actual investigative completeness, accurate interpretation and review
 followthrough by the running model.
+
+The Current judgment panel combines the saved question answer, exact evidence,
+next checks and that question’s retained check progress. The former separate
+Investigation monitor tab is removed. Timeline, relation map, session filters
+and retained observation readers remain under an initially collapsed record
+section in the same panel. Check counts describe registered checks, never an
+invented overall completion percentage; ordinary tool execution stays in chat.

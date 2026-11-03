@@ -106,16 +106,18 @@ class Case:
 
     def _pending_shell(self, db, conversation_id):
         """All composed commands can mutate this workspace, even with new arguments."""
-        from .execution_contract import ExecutionFailure, lookup_call
+        from .execution_contract import ExecutionFailure, lookup_call, execution_reconciliation
         starts=db.execute("SELECT id,data FROM events WHERE kind='tool_start' AND session=? "
                           "AND json_extract(data,'$.tool')='forsic_shell' ORDER BY rowid DESC", (conversation_id,))
         for row in starts:
             if json.loads(row['data']).get('execution_rejected'):continue
-            returned=db.execute("SELECT data FROM events WHERE kind='tool_result' "
+            returned=db.execute("SELECT id,data FROM events WHERE kind='tool_result' "
                                 "AND json_extract(data,'$.started_id')=? ORDER BY rowid DESC LIMIT 1", (row['id'],)).fetchone()
             execution=json.loads(returned['data']).get('execution',{}) if returned else {}
             if (execution.get('state')=='not_started' or execution.get('state') in ('returned','failed','cancelled')
                     and execution.get('termination_confirmed') is True):
+                continue
+            if returned and execution_reconciliation(db,row['id'],returned['id'],conversation_id):
                 continue
             raise ExecutionFailure('This conversation has unfinished or uncertain shell workspace work. Inspect its exact execution before another command.',
                 error_code='execution_completion_unknown',pending_started_id=row['id'],execution_call=lookup_call(row['id']))
