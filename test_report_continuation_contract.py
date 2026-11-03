@@ -265,7 +265,26 @@ class ReportContinuationContractTests(unittest.TestCase):
         self.assertEqual(len(after_answers['dispositions']), 20)
         self.assertEqual(after_answers['pending_findings'], [])
         self.assertFalse(after_answers['final_review_current'])
-        self.call(report_question_ids=selected)
+        # This final review is scoped to the corrected report's selected source.
+        # The generic inventory fake asks about an unrelated old source that is
+        # intentionally absent from this packet; it is not a valid reviewer here.
+        def corrected_report_response(**kwargs):
+            from types import SimpleNamespace
+            self.assertTrue(self.request_paths())
+            self.calls.append(deepcopy(kwargs))
+            body = json.loads(kwargs['messages'][1]['content'])
+            retained = next(s for s in body['sources'] if s['source_id'] == source)
+            field = next(f for f in retained['fields'] if f['pointer'] == '/lines/0/text')
+            self.assertEqual(field['value'], data['lines'][0]['text'])
+            text = json.dumps({'findings': [{'review_ref': field['review_ref'],
+                'question': '선택 범위 밖 실행 기록도 검토했는가?',
+                'why': '제시된 원문은 설정 존재와 선택 범위의 실행 미관측만 기록함',
+                'next_check': '범위 밖 실행 기록의 확보 여부와 실제 검토 범위 확인'}]}, ensure_ascii=False)
+            return iter([SimpleNamespace(choices=[SimpleNamespace(index=0,
+                delta=SimpleNamespace(content=text), finish_reason='stop')], usage=None)])
+        self.fake.side_effect = corrected_report_response
+        dispatched = self.call(report_question_ids=selected)
+        self.assertEqual(dispatched['status'], 'received', dispatched)
         self.assertEqual(len(self.calls), 5)
         pending = review.review_state(self.resolved())
         self.assertEqual(len(pending['pending_findings']), 1)
@@ -310,7 +329,8 @@ class ReportContinuationContractTests(unittest.TestCase):
             'edit_ref': packet['save_contract']['edit_ref'], 'draft': draft, **self.args()})
         self.assertFalse(review.review_state(self.resolved())['final_review_current'])
         self.fake.side_effect = lambda **kw: advice.IndependentReviewTests.empty_response(self, **kw)
-        self.call(report_question_ids=selected)
+        dispatched = self.call(report_question_ids=selected)
+        self.assertEqual(dispatched['status'], 'received', dispatched)
         self.assertEqual(len(self.calls), 6)
         current = review.review_state(self.resolved())
         self.assertEqual(len(current['executive_followup']['rounds']), 3)
@@ -319,6 +339,92 @@ class ReportContinuationContractTests(unittest.TestCase):
         questions = {q['id']: q for q in host.current(self.case)['questions']}
         self.assertEqual([questions[q['id']] for q in old_questions], old_questions)
         self.assertEqual({p: p.read_bytes() for p in old_receipts}, old_receipts)
+
+
+class ReportGroundingDependencyTests(unittest.TestCase):
+    """Final review and authoring must share the same semantic staleness boundary."""
+    from test_report_narrative import ReportNarrativeTests as _fixture
+    setUp = _fixture.setUp
+    tearDown = _fixture.tearDown
+    draft = _fixture.draft
+    write = _fixture.write
+
+    def saved(self):
+        packet = host.invoke(self.case, {'action': 'compose', 'section': 'scope'})
+        from forsic_plugin.report_driven.narrative import basis, material
+        selected = basis(host.current(self.case), packet['question_ids'])[1]
+        self.write('scope', keys=[item['key'] for item in material(selected)
+            if item['kind'] in ('question', 'claim', 'gap', 'source', 'observation')])
+        state = host.current(self.case)
+        draft = deepcopy(state['report_narratives'][-1])
+        lineage = list({self.case.event(row['evidence_id'])['session'] for row in self.reads})
+        return state, draft, {'case': self.case, 'session_lineage': lineage}
+
+    def grounding(self, state, draft, resolved):
+        from forsic_plugin.independent_review_state import report_grounding
+        with patch.object(host, 'current', return_value=state):
+            return report_grounding(resolved, draft)
+
+    def test_response_only_revision_reuses_current_fields_and_exact_retained_spans(self):
+        from forsic_plugin.report_driven.narrative import basis
+        state, draft, resolved = self.saved()
+        original = self.grounding(state, draft, resolved)
+        self.assertTrue(original[1])
+        self.assertEqual(original[0]['unmet_expectations'], [])
+        before = self.case.db.read_bytes()
+        question = state['questions'][0]
+        question['revision'] += 1
+        question['version'] = 'response-only-note-version'
+        question['review_responses'] = [{'review_id': 'synthetic-review', 'reason': 'Scope retained'}]
+        self.assertNotEqual(basis(state, draft['question_ids'])[0], draft['basis_id'])
+        self.assertEqual(self.grounding(state, draft, resolved), original)
+        self.assertEqual(self.case.db.read_bytes(), before)
+
+    def test_material_changes_still_require_current_authoring(self):
+        state, draft, resolved = self.saved()
+        for change in ('answer', 'claim_limit', 'gap', 'source_version', 'observation',
+                       'selection', 'template', 'unbound_legacy_fields'):
+            changed, candidate = deepcopy(state), deepcopy(draft)
+            if change == 'answer':
+                changed['questions'][0]['answer'] = 'Materially revised answer'
+            elif change == 'claim_limit':
+                claim = changed['questions'][0]['claim_refs'][0]['id']
+                host.find(changed, 'claims', claim)['limitations'] = ['New material limitation']
+            elif change == 'gap':
+                changed['gaps'][0]['disposition'] = 'resolved'
+            elif change == 'source_version':
+                changed['sources'][0]['version'] = 'different-retained-source'
+            elif change == 'observation':
+                changed['observations'][0]['version'] = 'different-observation'
+                changed['observations'][0]['statement'] = 'Changed observation with a new canonical version'
+            elif change == 'selection':
+                candidate['question_ids'] = ['Q-foreign-owner']
+            elif change == 'template':
+                candidate['template_version'] = 'old-template'
+            else:
+                changed['questions'][0]['revision'] += 1
+                candidate['fields']['scope'].pop('judgment_dependencies')
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.grounding(changed, candidate, resolved)
+
+    def test_dependency_reuse_never_waives_exact_quote_or_conversation_checks(self):
+        state, draft, resolved = self.saved()
+        original, fields = self.grounding(state, draft, resolved)
+        self.assertTrue(fields)
+        selected = fields[0]['observation_id']
+        changed = deepcopy(state)
+        host.find(changed, 'observations', selected)['literal'] = 'A fabricated retained quotation'
+        report, remaining = self.grounding(changed, draft, resolved)
+        self.assertTrue(report['unmet_expectations'])
+        self.assertNotIn(selected, [field['observation_id'] for field in remaining])
+        changed = deepcopy(state)
+        host.find(changed, 'observations', selected)['version'] = 'new-canonical-version'
+        report, remaining = self.grounding(changed, draft, resolved)
+        self.assertTrue(report['unmet_expectations'])
+        self.assertNotIn(selected, [field['observation_id'] for field in remaining])
+        report, remaining = self.grounding(state, draft, {**resolved, 'session_lineage': ['foreign-session']})
+        self.assertTrue(report['unmet_expectations'])
+        self.assertEqual(remaining, [])
 
 
 if __name__ == '__main__':

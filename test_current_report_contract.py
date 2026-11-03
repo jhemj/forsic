@@ -199,9 +199,16 @@ class AuthoringDependencyContractTests(unittest.TestCase):
         draft = {'entries': [{'node_id': 'key_evidence.selected', 'cells': ['Record A', 'Record B', 'Link unresolved'],
             'basis_keys': ['Q1', a['key'], b['key']],
             'cell_basis_keys': [[a['key']], [b['key']], []], 'status': 'saved'}]}
+        before = self.case.db.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'Each saved value requires its own selected support'):
+            self.write('key_evidence', draft=draft)
+        self.assertEqual(before, self.case.db.read_bytes())
+        gap = next(item for item in items if item['kind'] == 'gap')
+        draft['entries'][0]['basis_keys'].append(gap['key'])
+        draft['entries'][0]['cell_basis_keys'][2] = [gap['key']]
         self.write('key_evidence', draft=draft)
         entry = status(current(self.case))['fields']['key_evidence']['entries'][0]
-        self.assertEqual(entry['cell_citation_refs'], [a['citation_refs'], b['citation_refs'], []])
+        self.assertEqual(entry['cell_citation_refs'], [a['citation_refs'], b['citation_refs'], gap['citation_refs']])
         for group in authored.WRITING_ORDER:
             if group != 'key_evidence':
                 self.write(group)
@@ -209,7 +216,7 @@ class AuthoringDependencyContractTests(unittest.TestCase):
         from forsic_plugin.report_driven.narrative import project_body
         pages = project_body(current(self.case))
         table = next(block for page in pages for block in page['blocks'] if block.get('region') == 'key_evidence')
-        self.assertEqual(table['cell_citation_refs'][0], [[], a['citation_refs'], b['citation_refs'], []])
+        self.assertEqual(table['cell_citation_refs'][0], [[], a['citation_refs'], b['citation_refs'], gap['citation_refs']])
         self.assertTrue(packet['save_contract'])
 
     def test_cell_selection_rejects_foreign_support_or_wrong_cell_count_atomically(self):

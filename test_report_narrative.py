@@ -5,17 +5,19 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from uuid import uuid4
 
 from test_report_driven import fixture, worked
 from forsic_plugin.notes import note
 from forsic_plugin.evidence import Case
 from forsic_plugin.report_driven.host import current, invoke, checked
 from forsic_plugin.report_driven.narrative import prepare, status, project_body
-from forsic_plugin.report_driven.template_contract import GROUPS, WRITING_ORDER, REVIEW_CHECKS
+from forsic_plugin.report_driven.template_contract import GROUPS, WRITING_ORDER, REVIEW_CHECKS, OPTIONAL_GROUPS
+from forsic_plugin.report_driven.authoring_policy import RESOLUTION_NODES
 from forsic_plugin.report_driven.views import compile_views, bundles
 
 CONTENT = {
-    'report_identity': [['미확인: 호스트 기록 미제공', '미확인: 주소 기록 미제공', '미확인: 이미지 채증 기록 미제공']],
+    'report_identity': [['미확인', '미확인', '미확인']],
     'overall_judgment': [['요청·생성 기록은 있으나 같은 작업인지 미확인입니다. 공통 식별이 없고 승인·실행 성공은 조사 범위 밖입니다.']],
     'major_findings': [
         ['시점 미확인', '최초 시각 미확인\n- 한계: 절대 시각을 확인할 공통 기준 미제공'],
@@ -26,11 +28,48 @@ CONTENT = {
     'event_overview': [['요청 기록만으로 유입 경로 판단 불가'], ['프로세스 생성은 확인되나 요청과 연결 미확인'], ['정보 접촉·전송은 선택 범위 밖']],
     'information_impact': [['보유 내용 미검토', '보유 여부 미확인'], ['외부 노출 경로 미검토', '노출 여부 미확인'], ['실제 전송 자료 미검토', '반출 여부 미확인']],
     'key_evidence': [['요청과 생성 기록의 이름 유사', '요청 기록과 생성 기록 각각 존재', '공통 작업 여부·승인·최종 실행 성공 미입증']],
+    'key_indicators': [['선정된 IOC 없음', '합성 기록은 요청과 생성의 연결 조사용으로 악성 지표 미제공', '차단 지표로 사용하지 않음']],
+    'response_actions': [['후속 확인', '공통 작업 식별자를 포함한 원문 확보', '두 기록이 같은 작업인지 대조 가능']],
     'synthesis': [['같은 이름의 관련 활동일 수 있으나 공통 식별이 없어 연결 유보'], ['서로 다른 작업일 수 있으며 공통 식별 추가 확보 때 재검토']],
     'timeline': [['시각 미확정', '요청 및 프로세스 생성 기록', '기록 순서를 인과 또는 최초 침해 시각으로 승격하지 않음']],
+    'timeline_summary': [['요청 기록과 프로세스 생성 기록에서 같은 이름의 활동 관찰. 공통 식별자 부재로 동일 작업의 전개인지는 판단 유보']],
+    'executive_context': [['확보 자료', '합성 요청·프로세스 생성 기록 두 건 확보. 원본 시스템 상태는 포함하지 않는 연결 조사 자료']],
     'undated_events': [['두 기록의 절대 시각과 사건 간 시간차는 이 자료에서 미확정']],
     'scope': [['현재 판단은 선택한 요청·프로세스 기록의 연결에 한정되며 승인 여부·최종 성공·전체 시스템 상태는 포함하지 않음']],
 }
+
+
+def answerability_checks():
+    """Explicit scope dispositions for synthetic fixtures without real systems."""
+    return [{'node_id': node, 'outcome': 'limited', 'basis_keys': ['Q1'],
+        'checked': '제시된 합성 요청·생성·설정 기록의 필드와 현재 판단 대조',
+        'reason': '선택한 기록에 호스트·채증·절대 시각·개인정보 필드가 없어 해당 명제에 대한 도출 불가',
+        'constraint': '합성 사건에 실제 시스템·이미지·개인정보 자료가 제공되지 않음',
+        'next_check': '해당 필드를 담은 합성 원문이 추가되면 그 범위에 한해 재검토'}
+        for node in RESOLUTION_NODES]
+
+
+def exact_read(case, call):
+    """Follow the bounded read contract instead of assuming inline bodies."""
+    from forsic_plugin.report_driven.model_pages import MAX_BYTES, size
+    result = invoke(case, call['arguments'])
+    assert size(result) <= MAX_BYTES
+    if 'value' in result:
+        return result['value']
+    if 'text' in result:
+        chunks = [result['text']]
+        while result['next_call']:
+            result = invoke(case, result['next_call']['arguments'])
+            assert size(result) <= MAX_BYTES
+            chunks.append(result['text'])
+        return ''.join(chunks)
+    items = list(result['items'])
+    while result['next_call']:
+        result = invoke(case, result['next_call']['arguments'])
+        assert size(result) <= MAX_BYTES
+        items.extend(result['items'])
+    values = [item['value'] if 'value' in item else exact_read(case, item['read_call']) for item in items]
+    return dict(zip([item['key'] for item in items], values)) if items and 'key' in items[0] else values
 
 
 class ReportNarrativeTests(unittest.TestCase):
@@ -52,15 +91,17 @@ class ReportNarrativeTests(unittest.TestCase):
         if keys is None:
             keys = [row['key'] for row in packet['items'] if row['kind'] in ('question', 'claim', 'gap')]
         return {'entries': [dict(node_id=node, cells=deepcopy(CONTENT[group][index]), basis_keys=keys,
-                    status='unavailable' if unavailable else 'saved',
+                    status='unavailable' if unavailable or group == 'key_indicators' else 'saved',
+                    **({'cell_details': ['호스트 기록 미제공', '주소 기록 미제공', '이미지 채증 기록 미제공']}
+                       if group == 'report_identity' else {}),
                     **({'unavailable_reason': '선택된 두 기록의 범위만 검토했으며 해당 사실을 확인할 자료가 없습니다.'}
-                       if unavailable else {})) for index, node in enumerate(nodes)]}
+                       if unavailable or group == 'key_indicators' else {})) for index, node in enumerate(nodes)]}
 
     def write(self, group, *, unavailable=False, keys=None, **changes):
         packet = invoke(self.case, {'action': 'compose', 'section': group})
         request = dict(action='compose', section=group, question_ids=packet['question_ids'],
                        edit_ref=packet['save_contract']['edit_ref'],
-                       operation_id=group + '-' + str(packet['revision']),
+                       operation_id=group + '-' + uuid4().hex,
                        draft=self.draft(group, packet, unavailable=unavailable, keys=keys))
         request.update(changes)
         return invoke(self.case, request), request
@@ -77,10 +118,11 @@ class ReportNarrativeTests(unittest.TestCase):
                 'source_support': 'Q1의 요청·생성 관측은 각각 존재하지만 같은 작업임을 입증하지 않습니다.',
                 'limits': '공통 식별·절대 시각·승인·최종 실행 성공은 미확인입니다.',
                 'assessment': '결론과 한계가 같은 범위로 표현되어 유지합니다.'}],
+            'answerability_checks': answerability_checks(),
             'findings': [{'finding_id': 'scope-1', 'node_ids': [nodes[0]], 'disposition': 'unconfirmed',
                          'reason': '실제 사건 연결은 미확인으로 본문에 남겼습니다.', 'blocking': blocking}]}
         request = {'action': 'compose', 'section': 'review', 'question_ids': packet['question_ids'],
-                   'operation_id': 'review-' + str(packet['revision']),
+                   'operation_id': 'review-' + uuid4().hex,
                    'edit_ref': packet['save_contract']['edit_ref'], 'review': review}
         return invoke(self.case, request), request
 
@@ -133,10 +175,12 @@ class ReportNarrativeTests(unittest.TestCase):
         self.assertNotEqual(entries[0]['citation_refs'], entries[1]['citation_refs'])
         # Paged catalog reads recover every selectable record, without exposing
         # a different version or adopting the entire question's source set.
+        with self.assertRaisesRegex(ValueError, 'draft or basis changed'):
+            invoke(self.case, packet['next_call']['arguments'])
+        packet = invoke(self.case, {'action': 'compose', 'section': 'key_evidence'})
         seen = list(packet['items'])
-        while packet.get('next_call'):
-            packet = invoke(self.case, packet['next_call']['arguments'])
-            seen.extend(packet['items'])
+        if packet.get('next_call'):
+            seen.extend(exact_read(self.case, packet['next_call']))
         self.assertEqual({i['key'] for i in seen}, {i['key'] for i in items})
         for item in seen:
             if item['kind'] in ('source', 'observation'):
@@ -190,7 +234,7 @@ class ReportNarrativeTests(unittest.TestCase):
                 key: {'title': key, 'paragraphs': [{'text': 'legacy', 'basis_keys': ['Q1']}]}
                 for key in ('summary', 'findings', 'limits')}}]
         self.assertFalse(status(state)['ready'])
-        self.assertEqual(len(status(state)['missing_groups']), len(GROUPS))
+        self.assertEqual(set(status(state)['missing_groups']), {group[0] for group in GROUPS} - OPTIONAL_GROUPS)
 
     def test_idempotent_replay_stale_ref_and_changed_payload_conflict(self):
         first, request = self.write('major_findings')
@@ -244,6 +288,11 @@ class ReportNarrativeTests(unittest.TestCase):
         self.assertEqual(before_hash, current(self.case)['report_narratives'][0]['draft_hash'])
         self.assertEqual(result, invoke(self.case, request))
         self.write('scope')
+        self.assertTrue(status(current(self.case))['ready'])  # Identical writes preserve the reviewed content.
+        packet = invoke(self.case, {'action': 'compose', 'section': 'scope'})
+        changed = self.draft('scope', packet)
+        changed['entries'][0]['cells'][0] += ' 현재 운영 상태에 대한 판단 제외.'
+        self.write('scope', draft=changed)
         progress = status(current(self.case))
         self.assertFalse(progress['ready'])
         self.assertEqual(progress['review_status'], 'required')
@@ -342,7 +391,10 @@ class ReportNarrativeTests(unittest.TestCase):
         self.assertEqual(next(group for group in view['groups'] if group['id'] == 'major_findings')['state'], 'in_progress')
         self.assertEqual(len(progress_view(None)['groups']), len(GROUPS))
         self.finish()
-        self.write('major_findings')
+        packet = invoke(self.case, {'action': 'compose', 'section': 'major_findings'})
+        changed = self.draft('major_findings', packet)
+        changed['entries'][0]['cells'][1] += ' 기록 간 시차 산정도 불가.'
+        self.write('major_findings', draft=changed)
         focused = invoke(self.case, {'action': 'compose', 'section': 'major_findings'})
         feedback = focused['current_feedback'][0]
         self.assertNotIn('reason', feedback)
@@ -418,7 +470,7 @@ class ReportNarrativeTests(unittest.TestCase):
         self.assertEqual(packet['status'], 'authoring_required')
         self.assertEqual(packet['section'], 'major_findings')
         self.assertEqual(set(packet['stale_fields']), {group[0] for group in GROUPS})
-        self.assertEqual(set(packet['missing_groups']), {group[0] for group in GROUPS})
+        self.assertEqual(set(packet['missing_groups']), {group[0] for group in GROUPS} - OPTIONAL_GROUPS)
         self.assertIsNone(project_body(state))
         self.assertEqual(state, before)
 
@@ -426,7 +478,9 @@ class ReportNarrativeTests(unittest.TestCase):
         self.finish(unavailable=True)
         table = next(b for b in project_body(current(self.case))[0]['blocks'] if b.get('region') == 'major_findings')
         self.assertEqual(table['rows'][0][1], '시점 미확인')
-        self.assertIn('- 확인 한계:', table['rows'][0][2])
+        self.assertEqual(table['rows'][0][2], CONTENT['major_findings'][0][1])
+        self.assertIn('- 확인 범위:', table['cell_details'][0][2])
+        self.assertIn('선택된 두 기록의 범위', table['cell_details'][0][2])
 
     def test_review_index_is_compact_complete_and_exact_large_fields_are_recoverable(self):
         self.finish()
@@ -440,37 +494,19 @@ class ReportNarrativeTests(unittest.TestCase):
         self.assertLess(size(root), 18000)
         self.assertEqual(root['items'], [])
         self.assertFalse(any('entries' in field for field in root['saved_fields']))
+        self.assertFalse(any('edit_read_call' in field for field in root['saved_fields']))
         nodes = {node for field in root['saved_fields'] for node in field['node_ids']}
         self.assertEqual(nodes, set(root['reviewed_node_ids']))
         self.assertEqual(len(root['saved_fields']), len(GROUPS))
 
-        def exact(call):
-            result = invoke(self.case, call['arguments'])
-            self.assertLessEqual(size(result), MAX_BYTES)
-            if 'text' in result:
-                chunks = [result['text']]
-                while result['next_call']:
-                    result = invoke(self.case, result['next_call']['arguments'])
-                    self.assertLessEqual(size(result), MAX_BYTES)
-                    chunks.append(result['text'])
-                return ''.join(chunks)
-            if 'value' in result:
-                return result['value']
-            items = list(result['items'])
-            while result['next_call']:
-                result = invoke(self.case, result['next_call']['arguments'])
-                self.assertLessEqual(size(result), MAX_BYTES)
-                items.extend(result['items'])
-            values = [item['value'] if 'value' in item else exact(item['read_call']) for item in items]
-            return dict(zip([item['key'] for item in items], values)) if items and 'key' in items[0] else values
-
-        indexed = exact(root['review_index_call'])
+        indexed = exact_read(self.case, root['review_index_call'])
         self.assertEqual({node for field in indexed for node in field['node_ids']}, nodes)
         field = next(field for field in root['saved_fields'] if field['section'] == 'key_evidence')
-        recovered = exact(field['read_call'])
-        self.assertEqual(recovered['entries'][0]['cells'], draft['entries'][0]['cells'])
-        self.assertEqual(recovered['entries'][0]['unavailable_reason'], draft['entries'][0]['unavailable_reason'])
-        self.assertTrue(recovered['entries'][0]['citation_refs'])
+        self.assertIn('edit_read_call', invoke(self.case, field['read_call']['arguments']))
+        recovered = exact_read(self.case, field['read_call'])
+        self.assertEqual(recovered[0]['cells'], draft['entries'][0]['cells'])
+        self.assertEqual(recovered[0]['unavailable_reason'], draft['entries'][0]['unavailable_reason'])
+        self.assertTrue(recovered[0]['citation_refs'])
 
     def test_draft_pages_reject_changed_prose_or_basis_and_preserve_exact_source_links(self):
         self.finish()
@@ -508,6 +544,8 @@ class ReportNarrativeTests(unittest.TestCase):
         review_call = root['previous_review']['read_call']['arguments']
         before = invoke(self.case, draft_call)
         result, _ = self.review()
+        self.assertNotIn('error', invoke(self.case, review_call))  # Identical review is a no-op.
+        result, _ = self.review(blocking=True)
         after = invoke(self.case, draft_call)
         self.assertEqual(before, after)
         self.assertEqual(root['snapshot_id'], result['snapshot_id'])

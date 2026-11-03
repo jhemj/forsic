@@ -489,7 +489,7 @@ def _report_draft(resolved, questions):
                 # Exclude the review disposition itself: acknowledging feedback
                 # cannot make that same review stale or trigger another call.
                 return {key: value[key] for key in
-                    ('schema', 'question_ids', 'basis_id', 'draft_revision', 'draft_hash', 'sections', 'fields')
+                    ('schema', 'template_version', 'question_ids', 'basis_id', 'draft_revision', 'draft_hash', 'sections', 'fields')
                     if key in value}
     return None
 

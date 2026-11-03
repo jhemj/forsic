@@ -153,7 +153,14 @@ class IndependentReviewTests(unittest.TestCase):
         self.assertFalse(review.review_state(scoped)['final_review_current'])
 
     def test_selected_report_reviews_share_the_existing_goal_call_budget(self):
+        from forsic_plugin.report_driven import host
+        from test_report_narrative import ReportNarrativeTests
         self.setup_review()
+        # Private conversational markers exercise blind review elsewhere; they
+        # are not part of the public question schema used by the real composer.
+        for field in ('summary', 'last_response'):
+            self.note['investigation'].pop(field, None)
+        self.save_note()
         self.fake.side_effect = self.empty_response
         resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
         first_id = review._question_records(resolved)[0]['id']
@@ -161,11 +168,19 @@ class IndependentReviewTests(unittest.TestCase):
         second.update(note_id='second-budget-scope')
         self.case.record('note', second, self.sid)
         second_id = 'Q-second-budget-scope'
-        for qid, revision in ((first_id, 1), (second_id, 1), (first_id, 2), (second_id, 2)):
-            self.case.record('report_narrative', {'schema':'forsic-report-narrative-2',
-                'question_ids':[qid], 'goal_id':resolved['goal_id'], 'revision':revision,
-                'draft_hash':f'{qid}:{revision}', 'basis_id':'synthetic-basis', 'fields':{}}, self.sid)
+        author = ReportNarrativeTests('test_native_render_requests_authored_prose_not_blank_template')
+        author.case = self.case
+        native = {'_goal_id': resolved['goal_id'], '_session_id': self.sid,
+                  '_session_lineage': resolved['session_lineage']}
+        for index, (qid, revision) in enumerate(((first_id, 1), (second_id, 1), (first_id, 2), (second_id, 2))):
+            packet = host.invoke(self.case, {'action': 'compose', 'section': 'scope', 'question_ids': [qid], **native})
+            draft = author.draft('scope', packet)
+            draft['entries'][0]['cells'][0] += f' Scope revision {revision}.'
+            host.invoke(self.case, {'action': 'compose', 'section': 'scope', 'question_ids': [qid],
+                'operation_id': f'budget-draft-{index}', 'edit_ref': packet['save_contract']['edit_ref'],
+                'draft': draft, **native})
             result = review.goal_advisory_context(**self.kwargs(stage='final',report_question_ids=[qid]))
+            self.assertEqual(result['status'], 'received' if index < 3 else 'budget_exhausted', result)
         self.assertEqual(len(self.calls), 3)
         self.assertEqual(len(self.request_paths()), 3)
         self.assertEqual(result['status'], 'budget_exhausted')

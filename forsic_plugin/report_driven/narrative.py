@@ -758,7 +758,10 @@ def prepare(state, args, case=None):
             **({'entries': deepcopy(field['entries'])} if key == group and
                len(json.dumps(field['entries'], ensure_ascii=False).encode()) < 3000 else {}),
             'read_call': _read_call(progress, '/fields/' + key + '/entries', group),
-            'edit_read_call': _read_call(progress, '/editable_fields/' + key + '/entries', key),
+            # Review reads already return targeted edit navigation. Repeating it
+            # for every group here inflates the index without adding coverage.
+            **({'edit_read_call': _read_call(progress, '/editable_fields/' + key + '/entries', key)}
+               if group != 'review' else {}),
             **({'form_read_call': _read_call(progress, '/form_fields/' + key + '/entries', key)} if key == group else {})}
             for key, field in progress['fields'].items()],
         previous_fields=[{'section': key, 'source_revision': field['source_revision'],

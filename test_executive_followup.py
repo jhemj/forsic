@@ -254,7 +254,7 @@ class ExecutiveFollowupTests(unittest.TestCase):
         self.assertEqual(result['executive_followup']['rounds'][0]['round'],1)
 
     def test_completed_generic_rounds_require_current_report_review_without_restarting_dialogue(self):
-        from test_report_narrative import ReportNarrativeTests
+        from test_report_narrative import ReportNarrativeTests, answerability_checks
         from forsic_plugin.report_driven.narrative import material, status
         from forsic_plugin.report_driven.template_contract import WRITING_ORDER, REVIEW_CHECKS
         self.prepare()
@@ -284,6 +284,7 @@ class ExecutiveFollowupTests(unittest.TestCase):
             'edit_ref':packet['save_contract']['edit_ref'],'question_ids':packet['question_ids'],
             'review':{'summary':'Synthetic main-agent whole-document comparison against preserved evidence.',
                 'reviewed_node_ids':packet['reviewed_node_ids'],
+                'answerability_checks':answerability_checks(),
                 'checks':[{'check':check,'result':'satisfied','reason':'Synthetic scope and uncertainty comparison.'}
                           for check in REVIEW_CHECKS], 'comparisons':[{
                     'node_ids':[packet['reviewed_node_ids'][0]], 'basis_keys':[],

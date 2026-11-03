@@ -266,15 +266,20 @@ def report_grounding(resolved, draft, max_chars=11000):
     from . import independent_review as review
     from .notes import EVIDENCE_TOOLS
     from .report_driven.host import current, source_record
-    from .report_driven.narrative import basis, material
+    from .report_driven.narrative import basis, material, _current_fields
     from .report_driven.model_pages import select
     from .report_driven.retained_scalar import citation_context, number_literal
     actual, selected = basis(current(resolved['case']), draft['question_ids'])
-    if actual != draft['basis_id']:
+    items = material(selected)
+    # Response-only note revisions change the snapshot identity, not its answer
+    # or cited evidence. Use the same template/owner/dependency checks as compose
+    # and render; a raw identity comparison would restart an unchanged review.
+    fields_current, stale = _current_fields(draft, actual, {item['key']: item for item in items})
+    if not fields_current or stale:
         raise ValueError('Report citation basis changed; compose/render the current selected report before final review.')
     observations = {item['id']: item for item in selected['observations']}
     claim_keys = {}
-    for item in material(selected):
+    for item in items:
         if item['kind'] != 'claim':
             continue
         for ref in item.get('citation_refs', []):
