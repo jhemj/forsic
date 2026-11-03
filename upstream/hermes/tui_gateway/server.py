@@ -1380,17 +1380,9 @@ def _ask(method: str, sid: str, params: dict, timeout: float | None = 300) -> st
 
 
 def _clarify_block(sid: str, questions: list[dict]) -> dict:
-    """Bridge the clarify tool callback onto one ``clarify`` server request carrying only the wire fields
-    (tool-side entries carry result-assembly keys too). No deadline: the TUI/Desktop card stays until the
-    user answers, the turn is interrupted, or the session closes. Answers lock one at a time through
-    ``clarify.lock`` (``null`` = skipped); the tool gets ``{"answers", "outcome"}`` — ``undelivered`` when no
-    client took it."""
-    from tui_gateway import server_requests
-    wire = [{"qid": e["qid"], "question": e["question"], "choices": e["choices"], "multi_select": bool(e["multi_select"])}
-            for e in questions]
-    result = server_requests.send("clarify", sid, {"questions": wire}, timeout=None,
-                                  qids=[e["qid"] for e in questions])
-    return result or {"answers": {}, "outcome": "undelivered"}
+    """Native clarify transport; background questions and deadlines are explicit profile opt-ins."""
+    from tui_gateway.clarify_requests import ask
+    return ask(sys.modules[__name__], sid, questions, _load_cfg())
 
 
 # A tour action is a DOM op the renderer answers in ms; the generous deadline exists only because a

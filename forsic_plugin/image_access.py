@@ -9,9 +9,9 @@ import stat
 import sys
 
 if __package__:
-    from .image_reader import archive_origin, image_file_identity, image_segments, inspect, open_image
+    from .image_reader import archive_origin, image_file_identity, image_segments, inspect, open_image, validate_filesystem_view
 else:
-    from image_reader import archive_origin, image_file_identity, image_segments, inspect, open_image
+    from image_reader import archive_origin, image_file_identity, image_segments, inspect, open_image, validate_filesystem_view
 
 
 EXPORT_LIMIT = 256 * 1024 * 1024
@@ -87,6 +87,7 @@ def new_destination(destination, work_root=Path('/work')):
 
 def export_file(image, args, *, work_root=Path('/work')):
     """Stream one allocated regular file; exported bytes remain derived output."""
+    validate_filesystem_view(args)
     file_path = args.get('file_path')
     if not isinstance(file_path, str) or not file_path:
         raise ValueError('export requires an explicit --file-path inside the image')
@@ -101,20 +102,29 @@ def export_file(image, args, *, work_root=Path('/work')):
         destination = str(destination_path(destination, work_root))
     except ValueError as exc:
         raise ExportError(str(exc), {'destination': destination, 'derived': True, 'bytes': 0,
+                                    'filesystem_view': args.get('filesystem_view', 'physical'),
+                                    'source': {'image': str(image), 'file_path': file_path,
+                                               'filesystem_view': args.get('filesystem_view', 'physical')},
                                     'sha256': digest.hexdigest(), 'hash_scope': 'exported_bytes',
                                     'complete': False, 'complete_file': False}) from exc
-    with ExitStack() as image_stack:
-        opened = image_stack.enter_context(open_image(image))
-        volume, fs = opened.filesystem(args.get('volume_offset'))
-        node = fs.get(file_path)
-        origin = archive_origin(opened.parts, volume.offset)
-        before = image_file_identity(node.lstat())
-        result = {'source': {'image': str(opened.path), 'volume_offset': volume.offset, 'file_path': file_path},
-                  'image': str(opened.path), 'volume_offset': volume.offset, 'file_path': file_path,
-                  'destination': destination, 'derived': True, 'bytes': 0,
-                  'sha256': digest.hexdigest(), 'hash_scope': 'exported_bytes',
-                  'complete': False, 'complete_file': False}
-        try:
+    view = args.get('filesystem_view', 'physical')
+    selector = {'filesystem_view': view}
+    if 'volume_offset' in args:
+        selector['volume_offset'] = args['volume_offset']
+    result = {'source': {'image': str(image), 'file_path': file_path, **selector},
+              'image': str(image), 'file_path': file_path, **selector,
+              'destination': destination, 'derived': True, 'bytes': 0,
+              'sha256': digest.hexdigest(), 'hash_scope': 'exported_bytes',
+              'complete': False, 'complete_file': False}
+    try:
+        with ExitStack() as image_stack:
+            opened = image_stack.enter_context(open_image(image, filesystem_view=view))
+            selected, fs = opened.selected_filesystem(args.get('volume_offset'))
+            result.update(selected)
+            result['source'].update(selected)
+            node = fs.get(file_path)
+            origin = archive_origin(opened.parts, selected.get('volume_offset'))
+            before = image_file_identity(node.lstat())
             if not stat.S_ISREG(before['st_mode']):
                 raise ValueError('export requires an allocated regular file; directories and symlinks are unsupported')
             if before['st_size'] > limit:
@@ -134,13 +144,15 @@ def export_file(image, args, *, work_root=Path('/work')):
                             pending = pending[written:]
                 if count != before['st_size'] or before != image_file_identity(node.lstat()):
                     raise ValueError('Source file changed or ended early while exporting')
-                if origin != archive_origin(image_segments(opened.path), volume.offset):
+                if origin != archive_origin(image_segments(opened.path), selected.get('volume_offset')):
                     raise ValueError('Image segments changed while exporting')
                 # Complete source cleanup while destination rollback is still armed.
                 image_stack.close()
-            return {**result, 'bytes': count, 'sha256': digest.hexdigest(), 'complete': True, 'complete_file': True}
-        except Exception as exc:
-            raise ExportError(str(exc), {**result, 'bytes': count, 'sha256': digest.hexdigest()}) from exc
+            return {**result, 'bytes': count, 'sha256': digest.hexdigest(),
+                    'sha256_full_file': digest.hexdigest(), 'complete': True, 'complete_file': True}
+    except Exception as exc:
+        raise ExportError(str(exc), {**result, 'bytes': count, 'sha256': digest.hexdigest(),
+                                    'source_error_type': type(exc).__name__}) from exc
 
 
 class Parser(argparse.ArgumentParser):
@@ -156,6 +168,8 @@ def parser():
     result.add_argument('image', help='/evidence/.../disk.e01 (원본 읽기 전용)')
     result.add_argument('action', choices=('volumes', 'list', 'stat', 'read', 'read_bytes', 'search', 'hash', 'export'))
     result.add_argument('--file-path', help='exact path INSIDE the image / 이미지 내부 경로')
+    result.add_argument('--filesystem-view', choices=('physical', 'target'),
+                        help='physical (default): select one volume; target: Dissect mounted OS/LVM filesystem')
     result.add_argument('--volume-offset', type=int, help='select discovered volume offset; use volumes first')
     result.add_argument('--start-line', type=int, help='read: first line (default 1)')
     result.add_argument('--offset', type=int, help='read_bytes/list/search: byte or entry offset')
@@ -175,6 +189,7 @@ def parser():
 def main(argv=None):
     try:
         args = {key: value for key, value in vars(parser().parse_args(argv)).items() if value is not None}
+        validate_filesystem_view(args)
         image = evidence_image(args.pop('image'))
         args['path'] = str(image)
         if args['action'] == 'export':
@@ -187,7 +202,8 @@ def main(argv=None):
         if result.get('observed_kind') == 'regular_file' and result.get('recovery_arguments'):
             recovery = result['recovery_arguments']
             result['recovery_argv'] = ['python', '/opt/forsic/image_access.py', recovery['path'],
-                'read_bytes', '--volume-offset', str(recovery['volume_offset']),
+                'read_bytes', '--filesystem-view', recovery.get('filesystem_view', 'physical'),
+                *(['--volume-offset', str(recovery['volume_offset'])] if 'volume_offset' in recovery else []),
                 '--file-path', recovery['file_path'], '--offset', '0', '--length', '4096']
         code = 1
     encoded = json.dumps(result, ensure_ascii=False)

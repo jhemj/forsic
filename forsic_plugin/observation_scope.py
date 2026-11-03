@@ -4,6 +4,7 @@ This describes retained tool observations, never analytical review or unseen sco
 SQLite groups the full history; Python never loads complete receipts or all targets.
 """
 import json
+from .derived_scope import derived_scope
 
 
 TOOLS = ('forsic_list', 'forsic_read', 'forsic_read_bytes', 'forsic_search',
@@ -149,6 +150,8 @@ def observed_scope(resolved, *, max_targets=120, max_chars=10000):
             ('rejected_receipts', "coalesce(json_extract(data,'$.execution_rejected'),0)!=0")):
             body['excluded'][key] = db.execute("SELECT count(*) FROM events WHERE kind='tool_result' AND session IN ("+
                 ','.join('?' for _ in lineage)+') AND '+predicate, tuple(lineage)).fetchone()[0]
+        body['derived_observations'] = derived_scope(case, lineage, db,
+            max_items=max_targets, max_chars=max(400, min(max_chars // 2, max_chars-len(encode(body))-80)))
         body['omitted']['targets'] = total
         # Query results stream; neither the distinct identities nor receipt bodies
         # are collected in Python. SQLite may use its normal temporary sort store.

@@ -4,6 +4,7 @@ import {createRoot} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {Blob as NodeBlob} from 'node:buffer';
 import {ForsicReportLink} from './ForsicReportLink';
+import {ForsicReports} from './ForsicReports';
 
 const fetchMock = vi.fn();
 const createBlob = vi.fn<(blob: Blob) => string>();
@@ -181,3 +182,43 @@ it.each([wordUrl.replace('/word?','/integrated.docx?'),wordUrl.replace('a'.repea
   const {host,open}=await render('integrated.docx',url,'POST');await open();
   expect(fetchMock).not.toHaveBeenCalled();expect(host.textContent).toContain('Word 변환에 실패');
 });
+
+it('keeps the opened immutable HTML and its metadata while a state lookup supplies a newer descriptor', async () => {
+  const host = document.createElement('div'); document.body.append(host)
+  const root = createRoot(host); dispose = () => {act(() => root.unmount())}
+  const show = async (version: string) => {await act(async () => root.render(<ForsicReportLink file={{name:'report.html',url:reportUrl.replace('synthetic',version)}} profile="analyst" metadata={{version,status:'저장본',createdAt:'2026-10-20T03:30:00Z',draftRevision:version === 'old' ? 1 : 2}}/>))}
+  await show('old'); expect(fetchMock).not.toHaveBeenCalled()
+  await act(async () => host.querySelector('button')!.click())
+  const frame = document.querySelector('iframe')!
+  const source = frame.srcdoc
+  await show('new')
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(document.querySelector('iframe')).toBe(frame)
+  expect(frame.srcdoc).toBe(source)
+  expect(document.querySelector('[role="dialog"] header')?.textContent).toContain('초안 v1')
+  expect(document.querySelector('[role="dialog"] header')?.textContent).toContain('12:30:00')
+  expect(document.querySelector('[role="dialog"] header')?.textContent).toContain('KST')
+  expect(document.querySelector('[role="dialog"] header')?.textContent).toContain('저장 버전 old')
+  expect(document.querySelector('[role="dialog"] [role="status"]')?.textContent).toContain('새 저장 버전')
+  expect(revokeBlob).not.toHaveBeenCalled()
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="보고서 닫기"]')!.click())
+  expect(revokeBlob).toHaveBeenCalledOnce()
+  await act(async () => host.querySelector('button')!.click())
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+  expect(fetchMock.mock.calls[1][0]).toContain('/new/')
+  expect(document.querySelector('[role="dialog"] header')?.textContent).toContain('초안 v2')
+})
+
+it('retains a reading session when the latest saved report card receives a new bundle', async () => {
+  const host = document.createElement('div'); document.body.append(host)
+  const root = createRoot(host); dispose = () => {act(() => root.unmount())}
+  const show = async (version: string) => {await act(async () => root.render(<ForsicReports reports={[{id:version,name:version,title:'합성 제목',created_at:'2026-10-20T03:30:00Z',files:[{name:`${version}.html`,url:reportUrl.replace('synthetic',version)}]}]} loading={false} error={null} hasCase profile="analyst"/>))}
+  await show('old')
+  await act(async () => host.querySelector<HTMLButtonElement>('.frr-files button')!.click())
+  const frame = document.querySelector('iframe')!
+  await show('new')
+  expect(document.querySelector('iframe')).toBe(frame)
+  expect(document.querySelector('[role="dialog"] header')?.textContent).toContain('저장 버전 old')
+  expect(document.querySelector('[role="dialog"] [role="status"]')?.textContent).toContain('새 저장 버전')
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+})

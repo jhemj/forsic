@@ -101,6 +101,25 @@ def recommendations(target_os, purpose):
             'No registered initial profile for this OS/purpose; use existing specialist tools when available.'}
 
 
+def export_handoff(target, *, other_targets=0):
+    """Prepare a choice over an exact retained export, never infer its format."""
+    choices = {}
+    for name, profile in PROFILES.items():
+        assertions = {}
+        if name == 'linux_persistence':
+            assertions['targets[0].triage_format'] = list(PERSISTENCE_FORMATS)
+        elif name == 'linux_login_parser':
+            assertions['login_format'] = ['linux-glibc-x86-le-384']
+        choices[name] = {'target_os': profile['target_os'], 'input': profile['input'],
+                         'required_assertions': assertions}
+    return {'state': 'preparation_only',
+        'call_template': {'tool': 'forsic_shell', 'arguments': {'action': 'triage', 'targets': [dict(target)]}},
+        'choose_profile': choices, 'other_retained_targets': other_targets,
+        'meaning': 'Choose a profile only after checking the selected file format and runtime support; add its required assertions. '
+                   'No scan has run. Input admission still rechecks scope, source version and bytes. '
+                   'Candidates require source review; a useful alternative or a scoped deferral remains the agent\'s choice.'}
+
+
 def properties():
     target = storage.properties()['targets']
     target = {**target, 'maxItems': MAX_TARGETS,

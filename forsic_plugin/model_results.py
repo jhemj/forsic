@@ -48,7 +48,7 @@ def _shell_view(view, source):
             'unavailable_profiles': triage.get('unavailable_profiles', {}),
             'availability': 'Declared profiles; installed engines and target-format support require checking. Unsupported is not absent evidence.',
             'helpers': {name: {key: policy[name][key] for key in ('help_command', 'skill', 'reference') if key in policy[name]}
-                for name in ('image_access', 'structured_query', 'login_records') if name in policy},
+                for name in ('image_access', 'structured_query', 'login_records', 'deleted_recovery') if name in policy},
             'sensitive_scan': {'action': 'sensitive_scan', 'skill': 'scan-sensitive-data'},
             'discovery_call': {'tool': 'forsic_shell', 'arguments': {'action': 'capabilities'}}}
     if view.get('action') == 'capabilities':
@@ -103,6 +103,8 @@ def _export_target(view):
     view['retained_export_selection_note'] = ('These are derived selectors over unchanged retained stdout/stderr. '
         'Copy one exact target, including export_line when present, after choosing a profile and its required format/ABI. '
         'Admission still verifies source version, conversation ownership, complete receipt, file boundaries and exported-byte hash; this selector is not admission or coverage.')
+    from .triage_policy import export_handoff
+    view['triage_handoff'] = export_handoff(selectors[0], other_targets=total-1)
 
 
 def evidence_view(result, case):
@@ -133,7 +135,11 @@ def evidence_view(result, case):
         view['raw_output_calls']={stream:{'tool':'forsic_reporting','arguments':{
             **source_read_call(source, '/raw_output/'+stream+'_base64', view['source_handle']), 'limit':4096}}
             for stream in ('stdout','stderr')}
-        view['presentation_note']='stdout/stderr are unchanged retained UTF-8 previews of derived command output. Full captured bytes remain in raw_output and are paged as base64 through raw_output_calls; neither view establishes original evidence content or coverage.'
+        from .report_driven.model_pages import shell_text_call
+        view['readable_output_calls']={stream:{'tool':'forsic_reporting','arguments':
+            shell_text_call(source, '/raw_output/'+stream+'_base64', view['source_handle'])}
+            for stream in ('stdout','stderr')}
+        view['presentation_note']='stdout/stderr are retained UTF-8 previews of derived command output. Use readable_output_calls to read full captured UTF-8 output with decoded-byte offsets; invalid UTF-8/binary controls are explicitly unavailable. raw_output_calls retain exact base64 scalar paging and citation coordinates. Neither projection establishes original evidence content or coverage.'
         _export_target(view)
         return _shell_view(view, source)
     if not isinstance(result.get('text'),str) or not isinstance(result.get('base64'),str):

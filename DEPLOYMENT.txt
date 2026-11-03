@@ -390,6 +390,22 @@ An existing paused goal without historical active-time accounting stays paused;
 its past usage is unknown, not zero. It cannot silently receive a fresh allowance
 on resume. An operator must explicitly establish a new goal/allowance if continuing
 such legacy work. No migration rewrites case evidence, findings or review history.
+At 12 and 18 cumulative active hours, the main model summarizes findings, gaps and
+the value of further investigation and chooses finish or continue with a reason.
+The existing native goal saves that decision against the actual saved assistant
+response row. A reached threshold with a pending/unknown decision stays awaiting
+review, not completed or authorized to continue. Earlier completion is allowed;
+manual pause, guardrails, goal replacement and the hard cap take precedence.
+The normal final cap is 24 active hours, retaining native closing at 90%, partial
+handoff at 95% and hard interruption at 100%; checkpoints never reset elapsed time.
+The UI displays start, 12h, 18h and the current actual cap with native elapsed time
+frozen on explicit pause. Current-work tooltips use existing events, without an
+extra model call. The per-turn iteration limit is a separate allowance. All of this
+uses the existing native goal/turn path, with no additional loop, timer or DB.
+A saved finish decision sets runtime_phase=closing (receipt: “마무리 선택”); the
+goal remains active for existing question-save and compose/review/render tools.
+It does not immediately pause on a tool-less summary. A 12h finish suppresses the
+18h decision. Normal closing and 95% partial handoff retain their existing gates.
 Wall-clock accounting persists across restarts; a backwards clock change across a
 restart cannot be measured exactly. A live turn also keeps its monotonic deadline.
 

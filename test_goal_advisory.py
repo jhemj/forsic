@@ -69,6 +69,76 @@ class GoalAdvisoryTests(unittest.TestCase):
         self.x.judge.assert_not_called()
         self.assertEqual(self.x.manager.state.turns_used, 4)
 
+    def test_phase_actions_reach_both_native_handoffs_without_invented_findings(self):
+        from hermes_cli import goals
+        phases = {'next_review_round': 'next native final boundary',
+                  'final_report_review': 'next native final boundary',
+                  'compose_report': 'Compose or update',
+                  'revise_judgment': 'current judgment', 'wait': 'native review boundary'}
+        for action, instruction in phases.items():
+            with self.subTest(action=action):
+                self.x.manager.set('Preserve authorized synthetic scope')
+                calls = []
+                def review(**kwargs):
+                    calls.append(kwargs)
+                    return dict(self.pending(), pending_finding_ids=[], followup_action=action,
+                                context='Preserved phase receipt; no undisposed findings.')
+                self.x.plugins._hooks['goal_advisory_context'] = [review]
+                decision = self.x.manager.evaluate_after_turn('Native iteration budget ended')
+                self.assertTrue(decision['should_continue'])
+                self.assertIn(action, self.x.manager.state.last_reason)
+                agent, messages, _, first = self._stop()
+                self.assertTrue(first.continue_turn)
+                for prompt in (decision['continuation_prompt'], messages[-1]['content']):
+                    self.assertIn(instruction, prompt)
+                    self.assertNotIn('Assess pending findings', prompt)
+                    self.assertIn('useful investigation', prompt)
+                    self.assertIn('scope remains authoritative', prompt)
+                self.assertEqual([call['stage'] for call in calls], ['exploration', 'final'])
+                # Phase routing cannot approve completion or issue another final
+                # opportunity for an unchanged durable receipt.
+                self.assertEqual(self._stop(agent)[-1].stop_reason, 'goal_advisory_paused')
+                self.assertEqual(goals.load_goal(agent.session_id).last_verdict, 'advisory_no_progress')
+        self.x.judge.assert_not_called()
+
+    def test_mixed_phase_obligations_keep_responses_and_fail_closed_unavailable(self):
+        from hermes_cli import goals
+        for blocked_status, legacy in ((None, False), (None, True), ('unavailable', False),
+                                       ('unknown', False), ('in_progress', False)):
+            with self.subTest(blocked_status=blocked_status, legacy=legacy):
+                self.x.manager.set('Mixed-provider synthetic scope')
+                phase = dict(self.pending(), provider='phase', pending_finding_ids=[],
+                             followup_action='next_review_round')
+                response = dict(self.pending(), provider='response', followup_action='respond')
+                if legacy:
+                    response.pop('followup_action')
+                values = [phase, response]
+                if blocked_status:
+                    values.append(dict(self.pending(), provider='missing', status=blocked_status,
+                                       followup_action='repair', followup_actionable=False))
+                self.x.plugins._hooks['goal_advisory_context'] = [
+                    lambda value=value, **_: value for value in values]
+                decision = self.x.manager.evaluate_after_turn('Partial')
+                if blocked_status:
+                    expected = 'advisory_pending' if blocked_status == 'in_progress' else 'advisory_unavailable'
+                    self.assertFalse(decision['should_continue'])
+                    self.assertEqual(decision['verdict'], expected)
+                    self.x.manager.resume()
+                    final = self._stop()[-1]
+                    self.assertFalse(final.continue_turn)
+                    self.assertEqual(goals.load_goal(self.x.manager.session_id).last_verdict,
+                                     expected)
+                else:
+                    self.assertTrue(decision['should_continue'])
+                    self.assertIn('next_review_round', self.x.manager.state.last_reason)
+                    _, messages, _, final = self._stop()
+                    self.assertTrue(final.continue_turn)
+                    for prompt in (decision['continuation_prompt'], messages[-1]['content']):
+                        self.assertIn('Assess pending findings', prompt)
+                        self.assertIn('finding-1', prompt)
+                        self.assertIn('next native final boundary', prompt)
+        self.x.judge.assert_not_called()
+
     def test_handled_followup_allows_judge_and_legacy_advice_stays_advisory(self):
         for requires in (False, None):
             with self.subTest(requires=requires):
@@ -193,11 +263,133 @@ class GoalAdvisoryTests(unittest.TestCase):
         self.assertFalse(self._stop()[-1].continue_turn)
         self.assertEqual(self.x.manager.state.status, 'paused')
 
-    def test_followup_survives_empty_or_oversized_context(self):
-        for context in ('', 'x' * 3501):
-            with self.subTest(size=len(context)):
-                self.x.plugins._hooks['goal_advisory_context'] = [lambda **_: dict(self.pending(), context=context)]
-                self.assertTrue(self._stop()[-1].continue_turn)
+    def test_unchanged_final_review_pauses_without_another_model_or_goal_continuation(self):
+        from hermes_cli import goals
+        self.x.plugins._hooks['goal_advisory_context'] = [self.pending]
+        agent = self._agent()
+        first = self._stop(agent)[-1]
+        self.assertTrue(first.continue_turn)
+        original = goals.load_goal(agent.session_id).advisory_progress
+        # Ordinary checkpoints and active/tool work do not consume the final
+        # opportunity; only the next unsupported final claim settles this fence.
+        decision = self.x.manager.evaluate_after_turn('Still working')
+        self.assertTrue(decision['should_continue'])
+        self.assertEqual(goals.load_goal(agent.session_id).advisory_progress, original)
+        second = self._stop(agent, 'A different completion claim')[-1]
+        self.assertFalse(second.continue_turn)
+        self.assertEqual(second.stop_reason, 'goal_advisory_paused')
+        state = goals.load_goal(agent.session_id)
+        self.assertEqual(state.status, 'paused')
+        self.assertEqual(state.last_verdict, 'advisory_no_progress')
+        self.assertEqual(state.advisory_progress['fingerprint'], original['fingerprint'])
+        self.assertIn('review-1', second.final_response)
+        self.assertFalse(self.x.manager.evaluate_after_turn('Complete')['should_continue'])
+        self.x.judge.assert_not_called()
+
+    def test_changed_durable_progress_reopens_final_opportunity_with_same_pending_ids(self):
+        from hermes_cli import goals
+        revision = ['source-v1']
+        self.x.plugins._hooks['goal_advisory_context'] = [
+            lambda **_: dict(self.pending(), progress_fingerprint=revision[0])]
+        agent = self._agent()
+        self.assertTrue(self._stop(agent)[-1].continue_turn)
+        revision[0] = 'source-v2'
+        self.assertTrue(self._stop(agent)[-1].continue_turn)
+        self.assertEqual(goals.load_goal(agent.session_id).status, 'active')
+        self.assertFalse(self._stop(agent)[-1].continue_turn)
+
+    def test_unavailable_final_review_pauses_with_safe_diagnostic_and_never_judges_done(self):
+        from hermes_cli import goals
+        self.x.plugins._hooks['goal_advisory_context'] = [lambda **_: dict(self.pending(),
+            status='unavailable', followup_actionable=False,
+            context='Local packet budget exceeded; read the retained review inbox.')]
+        verdict = self._stop()[-1]
+        self.assertFalse(verdict.continue_turn)
+        self.assertEqual(verdict.stop_reason, 'goal_advisory_paused')
+        self.assertIn('packet budget', verdict.final_response)
+        self.assertEqual(goals.load_goal(self.x.manager.session_id).last_verdict, 'advisory_unavailable')
+        self.assertEqual(self.x.manager.evaluate_after_turn('Complete')['status'], 'paused')
+        self.x.judge.assert_not_called()
+
+    def test_checkpoint_unavailable_pauses_before_judge_instead_of_repeating_followup(self):
+        self.x.plugins._hooks['goal_advisory_context'] = [lambda **_: dict(self.pending(),
+            status='unavailable', followup_actionable=False, context='Retained receipt is unreadable.')]
+        decision = self.x.manager.evaluate_after_turn('Complete')
+        self.assertEqual(decision['status'], 'paused')
+        self.assertEqual(decision['verdict'], 'advisory_unavailable')
+        self.assertFalse(decision['should_continue'])
+        self.x.judge.assert_not_called()
+
+    def test_inflight_review_checkpoint_preserves_the_main_agents_opportunity(self):
+        self.x.plugins._hooks['goal_advisory_context'] = [lambda **_: dict(self.pending(),
+            status='in_progress', followup_action='wait', followup_actionable=True,
+            context='The accepted review request is still running within its deadline.')]
+        result = self.x.manager.evaluate_after_turn('Working through retained evidence')
+        self.assertTrue(result['should_continue'])
+        self.assertEqual(result['status'], 'active')
+        self.assertIsNone(self.x.manager.state.advisory_progress)
+        self.x.judge.assert_not_called()
+
+    def test_actual_async_review_waits_at_native_final_boundary_without_pausing_or_retransmission(self):
+        from functools import partial
+        import threading
+        import test_review_overlap as overlap_fixtures
+        from forsic_plugin import independent_review as review, independent_review_overlap as overlap
+        from hermes_cli import goals
+        fixture = overlap_fixtures.ReviewOverlapTests()
+        fixture.setUp(); self.addCleanup(fixture.doCleanups)
+        self.x.db.create_session(fixture.sid, 'tui')
+        self.x.db.set_meta('goal:' + fixture.sid, fixture.goal.to_json())
+        fixture.native = Path(self.x.db.db_path)
+        fixture.launch()
+        self.assertFalse(fixture.jobs[-1].done.is_set())
+        self.x.plugins._hooks['goal_advisory_context'] = [partial(review.goal_advisory_context,
+            enabled=True, intake_root=fixture.intake, native_db=fixture.native)]
+        entered_wait = threading.Event()
+        original_wait = overlap.wait_existing
+        def wait(*args, **kwargs):
+            entered_wait.set()
+            return original_wait(*args, **kwargs)
+        agent = self._agent(); agent.session_id = fixture.sid
+        outcomes = []
+        with patch.object(overlap, 'wait_existing', side_effect=wait):
+            thread = threading.Thread(target=lambda: outcomes.append(self._stop(agent)[-1]))
+            thread.start()
+            try:
+                self.assertTrue(entered_wait.wait(3))
+                self.assertTrue(thread.is_alive())
+                self.assertEqual(goals.load_goal(fixture.sid).status, 'active')
+                self.assertFalse(fixture.jobs[-1].cancel.is_set())
+                self.assertEqual(len(fixture.calls), 1)
+            finally:
+                fixture.release.set()
+                thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(outcomes), 1)
+        self.assertTrue(outcomes[0].continue_turn)
+        self.assertEqual(goals.load_goal(fixture.sid).status, 'active')
+        self.assertEqual(len(fixture.calls), 1)
+        self.x.judge.assert_not_called()
+
+    def test_unreturned_review_after_native_wait_is_pending_incomplete_never_failed(self):
+        from hermes_cli import goals
+        self.x.plugins._hooks['goal_advisory_context'] = [lambda **_: dict(self.pending(),
+            status='in_progress', followup_actionable=False, followup_action='repair',
+            context='The original wait deadline passed; response delivery remains unconfirmed.')]
+        verdict = self._stop()[-1]
+        self.assertFalse(verdict.continue_turn)
+        state = goals.load_goal(self.x.manager.session_id)
+        self.assertEqual(state.last_verdict, 'advisory_pending')
+        self.assertIn('still pending', verdict.final_response)
+
+    def test_empty_context_preserves_obligation_but_invalid_context_pauses_incomplete(self):
+        self.x.plugins._hooks['goal_advisory_context'] = [lambda **_: dict(self.pending(), context='')]
+        self.assertTrue(self._stop()[-1].continue_turn)
+        self.x.plugins._hooks['goal_advisory_context'] = [lambda **_: dict(self.pending(), context='x' * 3501)]
+        verdict = self._stop()[-1]
+        self.assertFalse(verdict.continue_turn)
+        self.assertEqual(verdict.stop_reason, 'goal_advisory_paused')
+        self.assertIn('크기', verdict.final_response)
 
     def test_narrow_legacy_callback_accepts_additive_stage_fields(self):
         calls = []
@@ -228,7 +420,7 @@ class GoalAdvisoryTests(unittest.TestCase):
             manager._discovered = True
             def review(**kwargs):
                 seen.append(get_hermes_home().resolve())
-                return self.pending()
+                return dict(self.pending(), progress_fingerprint=str(len(seen)))
             manager._hooks['goal_advisory_context'] = [review]
             managers[home] = manager
         with patch.object(plugins, 'get_plugin_manager', REAL_PLUGIN_MANAGER), patch.object(
@@ -294,13 +486,50 @@ class GoalAdvisoryTests(unittest.TestCase):
         self.assertEqual([call['draft_response'] for call in calls],
                          ['Initial candidate', 'Revised source-backed answer'])
 
+    def test_real_text_stop_delivers_incomplete_checkpoint_after_no_progress(self):
+        from agent.turn_final_response import finish_text_response
+        agent = self._agent()
+        agent.api_mode, agent.valid_tool_names, agent._stall_guards = 'chat_completions', set(), False
+        agent._has_content_after_think_block = lambda text: bool(text)
+        agent._strip_think_blocks = lambda text: text
+        agent._build_assistant_message = lambda msg, reason: {
+            'role': 'assistant', 'content': msg.content, 'finish_reason': reason}
+        agent._emit_pending_fallback_notice, agent._clear_status_buffer = Mock(), Mock()
+        self.x.plugins._hooks['goal_advisory_context'] = [self.pending]
+        messages = [{'role': 'system', 'content': 'Stable prompt'},
+                    {'role': 'user', 'content': 'Synthetic investigation'}]
+        def finish(text):
+            return finish_text_response(agent,
+                assistant_message=SimpleNamespace(content=text, tool_calls=[]), response=None,
+                finish_reason='stop', messages=messages, api_messages=messages,
+                conversation_history=[], api_call_count=1, user_message='Synthetic investigation',
+                active_system_prompt='Stable prompt', final_response=None, _turn_exit_reason='unknown',
+                _preflight_compression_blocked=False, codex_ack_continuations=0,
+                truncated_response_parts=[], length_continue_retries=0,
+                _pending_verification_response=None, _pending_verification_response_previewed=False,
+                effective_task_id='synthetic')
+        with patch('agent.turn_finalizer.apply_llm_output_transform', side_effect=lambda a, v, **kw: (v, False, None)):
+            self.assertEqual(finish('Completed').action, 'continue')
+            stopped = finish('Completed again')
+        self.assertEqual(stopped.action, 'break')
+        self.assertEqual(stopped._turn_exit_reason, 'goal_advisory_paused')
+        self.assertNotEqual(stopped.final_response, 'Completed again')
+        self.assertIn('did not change', stopped.final_response)
+        self.assertEqual([m['role'] for m in messages],
+                         ['system', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant'])
+        self.assertEqual(messages[-1]['content'], stopped.final_response)
+        self.assertEqual(messages[-1]['finish_reason'], 'goal_advisory_paused')
+
 
     def test_native_finalizer_advisory_exhaustion_is_incomplete_with_shared_or_local_budget(self):
         from agent import turn_finalizer
         self.x.plugins._hooks['goal_advisory_context'] = [self.pending]
-        for calls_used, local_max in ((2, 2), (1, 10)):
+        for calls_used, local_max, stopped in ((2, 2, False), (1, 10, False), (1, 10, True)):
             with self.subTest(calls_used=calls_used, local_max=local_max):
+                self.x.manager.set('Synthetic finalization scenario')
                 agent, messages, candidate, verdict = self._stop()
+                if stopped:
+                    agent, messages, candidate, verdict = self._stop(agent)
                 agent.max_iterations = local_max
                 agent.model, agent.provider, agent.base_url = 'fixture', 'fixture', 'fixture://offline'
                 agent.context_compressor = SimpleNamespace(last_prompt_tokens=0)
@@ -321,10 +550,10 @@ class GoalAdvisoryTests(unittest.TestCase):
                         turn_finalizer, '_apply_output_hooks',
                         side_effect=lambda a, value, *args, **kw: (value, False, None)):
                     result = turn_finalizer.finalize_turn(agent,
-                        final_response=None, api_call_count=calls_used, interrupted=False, failed=False,
+                        final_response=verdict.final_response, api_call_count=calls_used, interrupted=False, failed=False,
                         messages=messages, conversation_history=[], effective_task_id='synthetic',
                         turn_id='synthetic-turn', user_message='Investigate', original_user_message='Investigate',
-                        _should_review_memory=False, _turn_exit_reason='budget_exhausted',
+                        _should_review_memory=False, _turn_exit_reason='goal_advisory_paused' if stopped else 'budget_exhausted',
                         _pending_verification_response=verdict.pending_verification_response,
                         _pending_verification_response_previewed=False)
                 self.assertFalse(result['completed'])
@@ -380,8 +609,7 @@ class GoalAdvisoryTests(unittest.TestCase):
         self.assertNotIn('PRIVATE_MAIN_DRAFT', str(fixture.calls))
         agent = self._agent()
         agent.session_id = fixture.sid
-        for _ in range(2):
-            self.assertTrue(self._stop(agent, 'Candidate answer')[-1].continue_turn)
+        self.assertTrue(self._stop(agent, 'Candidate answer')[-1].continue_turn)
         self.assertEqual(len(fixture.calls), 2)  # identical candidate only reads its receipt
         pending = review.review_state(fixture.resolved())['pending_findings']
         self.assertEqual(len(pending), 2)

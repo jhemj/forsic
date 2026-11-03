@@ -2,6 +2,7 @@ import {useTenant} from '@/contexts/tenant-context'
 import {useCallback, useEffect, useRef, useState} from 'react'
 import type {ServerRequest} from '@hermes/shared'
 import {readContextUsage, readRecentAvgTps, type ContextUsage} from '@/lib/forsic-context'
+import type {InvestigationGoal} from '@/lib/forsic-runtime'
 import {fetchJSON} from '@/lib/api'
 import {GatewayClient, type GatewayEvent} from '@/lib/gatewayClient'
 import {type InspectorEvent} from '@/lib/forsic-inspector'
@@ -10,7 +11,7 @@ export type {ConversationRow} from '@/lib/forsic-conversation'
 export type {ServerRequest} from '@hermes/shared'
 
 interface Options {sessionId: string; profile: string; active: boolean; onEvent?: (event: InspectorEvent) => void}
-interface Control {goal?: {status?: string; paused_reason?: string; pause_requested?: boolean} | null; revision?: string}
+interface Control {goal?: InvestigationGoal | null; revision?: string}
 interface Live {available: boolean; requested_session_id: string; stored_session_id: string; runtime_session_id: string | null; profile_name: string; running: boolean | null; control: Control}
 interface History {session_id: string; messages: unknown[]}
 interface Snapshot {
@@ -23,6 +24,8 @@ const empty = (scope: string): Snapshot => ({scope, reviewFresh: false, reviewIt
 interface Owner {send: (text: string) => Promise<boolean>; toggle: () => Promise<void>; refresh: () => Promise<void>; earlier: () => Promise<void>; approval: (choice: string) => Promise<void>}
 const authFailure = (error: unknown) => /4401|4403|401|403|auth|token|ticket/i.test(error instanceof Error ? error.message : String(error))
 const supportedRequests = new Set(['approval', 'clarify', 'sudo', 'secret', 'vault.unlock_prompt'])
+// Only a durable native partial checkpoint unlocks a new human follow-up.
+const runtimeHandoff = (control: Control | null) => control?.goal?.status === 'paused' && control.goal.paused_reason === 'runtime_budget_handoff' && control.goal.pause_requested !== true
 
 /** One native transport, bound to an existing stored conversation. Mount and reconnect only attach. */
 export function useForsicConversation({sessionId, profile, active, onEvent}: Options) {
@@ -224,19 +227,23 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
       if (identityRejected) throw new Error('대화 연결 정보를 다시 확인해야 합니다.')
       if (!live) throw new Error('저장된 대화를 먼저 확인해야 합니다.')
       await connect()
-      // This is called only by an explicit user action. No mount/reconnect cold resume.
+      // Called only by explicit user actions. No mount/background-reconnect cold resume.
       const result = await gateway.request('session.resume', {session_id: live.stored_session_id, profile, omit_messages: true, inline_images: false, close_on_disconnect: false})
       if (disposed) throw new Error('대화가 변경되었습니다.')
       acceptIdentity(result)
       await readControl()
     }
     const send = async (text: string): Promise<boolean> => {
-      if (disposed || operation || state.loading || state.uncertain || state.requests.length || state.control?.goal?.status === 'paused' || !text.trim()) return false
+      const handoff = runtimeHandoff(state.control)
+      if (disposed || operation || state.loading || state.uncertain || state.requests.length ||
+          state.control?.goal?.status === 'paused' && !handoff ||
+          handoff && (state.running || !state.connected || !state.verified || gateway.connectionState !== 'open') || !text.trim()) return false
       operation = true; publish({pending: true, error: null, submissionNotice: undefined})
       let submitted = false, acknowledged = false
       try {
         await ensureRuntime()
-        if (state.control?.goal?.status === 'paused') throw new Error('일시 중지된 조사는 재개 버튼으로 먼저 재개해 주세요.')
+        if (state.control?.goal?.status === 'paused' && !runtimeHandoff(state.control)) throw new Error('일시 중지된 조사는 재개 버튼으로 먼저 재개해 주세요.')
+        if (runtimeHandoff(state.control) && (state.running || !state.connected || !state.verified)) throw new Error('결과 정리와 대화 연결을 확인한 뒤 추가 질문을 보내 주세요.')
         let prompt = text, hidden = false
         if (text.startsWith('/')) {
           const [, name, arg = ''] = text.match(/^\/(\S+)\s*([\s\S]*)$/) ?? []
@@ -268,7 +275,7 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
       } finally {operation = false; publish({pending: false})}
     }
     const toggle = async () => {
-      if (disposed || operation || state.loading || state.uncertain || !state.control?.goal || state.running && (state.control.goal.pause_requested || state.control.goal.status === 'paused')) return
+      if (disposed || operation || state.loading || state.uncertain || !state.control?.goal || runtimeHandoff(state.control) || state.running && (state.control.goal.pause_requested || state.control.goal.status === 'paused')) return
       operation = true; publish({pending: true, error: null})
       try {
         const paused = state.control.goal.status === 'paused' || state.control.goal.pause_requested === true
@@ -297,7 +304,17 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
       } else request.respond({choice})
       publish({requests: state.requests.filter(item => item.id !== request.id)})
     }
-    const actions: Owner = {send, toggle, approval, refresh: async () => {terminalAuth = false; retries = 0; clearTimeout(retryTimer); retryTimer = undefined; identityRejected = false; await refresh()}, earlier: async () => {if (state.loading) return; await refresh(false, earlierOffset); earlierOffset += 100}}
+    const actions: Owner = {send, toggle, approval, refresh: async () => {
+      terminalAuth = false; retries = 0; clearTimeout(retryTimer); retryTimer = undefined; identityRejected = false
+      await refresh()
+      // Only this explicit reconnect action may attach a cold handoff. Native
+      // session.resume restores transport/identity; no goal resume or prompt.
+      // Mount, visibility and background reconnect still only read/attach live.
+      if (!disposed && runtimeHandoff(state.control) && !state.running && !state.verified) {
+        try {await ensureRuntime()}
+        catch (error) {publish({verified: false, error: error instanceof Error ? error.message : '대화 연결을 확인하지 못했습니다.'}); throw error}
+      }
+    }, earlier: async () => {if (state.loading) return; await refresh(false, earlierOffset); earlierOffset += 100}}
     owner.current = actions
     publish({loading: true})
     void refresh().catch(() => {})
@@ -311,14 +328,18 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
     const timer = setInterval(() => setClock(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [timing])
-  const statusText = timedConversationStatus(visible.statusText, visible.turnStartedAt, Boolean(visible.turnTimeObserved), clock)
+  const timedStatusText = timedConversationStatus(visible.statusText, visible.turnStartedAt, Boolean(visible.turnTimeObserved), clock)
   const pendingApproval = visible.requests.find(request => request.method === 'approval') ?? null
   const onApproval = useCallback((choice: string) => owner.current?.approval(choice) ?? Promise.resolve(), [])
   const connected = visible.connected && visible.verified
+  const handoff = runtimeHandoff(visible.control)
+  const handoffReady = handoff && connected && !visible.running
+  const statusText = handoff ? visible.running ? '결과 정리 중' : connected ? '결과 정리됨 · 추가 질문 가능' : '결과 정리됨 · 연결 확인 필요' : timedStatusText
   const pausing = visible.running && (visible.control?.goal?.pause_requested === true || visible.control?.goal?.status === 'paused' && visible.control.goal.paused_reason === 'user-safe-paused')
   const paused = visible.control?.goal?.status === 'paused' || visible.control?.goal?.pause_requested === true && !visible.running
   const connectionText = pausing ? '현재 응답과 도구 작업을 마친 뒤 안전하게 일시정지합니다.'
-    : paused ? '조사가 일시 중지되어 있어요. 재개하면 같은 대화를 이어갑니다.'
+    : handoffReady ? '현재까지의 결과와 남은 한계를 정리했습니다. 추가 조사할 내용을 보내면 새 조사 시간 범위로 이어갑니다.'
+    : paused && !handoff ? '조사가 일시 중지되어 있어요. 재개하면 같은 대화를 이어갑니다.'
     : visible.reconnecting ? '저장된 대화를 표시하고 있어요. 현재 연결을 다시 확인하고 있어요.'
     : visible.loading ? '저장된 대화와 현재 연결을 확인하고 있어요.'
     : !connected ? '저장된 대화를 표시하고 있어요. 현재 조사 실행 상태는 확인되지 않았습니다.'
@@ -328,10 +349,10 @@ export function useForsicConversation({sessionId, profile, active, onEvent}: Opt
   if (visible.submissionNotice) displayed.push({id: 'native:submission-status', role: 'assistant', speaker: 'system', kind: 'notice', text: visible.submissionNotice})
   if (visible.reviewError || visible.reviewOmitted) displayed.push({id: 'review:coverage', role: 'assistant', speaker: 'system', kind: 'notice', text: visible.reviewError ?? `검토 이력 표시 범위: 영수증 ${visible.reviewOmitted}건은 표시되지 않았거나 확인하지 못했습니다.`})
   return {rows: displayed, reviewActivity, reviewCaseId: visible.reviewCaseId, running: connected && visible.running, connected, connectionText, reconnecting: visible.reconnecting, loading: visible.loading,
-    contextUsage: visible.contextUsage, recentAvgTps: connected ? visible.recentAvgTps : null, statusText, error: visible.error, inputDisabled: !active || !sessionId.trim() || !profile.trim() || !visible.storedId || visible.loading || visible.pending || visible.uncertain || visible.requests.length > 0 || paused || pausing,
+    investigationGoal: visible.control?.goal, contextUsage: visible.contextUsage, recentAvgTps: connected ? visible.recentAvgTps : null, statusText, error: visible.error, inputDisabled: !active || !sessionId.trim() || !profile.trim() || !visible.storedId || visible.loading || visible.pending || visible.uncertain || visible.requests.length > 0 || paused && !handoffReady || pausing,
     hasMore: visible.hasMore, onLoadEarlier: useCallback(() => {void owner.current?.earlier().catch(() => {})}, []),
     send: useCallback((text: string) => owner.current?.send(text) ?? Promise.resolve(false), []), pendingRequests: visible.requests, pendingApproval, onApproval,
     reconnect: useCallback(() => {void owner.current?.refresh().catch(() => {})}, []), runtimeId: visible.runtimeId, storedId: visible.storedId,
-    control: {paused, pausing, pending: visible.pending, disabled: !active || visible.loading || visible.uncertain || !visible.control?.goal || pausing || paused && visible.running,
+    control: {paused, pausing, handoff, pending: visible.pending, disabled: !active || visible.loading || visible.uncertain || !visible.control?.goal || pausing || handoff || paused && visible.running,
       onToggle: useCallback(() => {void owner.current?.toggle()}, [])}}
 }

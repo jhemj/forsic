@@ -7,6 +7,15 @@ description: Investigate personal-data holdings, access, and external transfer a
 Apply when personal-data questions arise or findings change impact scope. Do not start whole-disk personal-data
 collection in every case. Check existing notes and results before repeating collection.
 
+When the user's report asks whether personal data exists, an unexamined accessible location is
+pending work, not a completed unavailable answer. First inventory relevant retained application,
+database, backup and user-data locations, then choose a bounded read-only content/schema check
+with discriminating value. Do not require a whole-disk scan or execute recovered code. If an exact
+parser, credential, permission or dataset is missing, describe that concrete constraint; preserve a
+useful partial finding from the locations actually inspected. Save changed possession/access/transfer
+answers in the current owning question before copying them into the report. The final report's
+answerability_checks must distinguish this remaining investigation from a constrained conclusion.
+
 Separate possession → access → exfiltration preparation → transfer into distinct propositions. Filenames alone do
 not establish possession; possession alone does not establish leakage. In relevant documents, exported CSVs, or
 logs, inspect schemas, record types, periods, and minimal samples. If an original database, archive, or document

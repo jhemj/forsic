@@ -159,7 +159,10 @@ class ReviewDispositionTests(unittest.TestCase):
         self.assertEqual(finding['review_ref'],field['review_ref'])
         self.assertEqual(finding['quote'],field['value'])
         self.assertEqual(finding['source_version'],source['source_version'])
-        self.assertEqual(finding['retrieval'],{'action':'source','source_id':self.inventory,'pointer':field['pointer'],'offset':0})
+        self.assertEqual(finding['pointer'], field['pointer'])
+        # Event-hash identity is not a source-page version; discover the current
+        # source handle before asking that reader for the retained field.
+        self.assertEqual(finding['retrieval'],{'action':'source','source_id':self.inventory})
         from forsic_plugin.independent_review_state import _presented_handles
         snapshot=review._collect(self.resolved())
         self.assertEqual(_presented_handles(request),snapshot['review_refs'])
@@ -184,7 +187,15 @@ class ReviewDispositionTests(unittest.TestCase):
         self.assertEqual(rejected['review_id'],result['review_id'])
         self.assertEqual(rejected['role'],'rejected_advice_not_evidence')
         self.assertIn('do not resubmit',rejected['recovery'])
-        self.assertIn('거절된 검토 의견',result['context'])
+        navigation=json.loads(result['context'])
+        self.assertEqual(navigation['rejected_findings_count'],len(result['rejected_findings']))
+        self.assertEqual(navigation['lookup']['arguments'],{'action':'review_inbox'})
+        from forsic_plugin.report_driven.review_actions import inbox
+        resolved=self.resolved()
+        fetched=inbox(self.case,{'_goal_id':resolved['goal_id'],'_session_id':self.sid,
+            '_session_lineage':[self.sid], '_independent_review_options':{
+                'session_id':self.sid,'intake_root':str(self.intake),'native_db':str(self.native)}})
+        self.assertEqual(fetched['rejected_findings'],result['rejected_findings'])
         review.goal_advisory_context(**self.kwargs(turns_used=100))
         self.assertEqual(len(self.calls),1)
 
@@ -408,16 +419,27 @@ class ReviewDispositionTests(unittest.TestCase):
         again=json.loads(handlers['forsic_read']({'path':'process.log'},session_id=self.sid))
         collected=again['independent_review']
         self.assertEqual(collected['role'],'independent_advice_not_source_evidence')
+        self.assertTrue(collected['advice_body_omitted'])
+        self.assertLess(len(json.dumps(collected,ensure_ascii=False)),650)
+        self.assertNotIn('context',collected)
         self.assertIn(collected['status'],('received','stale'));self.assertEqual(len(self.calls),1)
         repeated=json.loads(handlers['forsic_read']({'path':'process.log'},session_id=self.sid))
         self.assertNotIn('independent_review',repeated);self.assertEqual(len(self.calls),1)
         projection=json.loads(handlers['forsic_reporting']({'action':'state'},session_id=self.sid))
         pending=projection['independent_review']
         self.assertTrue(pending['requires_followup'])
-        self.assertEqual(pending['pending_finding_ids'],collected['pending_finding_ids'])
-        self.assertIn('quote',pending['findings'][0])
-        self.assertIn('review_inbox',pending['response_instruction'])
-        self.assertIn('review_response',pending['response_instruction'])
+        self.assertEqual(pending['pending_count'],collected['pending_count'])
+        self.assertEqual(pending['lookup'],collected['lookup'])
+        self.assertTrue(pending['advice_body_omitted'])
+        self.assertNotIn('findings',pending)
+        detail=json.loads(handlers['forsic_reporting'](pending['lookup']['arguments'],session_id=self.sid))
+        self.assertEqual(detail['pending_count'],pending['pending_count'])
+        self.assertTrue(detail['findings'][0]['source_reference']['quote'])
+        self.assertTrue(detail['findings'][0]['next_check'])
+        self.assertEqual(detail['findings'][0]['response_input']['save_call']['tool'],'forsic_review_response')
+        self.assertNotIn('independent_review',self.case.event(result['evidence_id'])['data'])
+        self.assertEqual(len(self.calls),1)
+        self.assertEqual(detail['response_contract']['tool'],'forsic_review_response')
 
     def test_reads_never_dispatch_after_cancel_failure_disabled_or_unavailable_checkpoint(self):
         self.setup_review();handlers=self.handlers()

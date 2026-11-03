@@ -175,7 +175,9 @@
     if(window.location?.pathname!=='/chat')return null;
     const params=new URLSearchParams(window.location.search || '');
     if(params.get('fresh')==='1' || !params.get('resume'))return null;
-    return {profile:params.get('profile') || '',sessionId:params.get('resume'),caseId:params.get('case') || ''};
+    // Match the chat's profile bootstrap when a deep link omits ?profile=.
+    const profile=params.get('profile') ?? (window.__HERMES_INITIAL_PROFILE__ || window.__HERMES_DASHBOARD_PROFILE__ || '');
+    return {profile:profile || 'default',sessionId:params.get('resume'),caseId:params.get('case') || ''};
   }
   function useReviewActivity() {
     const scope=reviewScope(), key=JSON.stringify(scope);
@@ -259,9 +261,10 @@
       ? `동시 조사 ${availability.active_count} / ${availability.limit}` : '';
     const reason=error ? '조사 상태를 확인하지 못해 새 조사를 만들 수 없습니다.'
       : availability?.reason || (availability ? '새 조사를 시작할 수 없습니다. 조사 상태를 다시 확인해 주세요.' : '조사 상태 확인 중');
+    const content=[h(NavIcon,{key:'icon',name:'plus'}),h('span',{key:'label',className:'forsic-nav-copy'},h('strong',null,'새 조사 시작'),h('small',null,capacity || '자료 연결하기'))];
     return allowed
-      ? h('a',{className:'forsic-action-secondary',href:workspaceURL('new'),'aria-current':current?'page':undefined,title:capacity?capacity+' · 일시정지·대기 포함':undefined},'+ 새 조사',capacity&&h('small',null,capacity))
-      : h('button',{type:'button',className:'forsic-action-secondary',disabled:true,title:reason,'aria-label':'+ 새 조사 · '+reason},'+ 새 조사',capacity&&h('small',null,capacity));
+      ? h('a',{className:'forsic-action-secondary',href:workspaceURL('new'),'aria-current':current?'page':undefined,title:capacity?capacity+' · 일시정지·대기 포함':undefined},...content)
+      : h('button',{type:'button',className:'forsic-action-secondary',disabled:true,title:reason,'aria-label':'새 조사 시작 · '+reason},...content);
   }
   function CloseInvestigationAction({active,onClosed}) {
     const [busy,setBusy]=R.useState(false), [error,setError]=R.useState('');
@@ -316,7 +319,7 @@
   }
   function SessionUsage({usage,detail=false}) {
     if(!usage)return h('small',{className:'forsic-session-usage'},'사용량 기록 없음');
-    const label='세션 누적 '+tokenCount(usage.total_tokens)+' 토큰';
+    const label='모델 사용량 · '+tokenCount(usage.total_tokens)+' 토큰';
     const description=`입력 ${tokenCount(usage.prompt_tokens)} 토큰 · 출력 ${tokenCount(usage.output_tokens)} 토큰 · 캐시 ${tokenCount(usage.cache_read_tokens)} 토큰`;
     return h(detail?'details':'small',{className:'forsic-session-usage',title:description},
       detail?h('summary',null,label):label,
@@ -338,12 +341,12 @@
       h('div',{className:'forsic-conversations'},...(item.conversations || []).map(c=>
         h('a',{key:c.id,className:'forsic-nav-item',href:conversationURL(item.case_id,c.resume_session_id),
           'aria-current':(c.session_ids || []).includes(currentSession)?'page':undefined},
-          h('span',{className:'forsic-conversation-label'},h('span',null,analysisTitle(item,c.resume_session_id)),h(SessionUsage,{usage:c.usage})),h('small',null,new Date(c.last_activity_at*1000).toLocaleDateString('ko-KR',{month:'short',day:'numeric'}))))),
+          h('span',{className:'forsic-conversation-label'},h('span',null,analysisTitle(item,c.resume_session_id))),h('small',null,new Date(c.last_activity_at*1000).toLocaleDateString('ko-KR',{month:'short',day:'numeric'}))))),
       !item.conversations?.length && h('p',{className:'forsic-empty'},'대화 없음'),
       error&&h('p',{role:'status'},error));
   }
   function NavIcon({name}) {
-    const paths={cases:'M3 7h7l2 2h9v11H3z M3 7V4h7l2 3',board:'M4 4h6v7H4z M14 4h6v4h-6z M4 15h6v5H4z M14 12h6v8h-6z',reports:'M6 3h9l4 4v14H6z M14 3v5h5 M9 12h7 M9 16h7',library:'M4 4h5v16H4z M9 4h5v16H9z M15 5l4-1 4 15-4 1z',settings:'M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1z M15 12a3 3 0 1 1-6 0 3 3 0 1 1 6 0'};
+    const paths={plus:'M12 5v14 M5 12h14',cases:'M3 7h7l2 2h9v11H3z M3 7V4h7l2 3',board:'M4 4h6v7H4z M14 4h6v4h-6z M4 15h6v5H4z M14 12h6v8h-6z',reports:'M6 3h9l4 4v14H6z M14 3v5h5 M9 12h7 M9 16h7',library:'M4 4h5v16H4z M9 4h5v16H9z M15 5l4-1 4 15-4 1z',settings:'M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1z M15 12a3 3 0 1 1-6 0 3 3 0 1 1 6 0'};
     return h('svg',{className:'forsic-nav-icon',viewBox:'0 0 24 24',width:18,height:18,fill:'none',stroke:'currentColor',strokeWidth:1.6,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':true},h('path',{d:paths[name]}));
   }
   function Sidebar() {
@@ -353,15 +356,16 @@
     const scope=data?.case?.scope || item?.scope || '';
     return h('aside',{className:'forsic-sidebar'},
       h('nav',{className:'forsic-global-nav','aria-label':'사건 탐색'},
-        h('a',{className:'forsic-nav-item',href:workspaceURL('history'),title:'기존 조사를 찾아 대화 열기','aria-current':route.section==='history'&&route.panel!=='library'?'page':undefined},h(NavIcon,{name:'cases'}),'조사 목록'),
+        h('a',{className:'forsic-nav-item',href:workspaceURL('history'),title:'기존 조사를 찾아 대화 열기','aria-current':route.section==='history'&&route.panel!=='library'?'page':undefined},h(NavIcon,{name:'cases'}),h('span',{className:'forsic-nav-copy'},h('strong',null,'조사 목록'),h('small',null,'기존 조사 열기'))),
         h(NewInvestigationAction,{availability,error:directoryError,current:route.section==='new'})),
       h(InvestigationAdmissionNotice,{availability,error:directoryError}),
+      h('div',{id:'forsic-progress-target'}),
       scope && h('section',{className:'forsic-context-card','aria-label':'증거 경로'},
         h('small',null,'증거 경로'),h('strong',null,scope.split('/').filter(Boolean).at(-1) || scope),
         h('details',null,h('summary',null,'전체 경로 보기'),h('code',null,scope)),
         data?.case?.selected_files?.length>0 && h('small',null,'선택한 파일 ',data.case.selected_files.length,'개')),
       caseId && scope ? h('div',{className:'forsic-current-case'},
-        h('header',{className:'forsic-case-heading'},h('small',null,'현재 사건'),h('h2',null,(data?.case?.question && data.case.question!=='질문 선택 대기' ? data.case.question : item?.question) || data?.case?.label || item?.label),h('code',null,caseId)),
+        h('header',{className:'forsic-case-heading'},h('small',null,'현재 사건'),h('h2',null,(data?.case?.question && data.case.question!=='질문 선택 대기' ? data.case.question : item?.question) || data?.case?.label || item?.label),h('details',null,h('summary',null,'사건 식별 정보'),h('code',null,caseId))),
         item && h(CaseConversations,{key:caseId,item,currentSession}),
         currentSession && item && h(SessionUsage,{detail:true,usage:item.conversations.find(c=>c.session_ids.includes(currentSession))?.usage}))
         : h('p',{className:'forsic-empty'},route.section==='new'?'원본 경로를 등록하면 사건과 첫 대화가 만들어집니다.':'사건을 선택하면 증거 경로와 대화가 여기에 표시됩니다.'),

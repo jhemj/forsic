@@ -175,9 +175,11 @@ class Case:
                 if not raw:
                     break
                 if b"\x00" in raw:
-                    raise ValueError("Binary content: use a format-specific forensic tool")
+                    from .image_reader import TextReadUnsupported
+                    raise TextReadUnsupported()
                 if len(raw) > 16384 and not raw.endswith(b"\n"):
-                    raise ValueError("Long record: use a format-specific parser; record was not truncated")
+                    from .image_reader import TextReadUnsupported
+                    raise TextReadUnsupported()
                 if line_no < start:
                     continue
                 if len(rows) >= count or used + len(raw) > 24000:
@@ -278,12 +280,22 @@ class Case:
                    '--mount', bind_mount(reader, '/reader.py', True),
                    '--mount', bind_mount(search, '/literal_search.py', True),
                    snapshot['images']['parser']['image_id'], 'python', '-B', '/reader.py', '/evidence/' + str(path.relative_to(self.root)), json.dumps(parser_args)]
+        # Earlier immutable environments retain their original self-contained reader.
+        # New readers keep the bounded EWF implementation in a separately pinned helper.
+        if 'ewf_reader.py' in snapshot['helpers']:
+            image_index = command.index(snapshot['images']['parser']['image_id'])
+            command[image_index:image_index] = ['--mount', bind_mount(
+                Path(snapshot['helpers']['ewf_reader.py']['path']), '/ewf_reader.py', True)]
         from .image_process import run_parser
         from .environments import EnvironmentManager
         with EnvironmentManager().execution(self,expected_snapshot=snapshot):
             data = run_parser(command, container, native_execution, cleanup_on_return=True)
         data['execution_policy'] = {'environment': snapshot, 'image_id': snapshot['images']['parser']['image_id']}
         data.pop('_image_targets', None)
+        if (not data.get('error') and args.get('filesystem_view') == 'target'
+                and (data.get('filesystem_view') != 'target'
+                     or data.get('filesystem_selection') != 'dissect_target_apply')):
+            raise ValueError('Pinned image reader did not confirm the requested target filesystem view')
         if archive_action:
             # Parser output cannot assert trusted host identity or its protocol.
             data.pop('archive_origin', None)
@@ -300,6 +312,8 @@ class Case:
             if binding(self, path) != image_binding:
                 raise ValueError('Image file or segment metadata changed during inspection; discard this result')
             data['_image_targets'] = [image_binding]
+        if data.get('error_type') == 'TextReadUnsupported':
+            data['error_code'] = 'text_read_unsupported'
         if data.get('error_type') == 'FileNotFoundError':
             data.update(outcome='not_found', meaning='Requested path was not found in this allocated filesystem view; deletion history is not established.')
         if 'times' in data:
@@ -309,6 +323,7 @@ class Case:
             data.update(line_start=data['lines'][0]['line'] if data['lines'] else None,
                         line_end=data['lines'][-1]['line'] if data['lines'] else None)
         return {'path': str(path.relative_to(self.root)), 'file_path': args.get('file_path', '/'),
+                'filesystem_view': args.get('filesystem_view', 'physical'),
                 'volume_offset': args.get('volume_offset'), 'parser': 'dissect.target',
                 'scope': 'Allocated filesystem entries only; no carving or deleted-file coverage.', **data}
 
@@ -558,6 +573,10 @@ class Case:
                     raise ValueError('Use the unchanged next_cursor from a saved search result in this case')
             if tool in ('forsic_note', 'forsic_reporting'):
                 call_args.update(_goal_id=request_context.get('goal_id', ''), _session_id=conversation_id)
+                if tool == 'forsic_reporting':
+                    # Host-owned native handoff, never accepted from model arguments.
+                    call_args['_report_source_goal_id'] = request_context.get('report_source_goal_id', '')
+                    call_args['_report_source_question_ids'] = request_context.get('report_source_question_ids', [])
                 call_args['_session_lineage'] = request_context.get('session_lineage', [conversation_id])
                 if request_context.get('independent_review_options'):
                     call_args['_independent_review_options'] = request_context['independent_review_options']
@@ -567,10 +586,13 @@ class Case:
         except (OSError, ValueError, KeyError, TypeError, StopIteration, ImportError, sqlite3.Error, subprocess.SubprocessError) as exc:
             result = {"error": str(exc), "error_type": type(exc).__name__, "failure_stage": "admission" if admission_error else "execution", "next_step": "Explain the limitation; change the path/scope/tool if supported. Do not repeat the identical failed call."}
             from .report_driven.model_pages import RetainedSourceError
-            if isinstance(exc,RetainedSourceError):
+            if isinstance(exc, RetainedSourceError):
                 result.update(exc.details)
             from .report_driven.grounded_judgment import CitationSelectionError
             if isinstance(exc, CitationSelectionError):
+                result.update(exc.details)
+            from .report_driven.narrative import ReportAuthoringError
+            if isinstance(exc, ReportAuthoringError):
                 result.update(exc.details)
             from .report_driven.report_reference import ReportReferenceError
             if isinstance(exc, ReportReferenceError):
@@ -578,6 +600,11 @@ class Case:
             from .execution_contract import ExecutionFailure
             if isinstance(exc, ExecutionFailure):
                 result.update(exc.details)
+            from .image_reader import TextReadUnsupported
+            if isinstance(exc, TextReadUnsupported):
+                result.update(exc.details)
+                result['capability_recovery']['schema_call']['arguments']['names'] = ['forsic_read_bytes']
+                result['next_step'] = 'Use forsic_read_bytes with the same path for a bounded byte preview. A preview does not decode records; select a supported format-specific parser for interpretation. Do not execute evidence.'
             from .image_reference import ImageSelectionError
             if isinstance(exc, ImageSelectionError):
                 result.update(exc.details)
@@ -632,6 +659,18 @@ class Case:
         if admission_error:
             result['execution_rejected'] = True
             result.update(backend_started=False,**admission_details)
+            if result.get('error_code') == 'invalid_arguments':
+                result['argument_recovery'] = {
+                    'schema_call': {'tool':'tool_describe','arguments':{'names':[submitted_tool]}},
+                    'automatic_retry': False,
+                    'instruction': 'Read the schema and correct the reported fields before retrying. '
+                        'Use only supported actions and fields; copy paths from returned inventories. '
+                        'No evidence presence or contents were observed.'}
+                related = {'search':'forsic_image_search','read':'forsic_image_read',
+                           'read_bytes':'forsic_image_read'}.get(args.get('action'))
+                if submitted_tool == 'forsic_image_files' and related:
+                    result['argument_recovery']['related_schema_call'] = {
+                        'tool':'tool_describe','arguments':{'names':[related]}}
             if admission_details.get('problems'):
                 result['next_step']='Correct the named argument fields before retrying. No evidence backend started; this is not a missing-file observation. For a planned check, copy its exact saved next_call; for discovery use the current evidence inventory. Do not infer a path or mission.'
             if admission_details.get('recovery'):
@@ -647,6 +686,11 @@ class Case:
                     'to read contents use the read tool. An empty search is neither operation.')
             if archive_entry:
                 result['next_step']='Use listing_ref and a displayed member_index with the current forsic_archive_read contract. Follow source_call/relist_call only when returned; do not substitute a target or resume a paused goal.'
+        if result.get('outcome') == 'not_found' and tool in ('forsic_read', 'forsic_read_bytes', 'forsic_search', 'forsic_list', 'forsic_image_files'):
+            result['capability_recovery'] = {'schema_call':{'tool':'tool_describe',
+                'arguments':{'names':['forsic_image_files' if tool == 'forsic_image_files' else 'forsic_list']}},
+                'automatic_retry':False}
+            result['next_step'] = 'Do not repeat the failed path guess. Inspect the selected filesystem inventory and copy returned paths before a new read/search. This absence covers only the selected path and filesystem view; it does not establish deletion.'
         if not result.get('error') and (tool == 'forsic_list' or
                 tool == 'forsic_image_files' and call_args.get('action') in ('list', 'archive_list')):
             from .filename_observations import observe_listing

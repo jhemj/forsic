@@ -3560,6 +3560,8 @@ display:
     goal_runtime_paused: "⏸ Goal paused — total runtime allowance exhausted. Partial work and pending reviews are preserved. Set a new goal with an explicit new allowance to continue."
     goal_runtime_interrupt: "Goal runtime allowance exhausted; paused with partial work preserved."
     goal_runtime_history_interrupt: "Goal runtime history is unavailable; paused with partial work preserved."
+    runtime_handoff_followup_started: "New scoped follow-up started (runtime ceiling: {seconds}s). Earlier findings and reports remain preserved."
+    runtime_handoff_followup_not_started: "The investigation state changed or its bounded allowance could not be saved. Your message is preserved; the follow-up did not start. Send it again after checking the current state."
     goal_iteration_handoff: "Execution checkpoint — checking progress and remaining goal budget"
     iteration_summary: "Model-request limit reached ({used}/{max}) — requesting a summary"
     uncompressed_context_overflow: "⚠️ Session context (~{tokens} tokens) exceeds the model context window (~{context_length} tokens) with compression disabled (compression.enabled: false). Use /compact to compress history or enable compression in config.yaml."

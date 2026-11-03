@@ -23,3 +23,24 @@ coordinates of selected evidence. If an absolute interval is difficult to establ
 before/after/overlap/same_boot. State shared-clock or boot-scope assumptions when needed. Preserve contradictory
 evidence as candidates and limitations. Keep observed numbers unchanged; explicitly correct mistaken activity
 interpretations in the same question.
+
+Prefer the narrowest defensible conclusion, not a repeated list of unknowns. A directly recorded initial-entry
+timestamp is not required for a qualified bound. If an independently supported unauthorized action required prior
+access, that action may bound entry as **no later than** its time, under the stated host/session linkage and clock
+assumptions. The same timestamp alone does not prove strictly earlier entry. Use a strict before/after relationship
+only when the supporting order excludes the boundary; leave the other endpoint null. Do not fill a missing day,
+year, timezone or seconds with guessed precision. A normal login, collection date or metadata update alone does
+not establish that intrusion occurred. In that situation give the supported account-activity window and retain
+intrusion linkage as the specific unresolved issue.
+
+Keep the source's literal timestamp unchanged. Save the inferred bound, subject, assumptions and contrary account
+in the current question's existing temporal/claim fields; the report presents that judgment rather than creating
+a second one. Report a short nominal lead such as `[supported date] 이전 (추정)` or `늦어도 [supported date] (추정)`,
+then the decisive premise and limitation. These are display patterns, not default dates or required conclusions.
+
+For image acquisition time, first read available acquisition logs and image-header fields and compare
+completion/chain-of-custody records. Return a supported interval or qualified completion-date statement
+when exact acquisition time is absent, preserving the distinct label and inference. A file birth/mtime
+or E01 conversion date alone cannot replace acquisition. Record both the useful narrowed answer and
+the remaining uncertainty. In report time_range.reasoning retain the selected source keys, time role,
+premise, strongest alternative and year/timezone basis; code validates those fields, not their entailment.

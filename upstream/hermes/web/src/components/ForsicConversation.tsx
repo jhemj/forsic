@@ -3,7 +3,7 @@ import type {ContextUsage} from '../lib/forsic-context'
 import {Markdown} from './Markdown'
 import type {InspectorToolCall} from '../lib/forsic-inspector'
 import {ForsicToolCall} from './ForsicToolCall'
-import {isRoutineReportingLookup} from '../lib/forsic-tool-detail'
+import {isRoutineReportingLookup, requiresToolAttention} from '../lib/forsic-tool-detail'
 import './forsic-conversation.css'
 
 import type {ConversationRow, ReviewChatItem, ReviewActivity} from '../lib/forsic-conversation'
@@ -31,7 +31,7 @@ export interface ForsicConversationProps {
 function ContextMeter({usage, connected}: {usage?: ContextUsage | null; connected: boolean}) {
   const percent = usage ? Math.round(usage.used / usage.maximum * 100) : null
   const count = (value: number) => new Intl.NumberFormat('en', {notation: 'compact', maximumFractionDigits: 1}).format(value)
-  const label = usage ? `${usage.estimated ? '추정 문맥' : '문맥'} ${count(usage.used)} / ${count(usage.maximum)} · ${percent}%` : '문맥 확인 중'
+  const label = usage ? `${usage.estimated ? '추정 문맥' : '문맥'} ${count(usage.used)} / ${count(usage.maximum)} · ${percent}%` : '사용량 미수신'
   const detail = usage ? `${usage.used.toLocaleString('ko-KR')} / ${usage.maximum.toLocaleString('ko-KR')} 토큰 · ${usage.estimated ? '추정값' : '최근 모델 입력 기준'}${connected ? '' : ' · 연결 끊김, 마지막 확인값'}` : '현재 문맥 사용량을 아직 받지 못했습니다.'
   return <div className="fc-context" title={detail} aria-label={detail} data-stale={!connected}>
     <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="7" pathLength="100" strokeDasharray={`${Math.min(100, percent ?? 0)} 100`}/></svg>
@@ -78,10 +78,12 @@ function ToolGroup({calls, timestamp}: {calls: InspectorToolCall[]; timestamp?: 
     else groups.push({lookup, calls: [call]})
   }
   const onlyLookups = groups.length === 1 && groups[0].lookup
-  return <section className="fc-tools" aria-label="도구 실행 기록">
+  const settled = calls.every(call => call.status === 'completed' && !requiresToolAttention(call))
+  const content = <>
     {calls.length > 1 && !onlyLookups && <div className="fc-tool-group-heading"><span>작업 {calls.length}건</span><ToolStartTime timestamp={timestamp}/>{failed > 0 && <span className="fc-tool-group-failures">실패 {failed}건</span>}</div>}
     <div className="fc-tool-list">{groups.map(group => group.lookup ? <LookupHistory key={group.calls[0].id} calls={group.calls} timestamp={onlyLookups ? timestamp : undefined}/> : <ForsicToolCall key={group.calls[0].id} call={group.calls[0]}/>)}</div>
-  </section>
+  </>
+  return <section className="fc-tools" aria-label="도구 실행 기록">{settled && calls.length > 1 && !onlyLookups ? <details className="fc-lookup-history fc-completed-tools"><summary><span>작업 기록 {calls.length}건</span>{failed > 0 && <span className="fc-tool-group-failures">실패 {failed}건</span>}<ToolStartTime timestamp={timestamp}/><span className="fc-lookup-hint">내역 보기</span></summary>{content}</details> : content}</section>
 }
 
 const receiptLabels: Record<string, string> = {received: '응답 수신', in_progress: '검토 중', delivery_unconfirmed: '수신 미확인', invalid_advice: '응답 확인 실패', incomplete: '불완전 응답', cancelled: '취소됨', stale: '이전 자료 기준', unavailable: '기록 확인 불가'}

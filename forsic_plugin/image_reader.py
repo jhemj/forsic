@@ -13,7 +13,7 @@ import time
 
 if __package__:
     from .literal_search import file_identity, search_entries, search_limit_problems, search_limit_schema
-else:  # The isolated Docker reader mounts only these two modules, not the plugin.
+else:  # The isolated Docker reader mounts sibling helpers, not the plugin.
     from literal_search import file_identity, search_entries, search_limit_problems, search_limit_schema
 
 
@@ -47,6 +47,7 @@ def image_action_contract(action=None, *, actions=None):
     return {'type':'object', 'required':['path','action',*IMAGE_ACTION_REQUIRED.get(action, ())],
         'properties':{
             'path':{'type':'string','minLength':1,'description':'E01 segment path from forsic_list (e.g. disk.e01), not an internal image path.'},
+            'filesystem_view':{'type':'string','enum':['physical','target'],'description':'Default physical selects one discovered volume. Explicit target applies Dissect OS/LVM detection and reads its mounted virtual filesystem; do not combine with volume_offset. Archive operations require physical.'},
             'action':{'type':'string','enum':list(exposed),'description':'Additional required fields: '+
                 '; '.join(name+'='+','.join(fields) for name,fields in exposed.items() if fields)+
                 ('. list accepts directories and defaults to the root; use stat or read_bytes for a selected file.' if 'list' in exposed else '')+
@@ -69,6 +70,7 @@ def image_read_entry_schema(*, allow_image_ref=False):
             'path':deepcopy(common['path']),
             'action':{'type':'string','enum':['read','read_bytes']},
             'file_path':deepcopy(common['file_path']),
+            'filesystem_view':deepcopy(common['filesystem_view']),
             'volume_offset':{'type':'integer'}, 'start_line':{'type':'integer'},
             'offset':{'type':'integer'}, 'length':{'type':'integer'},
             'reason':{'type':'string'},
@@ -90,7 +92,7 @@ def image_search_entry_schema(*, allow_image_ref=False):
     common = image_action_contract('search')['properties']
     linkage = image_read_entry_schema()['properties']
     schema = {'type':'object', 'required':['path','file_path','text'],
-        'properties':{**{k:deepcopy(common[k]) for k in ('path','file_path','text')},
+        'properties':{**{k:deepcopy(common[k]) for k in ('path','file_path','text','filesystem_view')},
             'volume_offset':{'type':'integer'}, 'recursive':{'type':'boolean'}, **search_limit_schema(),
             'cursor_ref':reference_schema(), 'reason':{'type':'string'},
             **{k:deepcopy(linkage[k]) for k in ('mission_id','mission_version')}},
@@ -119,6 +121,37 @@ class InvalidArguments(ValueError):
         super().__init__('Invalid tool arguments: '+json.dumps(problems,ensure_ascii=False))
 
 
+class TextReadUnsupported(ValueError):
+    """A line reader cannot measure this binary or oversized record as text."""
+    def __init__(self):
+        self.details = {'error_code':'text_read_unsupported', 'records_decoded':False,
+            'capability_recovery':{'schema_call':{'tool':'tool_describe',
+                'arguments':{'names':['forsic_image_read']}}, 'automatic_retry':False},
+            'next_step':'Use forsic_image_read action=read_bytes with the same image/file selection for a bounded byte preview. A preview does not decode records. Select a supported format-specific parser for structured interpretation; do not execute evidence.'}
+        super().__init__('Binary or long record cannot be presented by the line-text reader')
+
+
+def filesystem_view_problems(args, location='arguments'):
+    view = args.get('filesystem_view', 'physical')
+    problems = []
+    if view not in ('physical', 'target'):
+        problems.append({'path': location+'.filesystem_view', 'allowed_values': ['physical', 'target']})
+    if 'volume_offset' in args and type(args['volume_offset']) is not int:
+        problems.append({'path': location+'.volume_offset', 'expected_type': 'integer'})
+    if view == 'target':
+        if 'volume_offset' in args:
+            problems.append({'path': location+'.volume_offset', 'error': 'target view cannot select a physical volume_offset'})
+        if args.get('action') in ('archive_list', 'archive_read'):
+            problems.append({'path': location+'.filesystem_view', 'error': 'archive operations require physical view'})
+    return problems
+
+
+def validate_filesystem_view(args):
+    problems = filesystem_view_problems(args)
+    if problems:
+        raise InvalidArguments(problems, image_action_contract())
+
+
 def image_action_problems(args, location='arguments'):
     if not isinstance(args,dict):return [{'path':location,'expected_type':'object'}]
     action=args.get('action')
@@ -132,6 +165,7 @@ def image_action_problems(args, location='arguments'):
             problems.append({'path':location+'.'+key,'expected_type':'nonempty_string'})
     if isinstance(action,str) and action not in IMAGE_ACTION_REQUIRED:
         problems.append({'path':location+'.action','allowed_values':list(IMAGE_ACTION_REQUIRED)})
+    problems.extend(filesystem_view_problems(args, location))
     if action=='archive_read' and 'member_index' in args:
         index=args['member_index']
         if type(index) is not int or index<0:
@@ -356,21 +390,50 @@ def archive_origin(parts, volume_offset):
 
 
 class OpenedImage:
-    """One read-only image invocation; keep filesystem use inside open_image."""
-    def __init__(self, path, parts, volumes):
-        self.path, self.parts, self.volumes = path, parts, volumes
+    """One read-only invocation; retain filesystem objects only inside open_image."""
+    def __init__(self, path, parts, target, filesystem_view):
+        self.path, self.parts, self.target = path, parts, target
+        self.volumes, self.filesystem_view = list(target.volumes), filesystem_view
 
     def filesystem(self, volume_offset=None):
+        if self.filesystem_view != 'physical':
+            raise ValueError('Use selected_filesystem for the explicit target view')
         from dissect.target.filesystem import open as open_filesystem
         volume = select_volume(self.volumes, volume_offset)
         return volume, open_filesystem(volume)
 
+    def selected_filesystem(self, volume_offset=None):
+        if self.filesystem_view == 'target':
+            if volume_offset is not None:
+                raise ValueError('target view cannot select a physical volume_offset')
+            mounts = [{'path': str(path), 'filesystem_type': str(getattr(fs, '__type__', type(fs).__name__))}
+                      for path, fs in sorted(self.target.fs.mounts.items())]
+            return {'filesystem_view': 'target', 'filesystem_selection': 'dissect_target_apply',
+                    'target_mounts': mounts}, self.target.fs
+        volume, fs = self.filesystem(volume_offset)
+        return {'filesystem_view': 'physical', 'volume_offset': volume.offset,
+                'volume_selection': 'only_discovered_volume' if volume_offset is None else 'explicit'}, fs
+
 
 @contextmanager
-def open_image(image, *, parts=None):
+def selected_filesystem(opened, args):
+    """Keep selection provenance on filesystem errors without reclassifying them."""
+    selected, fs = opened.selected_filesystem(args.get('volume_offset'))
+    try:
+        yield selected, fs
+    except Exception as exc:
+        exc.details = {**selected, **getattr(exc, 'details', {})}
+        raise
+
+
+@contextmanager
+def _open_disk_target(image, *, parts=None):
     """Open validated classic E01 segments; close every handle on success/failure."""
     from dissect.target import Target
-    from dissect.target.containers.ewf import EwfContainer
+    if __package__:
+        from .ewf_reader import open_ewf_container
+    else:
+        from ewf_reader import open_ewf_container
 
     path = Path(image)
     if path.suffix.lower() != '.e01':
@@ -390,12 +453,35 @@ def open_image(image, *, parts=None):
                 raise ValueError('Missing, reordered or unsupported EWF segment')
             handle.seek(0)
             handles.append(handle)
-        disk = EwfContainer(handles)
+        disk = open_ewf_container(handles)
         stack.callback(disk.close)
         target = Target(path)
         target.disks.add(disk)
-        target.disks.apply()
-        yield OpenedImage(path, parts, list(target.volumes))
+        yield path, parts, target
+
+
+@contextmanager
+def open_image(image, *, parts=None, filesystem_view='physical'):
+    """Open validated segments using an explicit physical or mounted target view."""
+    validate_filesystem_view({'filesystem_view': filesystem_view})
+    with _open_disk_target(image, parts=parts) as (path, parts, target):
+        if filesystem_view == 'target':
+            target.apply()
+        else:
+            target.disks.apply()
+        yield OpenedImage(path, parts, target, filesystem_view)
+
+
+@contextmanager
+def open_target(image):
+    """Read-only batch access to Dissect's applied OS/LVM virtual filesystem.
+
+    Keep all target and file use inside this context. Uses the same validated
+    sibling segment handles and bounded EWF lifetime as open_image.
+    """
+    with _open_disk_target(image) as (_, _, target):
+        target.apply()
+        yield target
 
 
 def inspect(image, args):
@@ -413,91 +499,90 @@ def inspect(image, args):
     if selection and (origin['volume_offset'] != selection['archive_origin']['volume_offset']
                       if host_bound else origin != selection['archive_origin']):
         raise ValueError('Image segments or selected volume changed since listing; explicitly re-list before reading')
-    with open_image(path, parts=parts) as opened:
+    with open_image(path, parts=parts, filesystem_view=args.get('filesystem_view', 'physical')) as opened:
         volumes = opened.volumes
         if args['action'] == 'volumes':
-            return {'volumes': [{'offset': v.offset, 'bytes': v.size, 'name': v.name} for v in volumes], 'segments': len(parts)}
-        volume, fs = opened.filesystem(args.get('volume_offset'))
-        selected = {'volume_offset': volume.offset,
-                    'volume_selection': 'only_discovered_volume' if args.get('volume_offset') is None else 'explicit'}
-        node = fs.get(args.get('file_path', '/'))
-        if args['action'] in ('archive_list', 'archive_read'):
-            origin['volume_offset'] = volume.offset
-            if selection and (volume.offset != selection['archive_origin']['volume_offset']
-                              if host_bound else origin != selection['archive_origin']):
-                raise ValueError('Selected volume differs from the retained archive listing')
-            result = inspect_archive(node, args, selection)
-            if origin != archive_origin(image_segments(path), volume.offset):
-                raise ValueError('Image segments changed during archive inspection')
-            return {**selected, **result, 'archive_origin': origin}
-        if args['action'] == 'search':
-            source = {'segments': [(str(p), file_identity(p.stat())) for p in parts],
-                      'volume_offset': volume.offset}
-            result = search_node(node, args, source)
-            if source['segments'] != [(str(p), file_identity(p.stat())) for p in parts]:
-                raise ValueError('Image segments changed during search')
-            return {**selected, **result}
-        if args['action'] == 'hash':
-            source = [(str(p), file_identity(p.stat())) for p in parts]
-            result = hash_node(node)
-            if source != [(str(p), file_identity(p.stat())) for p in parts]:
-                raise ValueError('Image segments changed during hashing; no complete hash is available')
-            return {**selected, **result}
-        if args['action'] == 'stat':
-            info = node.lstat()
-            return {**selected, 'inode': info.st_ino, 'bytes': info.st_size, 'mode': stat.filemode(info.st_mode),
-                    'times': {'mtime': info.st_mtime, 'ctime': info.st_ctime, 'atime': info.st_atime},
-                    'time_basis': 'filesystem epoch; ctime is not necessarily creation'}
-        if args['action'] == 'read_bytes':
-            offset = max(0, int(args.get('offset', 0)))
-            with node.open() as stream:
-                stream.seek(offset)
-                raw = stream.read(min(12000, max(1, int(args.get('length', 4096)))))
-            preview = byte_preview(raw, offset, node.stat().st_size)
-            return {**selected, **preview, 'complete_file': preview['complete_content']}
-        if args['action'] == 'list':
-            info = node.lstat()
-            if stat.S_ISREG(info.st_mode):
-                error = NotADirectoryError('list requires a directory; the selected path is a regular file')
-                error.details = {**selected, 'file_path': args.get('file_path', '/'),
-                    'observed_kind': 'regular_file', 'representation': 'file_metadata',
-                    'content_not_measured': True, 'inode': info.st_ino, 'bytes': info.st_size,
-                    'mode': stat.filemode(info.st_mode),
-                    'recovery_arguments': {'action': 'read_bytes', 'path': str(path),
-                        'volume_offset': volume.offset, 'file_path': args.get('file_path', '/'),
-                        'offset': 0, 'length': 4096}}
-                raise error
-            offset = max(0, int(args.get('offset', 0)))
-            selected = {**selected, 'representation': 'directory_inventory', 'content_not_measured': True}
-            rows = []
-            for i, entry in enumerate(node.scandir()):
-                if i < offset:
-                    continue
-                if len(rows) == 100:
-                    return {**selected, 'entries': rows, 'next_offset': offset + 100, 'complete': False, 'listing_complete': False}
-                info = entry.get().lstat()
-                rows.append({'path': entry.path, 'bytes': info.st_size, 'inode': info.st_ino, 'mode': stat.filemode(info.st_mode), 'mtime_epoch': info.st_mtime})
-            return {**selected, 'entries': rows, 'next_offset': None, 'complete': True, 'listing_complete': offset == 0}
-        if args['action'] == 'read':
-            start = max(1, int(args.get('start_line', 1)))
-            rows, size = [], 0
-            selected = {**selected, 'encoding': 'UTF-8 replacement for undecodable bytes',
-                        'representation': 'line_text', 'records_decoded': False}
-            with node.open() as stream:
-                for number in range(1, start + 80):
-                    raw = stream.readline(16385)
-                    if not raw:
-                        return {**selected, 'lines': rows, 'next_line': None, 'complete_file': start == 1, 'encoding': 'UTF-8 replacement for undecodable bytes'}
-                    if b'\x00' in raw or len(raw) > 16384:
-                        raise ValueError('Binary or long record requires a format-specific parser')
-                    if number < start:
+            selection = opened.selected_filesystem()[0] if opened.filesystem_view == 'target' else {'filesystem_view': 'physical'}
+            return {**selection, 'volume_inventory': 'discovered_volumes', 'volumes': [{'offset': v.offset, 'bytes': v.size, 'name': v.name} for v in volumes], 'segments': len(parts)}
+        with selected_filesystem(opened, args) as (selected, fs):
+            node = fs.get(args.get('file_path', '/'))
+            if args['action'] in ('archive_list', 'archive_read'):
+                origin['volume_offset'] = selected['volume_offset']
+                if selection and (selected['volume_offset'] != selection['archive_origin']['volume_offset']
+                                  if host_bound else origin != selection['archive_origin']):
+                    raise ValueError('Selected volume differs from the retained archive listing')
+                result = inspect_archive(node, args, selection)
+                if origin != archive_origin(image_segments(path), selected['volume_offset']):
+                    raise ValueError('Image segments changed during archive inspection')
+                return {**selected, **result, 'archive_origin': origin}
+            if args['action'] == 'search':
+                source = {'segments': [(str(p), file_identity(p.stat())) for p in parts],
+                          **selected}
+                result = search_node(node, args, source)
+                if source['segments'] != [(str(p), file_identity(p.stat())) for p in parts]:
+                    raise ValueError('Image segments changed during search')
+                return {**selected, **result}
+            if args['action'] == 'hash':
+                source = [(str(p), file_identity(p.stat())) for p in parts]
+                result = hash_node(node)
+                if source != [(str(p), file_identity(p.stat())) for p in parts]:
+                    raise ValueError('Image segments changed during hashing; no complete hash is available')
+                return {**selected, **result}
+            if args['action'] == 'stat':
+                info = node.lstat()
+                return {**selected, 'inode': info.st_ino, 'bytes': info.st_size, 'mode': stat.filemode(info.st_mode),
+                        'times': {'mtime': info.st_mtime, 'ctime': info.st_ctime, 'atime': info.st_atime},
+                        'time_basis': 'filesystem epoch; ctime is not necessarily creation'}
+            if args['action'] == 'read_bytes':
+                offset = max(0, int(args.get('offset', 0)))
+                with node.open() as stream:
+                    stream.seek(offset)
+                    raw = stream.read(min(12000, max(1, int(args.get('length', 4096)))))
+                preview = byte_preview(raw, offset, node.stat().st_size)
+                return {**selected, **preview, 'complete_file': preview['complete_content']}
+            if args['action'] == 'list':
+                info = node.lstat()
+                if stat.S_ISREG(info.st_mode):
+                    error = NotADirectoryError('list requires a directory; the selected path is a regular file')
+                    error.details = {**selected, 'file_path': args.get('file_path', '/'),
+                        'observed_kind': 'regular_file', 'representation': 'file_metadata',
+                        'content_not_measured': True, 'inode': info.st_ino, 'bytes': info.st_size,
+                        'mode': stat.filemode(info.st_mode),
+                        'recovery_arguments': {'action': 'read_bytes', 'path': str(path),
+                            **{k: v for k, v in selected.items() if k in ('filesystem_view', 'volume_offset')}, 'file_path': args.get('file_path', '/'),
+                            'offset': 0, 'length': 4096}}
+                    raise error
+                offset = max(0, int(args.get('offset', 0)))
+                selected = {**selected, 'representation': 'directory_inventory', 'content_not_measured': True}
+                rows = []
+                for i, entry in enumerate(node.scandir()):
+                    if i < offset:
                         continue
-                    if size + len(raw) > 24000:
-                        return {**selected, 'lines': rows, 'next_line': number, 'complete_file': False}
-                    rows.append({'line': number, 'text': raw.decode('utf-8', errors='replace').rstrip('\r\n')})
-                    size += len(raw)
-            return {**selected, 'lines': rows, 'next_line': start + len(rows), 'complete_file': False}
-        raise ValueError('Supported actions are volumes, list, read, read_bytes, search, stat, hash, archive_list and archive_read')
+                    if len(rows) == 100:
+                        return {**selected, 'entries': rows, 'next_offset': offset + 100, 'complete': False, 'listing_complete': False}
+                    info = entry.get().lstat()
+                    rows.append({'path': entry.path, 'bytes': info.st_size, 'inode': info.st_ino, 'mode': stat.filemode(info.st_mode), 'mtime_epoch': info.st_mtime})
+                return {**selected, 'entries': rows, 'next_offset': None, 'complete': True, 'listing_complete': offset == 0}
+            if args['action'] == 'read':
+                start = max(1, int(args.get('start_line', 1)))
+                rows, size = [], 0
+                selected = {**selected, 'encoding': 'UTF-8 replacement for undecodable bytes',
+                            'representation': 'line_text', 'records_decoded': False}
+                with node.open() as stream:
+                    for number in range(1, start + 80):
+                        raw = stream.readline(16385)
+                        if not raw:
+                            return {**selected, 'lines': rows, 'next_line': None, 'complete_file': start == 1, 'encoding': 'UTF-8 replacement for undecodable bytes'}
+                        if b'\x00' in raw or len(raw) > 16384:
+                            raise TextReadUnsupported()
+                        if number < start:
+                            continue
+                        if size + len(raw) > 24000:
+                            return {**selected, 'lines': rows, 'next_line': number, 'complete_file': False}
+                        rows.append({'line': number, 'text': raw.decode('utf-8', errors='replace').rstrip('\r\n')})
+                        size += len(raw)
+                return {**selected, 'lines': rows, 'next_line': start + len(rows), 'complete_file': False}
+            raise ValueError('Supported actions are volumes, list, read, read_bytes, search, stat, hash, archive_list and archive_read')
 
 
 def main(argv=None):

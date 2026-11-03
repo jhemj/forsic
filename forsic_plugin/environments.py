@@ -26,8 +26,9 @@ from .execution_contract import ExecutionFailure
 SCHEMA = 1
 API_VERSION = 1
 SOURCE = Path(__file__).resolve().parents[1]
-HELPERS = ('image_reader.py', 'literal_search.py', 'image_access.py',
-           'structured_query.py', 'login_records.py', 'triage_scan.py', 'sensitive_scan.py')
+LEGACY_HELPERS = ('image_reader.py', 'literal_search.py', 'image_access.py',
+                  'structured_query.py', 'login_records.py', 'triage_scan.py', 'sensitive_scan.py')
+HELPERS = (*LEGACY_HELPERS, 'ewf_reader.py', 'static_scan.py')
 IMAGE_RE = re.compile(r'sha256:[0-9a-f]{64}')
 SAFE_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}')
 MAX_BUNDLE_BYTES = 32 * 1024**3
@@ -348,10 +349,13 @@ class EnvironmentManager:
                 subprocess.run(['docker', 'rm', '-f', name], capture_output=True, timeout=15, check=False)
         return receipts
 
-    def _mount_smoke(self, images, operation, helper_directory):
+    def _mount_smoke(self, images, operation, helper_directory, helper_names=None):
         """Qualify exact preserved helper binds and an owning-scope work leaf."""
         from .image_process import bind_mount
-        expected = {name: _file_sha(helper_directory / name) for name in HELPERS}
+        names = tuple(helper_names) if helper_names is not None else HELPERS
+        if set(names) not in (set(LEGACY_HELPERS), set(HELPERS)):
+            raise ValueError('Environment helper set is incomplete')
+        expected = {name: _file_sha(helper_directory / name) for name in names}
         script = """import hashlib,json,os,sys
 from pathlib import Path
 expected=json.loads(sys.argv[1])
@@ -375,7 +379,7 @@ print(json.dumps({'helper_sha256':expected,'helpers_readonly':True,'workspace_wr
                 argv = ['docker', 'run', '--rm', '--name', name, '--pull=never', '--network=none',
                     '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
                     '--user', f'{os.getuid()}:{os.getgid()}', '--memory=1g', '--pids-limit=64']
-                for helper in HELPERS:
+                for helper in names:
                     argv.extend(['--mount', bind_mount(helper_directory / helper, '/opt/forsic/' + helper, True)])
                 argv.extend(['--mount', bind_mount(temporary, '/work', False), image['image_id'],
                              'python', '-B', '-c', script, json.dumps(expected), uuid.uuid4().hex])
@@ -420,7 +424,7 @@ print(json.dumps({'helper_sha256':expected,'helpers_readonly':True,'workspace_wr
                     if _file_sha(directory / 'helpers' / name) != helper_identity[name]['sha256']:
                         raise ValueError('Preserved helper copy integrity mismatch: ' + name)
             self._stage(operation, 'mount_verification')
-            mounts = self._mount_smoke(images, operation, directory / 'helpers')
+            mounts = self._mount_smoke(images, operation, directory / 'helpers', helper_identity)
             self._change_operation(operation, mount_checks=mounts,
                 checks_scope='Exact preserved helper binds and disposable management workspace; future case workspace paths are not certified')
             self._stage(operation, 'registration')
@@ -840,7 +844,7 @@ print(json.dumps({'helper_sha256':expected,'helpers_readonly':True,'workspace_wr
                 if environment_id != manifest['environment_id'] or environment_id != bundle['environment_id']:
                     raise ValueError('Offline environment manifest mismatch')
                 _validate_components(manifest)
-                if manifest.get('extension_api') != API_VERSION or set(manifest['helpers']) != set(HELPERS):
+                if manifest.get('extension_api') != API_VERSION:
                     raise ValueError('Offline helpers or API incompatible')
                 for name, value in manifest['helpers'].items():
                     if _file_sha(stage/'environment/helpers'/name) != value['sha256']:
@@ -913,7 +917,8 @@ print(json.dumps({'helper_sha256':expected,'helpers_readonly':True,'workspace_wr
 def _validate_components(manifest):
     if not isinstance(manifest.get('images'),dict) or set(manifest['images'])!={'analysis','parser'}:
         raise ValueError('Environment requires analysis and parser image roles')
-    if not isinstance(manifest.get('helpers'),dict) or set(manifest['helpers'])!=set(HELPERS):
+    if (not isinstance(manifest.get('helpers'), dict)
+            or set(manifest['helpers']) not in (set(LEGACY_HELPERS), set(HELPERS))):
         raise ValueError('Environment helper set is incomplete')
     for image in manifest['images'].values():
         if not isinstance(image,dict) or not IMAGE_RE.fullmatch(image.get('image_id','')):

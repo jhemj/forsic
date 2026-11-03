@@ -60,10 +60,10 @@ class NativeClarificationNotificationTests(unittest.TestCase):
         self.mirror = Mirror(self.home,self.intake,self.root/'mirror.json','synthetic-session',-123)
         self.mirror.initialize()
 
-    def execute(self, callback, identity):
+    def execute(self, callback, identity, questions=None):
         """Use the actual pre/post hook dispatch; stub only unrelated runner I/O."""
         from agent import tool_executor as native
-        args = {'questions':[{'question':'합성 사용자에게 조사 범위를 확인합니다','choices':['선택한 범위','확장 범위']}]}
+        args = {'questions': questions or [{'question':'합성 사용자에게 조사 범위를 확인합니다','choices':['선택한 범위','확장 범위']}]}
         agent = SimpleNamespace(session_id='synthetic-session',_current_turn_id='turn-'+identity,
             _current_api_request_id='api-'+identity,clarify_callback=callback,verbose_logging=False,
             _tool_guardrails=SimpleNamespace(before_call=lambda *_:SimpleNamespace(allows_execution=True)))
@@ -123,6 +123,98 @@ class NativeClarificationNotificationTests(unittest.TestCase):
 
     def test_registered_native_hooks_hide_cancelled_request_without_inventing_answer(self):
         self.check_wait_and_settlement('cancelled',None)
+
+    def settle(self, request_id, questions, *, answers=None, outcome='submitted', session_id='synthetic-session'):
+        from tools.clarify_tool import _result
+        result = json.loads(_result(questions, {'answers': answers or {}, 'outcome': outcome,
+                                               'server_request_id': request_id}))
+        plugins.invoke_hook('clarification_resolved', session_id=session_id,
+                            server_request_id=request_id, questions=questions, result=result)
+        return result
+
+    def test_pending_return_keeps_question_visible_until_native_submission(self):
+        observed = []
+        def callback(questions):
+            observed.extend(questions)
+            return {'answers': {}, 'outcome': 'pending', 'server_request_id': 'srq-submitted'}
+        result = self.execute(callback, 'background')
+        self.assertEqual(result['outcome'], 'pending')
+        self.assertEqual(result['responses'][0]['status'], 'unanswered')
+        self.assertIsNone(result['responses'][0]['user_response'])
+        self.assertEqual(len(self.events('user_input_pending')), 1)
+        self.assertEqual(self.events('user_input_resolved'), [])
+        self.assertEqual(len(self.mirror.batch()), 1)
+        final = self.settle('srq-submitted', observed, answers={'q0': '선택한 범위'})
+        self.assertEqual(final['responses'][0]['user_response'], '선택한 범위')
+        requested = self.events('user_input_requested')[0]
+        resolved = self.events('user_input_resolved')
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0]['request_id'], requested['request_id'])
+        self.assertEqual(resolved[0]['server_request_id'], 'srq-submitted')
+        self.assertEqual(resolved[0]['native_call'], requested['native_call'])
+        self.assertEqual(resolved[0]['outcome'], 'submitted')
+        self.assertNotIn('responses', resolved[0])
+        self.assertNotIn('answers', resolved[0])
+        self.assertEqual(self.mirror.batch(), [])
+        self.settle('srq-submitted', observed, answers={'q0': '선택한 범위'})
+        self.assertEqual(len(self.events('user_input_resolved')), 1)
+
+    def test_timeout_keeps_unanswered_fields_unknown_and_does_not_copy_answers(self):
+        observed = []
+        def callback(questions):
+            observed.extend(questions)
+            return {'answers': {}, 'outcome': 'pending', 'server_request_id': 'srq-timeout'}
+        self.execute(callback, 'timeout')
+        self.assertEqual(len(self.mirror.batch()), 1)
+        final = self.settle('srq-timeout', observed, outcome='timed_out')
+        self.assertEqual(final['responses'][0]['status'], 'unanswered')
+        self.assertIsNone(final['responses'][0]['user_response'])
+        self.assertEqual(self.events('user_input_resolved')[0]['outcome'], 'timed_out')
+        self.assertEqual(self.mirror.batch(), [])
+
+    def test_partial_native_submission_preserves_each_question_status(self):
+        observed = []
+        def callback(questions):
+            observed.extend(questions)
+            return {'answers': {}, 'outcome': 'pending', 'server_request_id': 'srq-partial'}
+        self.execute(callback, 'partial', questions=[{'question': 'First question'}, {'question': 'Second question'}])
+        final = self.settle('srq-partial', observed, answers={'q0': 'NATIVE ANSWER ONLY'})
+        self.assertEqual([r['status'] for r in final['responses']], ['answered', 'unanswered'])
+        self.assertIsNone(final['responses'][1]['user_response'])
+        self.assertNotIn('NATIVE ANSWER ONLY', json.dumps(self.events('user_input_resolved')))
+        self.assertEqual(self.mirror.batch(), [])
+
+    def test_native_answer_before_pending_post_hook_is_correlated(self):
+        def callback(questions):
+            self.settle('srq-race', questions, answers={'q0': 'NATIVE EARLY ANSWER'})
+            self.assertEqual(self.events('user_input_resolved'), [])
+            return {'answers': {}, 'outcome': 'pending', 'server_request_id': 'srq-race'}
+        self.execute(callback, 'early')
+        resolved = self.events('user_input_resolved')
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0]['request_id'], self.events('user_input_requested')[0]['request_id'])
+        self.assertEqual(resolved[0]['outcome'], 'submitted')
+        self.assertEqual(self.mirror.batch(), [])
+        self.assertNotIn('NATIVE EARLY ANSWER', json.dumps(self.events('user_input_resolution_received')))
+
+    def test_settlement_and_mirror_resolution_are_session_scoped(self):
+        observed = []
+        def callback(questions):
+            observed.extend(questions)
+            return {'answers': {}, 'outcome': 'pending', 'server_request_id': 'srq-shared'}
+        self.execute(callback, 'owner')
+        # A second conversation can share the case, but never the live request.
+        (self.intake/(hashlib.sha256(b'other-session').hexdigest()+'.json')).write_text(
+            json.dumps({'manifest': str(self.case.manifest), 'stage': 'ready'}))
+        self.settle('srq-shared', observed, session_id='other-session')
+        self.assertEqual(self.events('user_input_resolved'), [])
+        requested = self.events('user_input_requested')[0]
+        self.case.record('user_input_resolved', {'request_id': requested['request_id']}, 'other-session')
+        self.assertEqual(len(self.mirror.batch()), 1)
+        self.settle('srq-unrelated', observed)
+        self.assertEqual(len(self.mirror.batch()), 1)
+        self.settle('srq-shared', observed)
+        self.assertEqual(self.mirror.batch(), [])
 
 
 if __name__ == '__main__': unittest.main()

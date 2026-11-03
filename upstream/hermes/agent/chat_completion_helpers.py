@@ -2359,9 +2359,12 @@ def _chat_summary_attempt(agent, api_messages: list, api_request_id: str):
 _SUMMARY_ATTEMPT_BUILDERS = {"codex_responses": _codex_summary_attempt, "anthropic_messages": _anthropic_summary_attempt}
 
 
-def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
+def handle_max_iterations(agent, messages: list, api_call_count: int, *,
+                          summary_request: str | None = None, max_attempts: int = 2) -> str:
     """Request a summary when max iterations are reached. Returns the final response text."""
-    warning = f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
+    warning = ("Preparing the partial runtime checkpoint before the goal deadline."
+               if summary_request is not None else
+               f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary...")
     if getattr(agent, "suppress_status_output", False):
         # Strict machine-readable mode (-Q, oneshot): keep diagnostics off stdout. quiet_mode is
         # NOT the gate — the interactive CLI runs quiet_mode=True by default and must see this.
@@ -2371,13 +2374,16 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     else:
         agent._safe_print(warning, diagnostic=True)
 
-    summary_api_request_id = f"iteration-summary:{uuid.uuid4()}"
+    summary_api_request_id = f"{'runtime-checkpoint' if summary_request is not None else 'iteration-summary'}:{uuid.uuid4()}"
     summary_call_outcome = "failed"
+    if summary_request is not None:
+        agent._runtime_checkpoint_generated = False
 
     # Shared constant so compaction recognizers can identify this runtime nudge by its stable
     # content after SessionDB projection strips metadata flags.
     from agent.context_compressor import MAX_ITERATIONS_SUMMARY_REQUEST
-    nudge = append_message(messages, {"role": "user", "content": MAX_ITERATIONS_SUMMARY_REQUEST})
+    nudge = append_message(messages, {"role": "user", "content": (
+        summary_request if summary_request is not None else MAX_ITERATIONS_SUMMARY_REQUEST)})
 
     try:
         api_messages = _iteration_summary_api_messages(agent, messages)
@@ -2385,8 +2391,9 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
         attempt = build_attempt(agent, api_messages, summary_api_request_id)
 
         # One retry on an empty summary; a summary empty once its <think> block is stripped is NOT retried.
-        final_response = _EMPTY_SUMMARY_RESPONSE
-        for retry_count in (0, 1):
+        final_response = ("The partial runtime checkpoint could not be generated. The investigation remains incomplete."
+                          if summary_request is not None else _EMPTY_SUMMARY_RESPONSE)
+        for retry_count in range(max(1, min(2, max_attempts))):
             text = attempt(retry_count)
             if not text:
                 continue
@@ -2394,6 +2401,8 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
             if text:
                 summary_call_outcome = "success"
+                if summary_request is not None:
+                    agent._runtime_checkpoint_generated = True
                 append_message(messages, {"role": "assistant", "content": text})
                 final_response = text
             break
@@ -2407,8 +2416,11 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
         raise
     except Exception as e:
         logger.warning("Failed to get summary response: %s", e)
-        from agent.turn_failure_copy import site_copy
-        final_response = site_copy("max_iterations_no_summary", limit=agent.max_iterations)
+        if summary_request is not None:
+            final_response = "The partial runtime checkpoint could not be generated. The investigation remains incomplete."
+        else:
+            from agent.turn_failure_copy import site_copy
+            final_response = site_copy("max_iterations_no_summary", limit=agent.max_iterations)
     finally:
         from agent import relay_llm
         relay_llm.complete_logical_call(summary_api_request_id, outcome=summary_call_outcome)

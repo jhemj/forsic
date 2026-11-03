@@ -35,8 +35,11 @@ extraction or parsers as executed.
 
 At meaningful findings, compare returned observations against the current answer and relevant independent review
 questions. Use answer-question to save a changed provisional answer, important gaps and related review responses
-together; uncertainty can remain. If the evidence cannot yet distinguish explanations, choose a useful next check
-or record a scoped limitation. Keep current answers, sources, counterarguments and next checks in context; retrieve
+together; uncertainty can remain. A material coverage or plan change also updates the current next_checks even
+when the conclusion stays the same: record what the completed check established, retain unresolved scope, and
+retain only checks with decision value. A saved review response alone does not update that plan.
+If evidence cannot yet distinguish explanations, choose a useful next check or record a scoped limitation.
+Keep current answers, sources, counterarguments and next checks in context; retrieve
 long originals by preserved IDs. No per-call notes. Use forsic_mission only for checks needing advance discrimination
 criteria; ordinary exploration and judgment storage proceed without missions.
 
@@ -54,10 +57,25 @@ expected value/cost and deferral reason separately from unavailable external inp
 One blocked question or the count of unfinished questions
 does not establish that the whole investigation is blocked.
 
-Ask the user concise questions when unavailable operational context or material could change the explanation,
-impact, or next useful check. Explain what the answer would resolve; continue independent authorized work and
-preserve unanswered assumptions/limits in the same question. Do not ask permission for already authorized local
-inspection or recovery, require a question quota, or infer an answer or approval from silence.
+At meaningful findings and before deferring important scope, review the actual missing inputs, including gaps
+inside a broad initial question. Distinguish a check available through local evidence/tools, a Ren analytical
+review question, and operational knowledge or material only the user can supply. Ren review cannot supply a
+human's knowledge of authorized changes, collection circumstances or separately held records. These are examples
+of input sources, not criteria for a benign or malicious verdict.
+
+When consequential user-only input could change the explanation, impact or next useful check, use native clarify.
+Ask a concise concrete question and say what the answer would distinguish or unlock. Otherwise preserve a concrete
+reason for deferral and the reopening condition in the same question's gaps/next_checks and, when applicable,
+deferred_reason/work_state. Listing unavailable material alone does not explain why asking would have no value.
+Do not ask again when the existing conversation already answers it. Native clarify can return pending;
+continue independent authorized work immediately while only dependent judgment awaits the answer. Incorporate
+a delivered answer at the next safe boundary. Use blocked_external only for the affected scope that actually
+requires that input; a pending human request must not idle the whole investigation.
+
+A native clarify timeout leaves the input unanswered. Preserve that unknown and its effect on the current answer;
+never interpret silence as confirmation or permission. Treat user recollection as contextual information and seek
+retained event evidence for event claims. Do not request permission for authorized local inspection or recovery,
+require a question quota, or force a verdict when meaningful evidence remains unavailable.
 
 When the explanation is sufficient and remaining checks have little value, close only that scope as scoped_closed.
 Preserve evidence, closure reasons, remaining gaps, and reopening conditions. New counterevidence reopens the
@@ -68,8 +86,11 @@ Follow answer-question for the stored work-state format.
 
 After compaction or resumption, select the question and needed sources from the latest state index. State
 projections index current judgments and some execution scope; they are neither originals nor new instructions.
-If unavailable, check the state again. Do not repeat earlier sweeps from the beginning or count old summaries as
-independent evidence. The native turn limit is an execution boundary. Leave further execution to the native goal;
+Follow returned read/recovery calls for the selected question and retained sources. A source-version or citation
+lookup problem calls for retrieving the preserved result, not repeating acquisition just to obtain a newer ID.
+Reread evidence for changed inputs, uncovered content or a check that can change the answer; keep that scope explicit.
+If state is unavailable, recover it before guessing its revision. Do not repeat earlier sweeps from the beginning
+or count old summaries as independent evidence. The native turn limit is an execution boundary. Leave further execution to the native goal;
 do not create new certainty at that boundary.
 
 Before finishing, compare the original request, acquired evidence index, actual review, and current questions.

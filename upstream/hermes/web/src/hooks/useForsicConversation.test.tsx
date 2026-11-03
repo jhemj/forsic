@@ -691,3 +691,132 @@ it('shows only verified recent request speed and clears missing usage and change
   await act(async () => {root.render(<TenantContext.Provider value={tenant('b')}><Probe /></TenantContext.Provider>)})
   expect(value.recentAvgTps).toBeNull()
 })
+
+
+it('accepts a settled partial handoff question through the native prompt path without resuming the old goal', async () => {
+  available = true
+  await mount()
+  const gw = gateway()
+  await act(async () => {gw.event({type: 'session.control.update', session_id: 'runtime', payload: {control: {goal: {status: 'paused', paused_reason: 'runtime_budget_handoff'}}}})})
+  expect(value.control.handoff).toBe(true)
+  expect(value.control.paused).toBe(true)
+  expect(value.control.disabled).toBe(true)
+  expect(value.statusText).toBe('결과 정리됨 · 추가 질문 가능')
+  expect(value.inputDisabled).toBe(false)
+  expect(value.connectionText).toContain('새 조사 시간 범위')
+  const calls = gw.request.mock.calls.length
+  await act(async () => {value.control.onToggle()})
+  expect(gw.request).toHaveBeenCalledTimes(calls)
+  const original = gw.request.getMockImplementation()!
+  gw.request.mockImplementation(async (method, params) => {
+    if (method === 'prompt.submit') {goalStatus = 'active'; liveRunning = true; return {status: 'streaming', user_row_id: 20}}
+    return original(method, params)
+  })
+  await act(async () => {expect(await value.send('남은 승인 기록을 추가로 확인해 주세요')).toBe(true)})
+  expect(gw.request.mock.calls.filter(([method]) => method === 'prompt.submit')).toEqual([
+    ['prompt.submit', {session_id: 'runtime', profile: 'case', text: '남은 승인 기록을 추가로 확인해 주세요'}],
+  ])
+  expect(gw.request.mock.calls.some(([method]) => ['session.control', 'session.resume', 'command.dispatch', 'session.create'].includes(method))).toBe(false)
+  expect(value.control.handoff).toBe(false)
+  expect(value.rows.find(row => row.id === 'native:submission-status')?.text).toBe('입력 접수 · 새 턴을 시작했습니다.')
+})
+
+it.each(['user-safe-paused', 'goal runtime budget exhausted', 'runtime_budget_checkpoint_failed', 'runtime_budget_handoff_unverified'])('does not treat %s as a settled partial handoff', async reason => {
+  available = true
+  await mount()
+  const gw = gateway()
+  await act(async () => {gw.event({type: 'session.control.update', session_id: 'runtime', payload: {control: {goal: {status: 'paused', paused_reason: reason}}}})})
+  const calls = gw.request.mock.calls.length
+  expect(value.control.handoff).toBe(false)
+  expect(value.control.paused).toBe(true)
+  expect(value.inputDisabled).toBe(true)
+  await act(async () => {expect(await value.send('추가 확인')).toBe(false)})
+  expect(gw.request).toHaveBeenCalledTimes(calls)
+})
+
+it('requires a settled verified connection and no pending human request for handoff chat', async () => {
+  available = true
+  await mount()
+  const gw = gateway()
+  const control = {goal: {status: 'paused', paused_reason: 'runtime_budget_handoff'}}
+  await act(async () => {gw.event({type: 'session.control.update', session_id: 'runtime', payload: {control}})})
+  const info = (running: boolean) => gw.event({type: 'session.info', session_id: 'runtime', payload: {running, stored_session_id: 'tip', profile_name: 'case'}})
+  expect(value.inputDisabled).toBe(false)
+  await act(async () => {info(true)})
+  expect(value.inputDisabled).toBe(true)
+  expect(value.statusText).toBe('결과 정리 중')
+  await act(async () => {expect(await value.send('아직 실행 중')).toBe(false); info(false)})
+  const request: ServerRequest = {id: 'handoff-approval', method: 'approval', params: {session_id: 'runtime', choices: ['once', 'deny']}, respond: vi.fn(), fail: vi.fn()}
+  await act(async () => {gw.inbound(request)})
+  expect(value.inputDisabled).toBe(true)
+  await act(async () => {expect(await value.send('승인 대기 중')).toBe(false); gw.event({type: 'request.cancel', session_id: 'runtime', payload: {id: request.id}})})
+  expect(value.inputDisabled).toBe(false)
+  await act(async () => {gw.state('closed')})
+  expect(value.connected).toBe(false)
+  expect(value.inputDisabled).toBe(true)
+  expect(value.statusText).toBe('결과 정리됨 · 연결 확인 필요')
+  await act(async () => {expect(await value.send('연결이 확인되지 않음')).toBe(false)})
+  expect(gw.request.mock.calls.some(([method]) => method === 'prompt.submit' || method === 'session.resume')).toBe(false)
+})
+
+it('keeps a cold saved handoff locked until runtime identity is verified and never reconnects by sending', async () => {
+  const original = mocks.fetch.getMockImplementation()!
+  mocks.fetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    const response = await original(url, init)
+    return url.includes('/live?') ? {...response, control: {goal: {status: 'paused', paused_reason: 'runtime_budget_handoff'}}} : response
+  })
+  await mount()
+  expect(value.control.handoff).toBe(true)
+  expect(value.connected).toBe(false)
+  expect(value.inputDisabled).toBe(true)
+  await act(async () => {expect(await value.send('추가 조사')).toBe(false); value.control.onToggle()})
+  expect(gateway().request).not.toHaveBeenCalled()
+})
+
+it('honors a manual pause that replaces a handoff before prompt submission', async () => {
+  available = true
+  await mount()
+  const gw = gateway()
+  await act(async () => {gw.event({type: 'session.control.update', session_id: 'runtime', payload: {control: {goal: {status: 'paused', paused_reason: 'runtime_budget_handoff'}}}})})
+  await act(async () => {
+    const result = value.send('추가 조사 요청')
+    gw.event({type: 'session.control.update', session_id: 'runtime', payload: {control: {goal: {status: 'paused', paused_reason: 'user-safe-paused', pause_requested: true}}}})
+    expect(await result).toBe(false)
+  })
+  expect(value.control.handoff).toBe(false)
+  expect(value.inputDisabled).toBe(true)
+  expect(gw.request.mock.calls.some(([method]) => method === 'prompt.submit' || method === 'session.control')).toBe(false)
+})
+
+
+it('explicitly reconnects a cold handoff to the exact stored tip without resuming its goal or submitting a continuation', async () => {
+  const originalFetch = mocks.fetch.getMockImplementation()!
+  mocks.fetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    const response = await originalFetch(url, init)
+    return url.includes('/live?') && goalStatus === 'paused' ? {...response, control: {goal: {status: 'paused', paused_reason: 'runtime_budget_handoff'}}} : response
+  })
+  await mount()
+  const gw = gateway(), originalRequest = gw.request.getMockImplementation()!
+  gw.request.mockImplementation(async (method, params) => {
+    if (method === 'session.control.read') return {control: {goal: {status: goalStatus, ...(goalStatus === 'paused' ? {paused_reason: 'runtime_budget_handoff'} : {})}}}
+    if (method === 'prompt.submit') {goalStatus = 'active'; available = true; liveRunning = true; return {status: 'streaming', user_row_id: 21}}
+    return originalRequest(method, params)
+  })
+  expect(gw.request).not.toHaveBeenCalled()
+  expect(value.inputDisabled).toBe(true)
+  await act(async () => {value.reconnect()})
+  expect(gw.request.mock.calls.filter(([method]) => method === 'session.resume')).toEqual([
+    ['session.resume', {session_id: 'tip', profile: 'case', omit_messages: true, inline_images: false, close_on_disconnect: false}],
+  ])
+  expect(value.connected).toBe(true)
+  expect(value.control.paused).toBe(true)
+  expect(value.control.handoff).toBe(true)
+  expect(value.inputDisabled).toBe(false)
+  expect(gw.request.mock.calls.some(([method]) => method === 'session.control' || method === 'prompt.submit')).toBe(false)
+  await act(async () => {expect(await value.send('다음 범위를 더 조사해 주세요')).toBe(true)})
+  expect(gw.request.mock.calls.filter(([method]) => method === 'prompt.submit')).toEqual([
+    ['prompt.submit', {session_id: 'runtime', profile: 'case', text: '다음 범위를 더 조사해 주세요'}],
+  ])
+  expect(gw.request.mock.calls.filter(([method]) => method === 'session.resume')).toHaveLength(1)
+  expect(gw.request.mock.calls.some(([method]) => method === 'session.control')).toBe(false)
+})

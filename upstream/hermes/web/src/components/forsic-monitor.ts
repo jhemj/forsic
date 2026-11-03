@@ -10,6 +10,18 @@ export function exactQuestionRefs(question: InvestigationQuestion, data: Investi
     return matches.length === 1 ? [{kind: 'source', id, version: matches[0].version}] : []
   })
 }
+/** Same note-owned card in report sidebar, timeline and relation views. */
+export function judgmentCard(question: InvestigationQuestion) {
+  const explanation = question.reader_explanation
+  const readable = explanation && ['current', 'provisional'].includes(explanation.status)
+  return {
+    paragraphs: readable ? explanation.paragraphs.filter(paragraph => paragraph.text.trim() !== question.answer.trim()) : [],
+    limits: [...new Set([...(question.limitations ?? []), ...(question.gaps ?? []), ...(readable ? explanation.limitations ?? [] : [])])],
+    objections: [...new Set([...(question.counterarguments ?? []), ...(readable ? explanation.counterarguments ?? [] : [])])],
+    references: question.evidence_refs ?? [],
+    freshness: explanation?.status ?? 'missing',
+  }
+}
 export const displayTitle = (row: InvestigationDisplay, fallback: string) => row.display_title || fallback
 export const displaySummary = (row: InvestigationDisplay, fallback: string) => row.display_summary || fallback
 export interface TimelineMark {row: InvestigationTime; domain: string; domainLabel: string; lane: string; inferred: boolean; localClock: boolean; precision: string; spans: {start: number | null; end: number | null}[]}

@@ -51,6 +51,7 @@ def project(tool, args, result=None):
                 # Shell presentation links point at this receipt, not new output.
                 view['result'].pop('source_ref',None)
                 view['result'].pop('raw_output_calls',None)
+                view['result'].pop('readable_output_calls',None)
                 def navigation_selection(selection):
                     if (not isinstance(selection, dict) or not isinstance(source_ref, dict)
                             or not isinstance(selection.get('source_handle'), str)
@@ -80,6 +81,14 @@ def project(tool, args, result=None):
                 if isinstance(body.get('retained_export_targets'), list):
                     view['result']['retained_export_targets'] = [navigation_selection(selection)
                         for selection in body['retained_export_targets']]
+                handoff = body.get('triage_handoff')
+                if isinstance(handoff, dict) and isinstance(handoff.get('call_template'), dict):
+                    call = handoff['call_template']
+                    if call.get('tool') == 'forsic_shell' and isinstance(call.get('arguments'), dict):
+                        arguments = call['arguments']
+                        if arguments.get('action') == 'triage' and isinstance(arguments.get('targets'), list):
+                            view['result']['triage_handoff'] = {**handoff, 'call_template': {**call,
+                                'arguments': {**arguments, 'targets': [navigation_selection(t) for t in arguments['targets']]}}}
             if body.get('continuation_kind') == 'retained_search' and body.get('source_ref', {}).get('id') == body.get('evidence_id'):
                 view['result'].pop('source_ref', None)
                 view['result'].pop('next_call', None)

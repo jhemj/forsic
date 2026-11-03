@@ -20,6 +20,7 @@ from agent.context_compressor import (
 )
 from agent.lazy_forward import forward as _forward, forward_static as _forward_static
 from agent.memory_manager import sanitize_context
+from agent.prompt_builder import STEER_DISPLAY_KIND
 
 from agent.tool_dispatch_helpers import _is_multimodal_tool_result, _multimodal_text_summary
 from agent.trajectory import save_trajectory as _save_trajectory_to_file
@@ -272,9 +273,11 @@ def _db_flush_collect(agent, messages: List[Dict], conversation_history: Optiona
         ) and not msg.get(_PERSIST_AFTER_ADMISSION_INTERRUPT):
             msg[_DB_PERSISTED_MARKER] = True
             continue
-        if getattr(agent, "_mute_notification_reply", False) and not is_history:
+        if (getattr(agent, "_mute_notification_reply", False) and not is_history
+                and msg.get("display_kind") != STEER_DISPLAY_KIND):
             # Only new rows, never the cached history prefix. Keep evidence/model
             # context intact while transcript pollers omit unsolicited presentation.
+            # An explicit steer remains human input even during a muted auto-turn.
             msg["display_kind"] = "hidden"
             msg["display_metadata"] = {**(msg.get("display_metadata") or {}), "notification_category": "diagnostic"}
         if msg.get("role") == "tool" and not msg.get(TOOL_CALL_UID):

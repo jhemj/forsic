@@ -1229,14 +1229,35 @@ def _extract_tool_call_name_and_args(tool_call: Any) -> tuple[str, str]:
 
 
 def _tool_calls_by_id(messages: List[Dict[str, Any]]) -> Dict[str, tuple]:
-    """Map ``tool_call_id -> (tool_name, raw_arguments)`` over every assistant tool call."""
+    """Compression-only selection; preserve the transcript's bridge and pairing IDs."""
     out: Dict[str, tuple] = {}
+    calls: Dict[str, int] = {}
     for msg in messages:
         if msg.get("role") != "assistant":
             continue
         for tc in msg.get("tool_calls") or []:
             fn = _tc_get(tc, "function", {})
-            out[_tc_get(tc, "id") or ""] = (_tc_get(fn, "name", "unknown"), _tc_get(fn, "arguments"))
+            call_id = _tc_get(tc, "id") or ""
+            calls[call_id] = calls.get(call_id, 0) + 1
+            out[call_id] = (_tc_get(fn, "name", "unknown"), _tc_get(fn, "arguments"))
+    results: Dict[str, list] = {}
+    for msg in messages:
+        if msg.get("role") == "tool":
+            results.setdefault(msg.get("tool_call_id") or "", []).append(msg)
+    for call_id, (name, arguments) in list(out.items()):
+        if name != "tool_call" or calls[call_id] != 1 or len(results.get(call_id, [])) != 1:
+            continue
+        # Executor-owned tool_name is independent of the returned tool body.
+        # Only a single validated local bridge can supply arguments for it;
+        # connector batches and ambiguous/mismatched outcomes remain opaque.
+        try:
+            from tools.tool_search import resolve_underlying_call, CONNECTOR_BATCH_SENTINEL
+            selected, selected_args, error = resolve_underlying_call(_json_dict(arguments))
+        except Exception:
+            continue
+        if (not error and selected and selected != CONNECTOR_BATCH_SENTINEL
+                and selected == results[call_id][0].get("tool_name")):
+            out[call_id] = (selected, json.dumps(selected_args, ensure_ascii=False))
     return out
 
 
@@ -1923,19 +1944,45 @@ def _json_dict(text: Any) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _toolguard_summary_parts(content: str) -> tuple[str, str]:
+    """Recognize native adjunct framing, preserving every matched byte."""
+    match = re.search(
+        r"(?:\n\n\[Tool loop (?:warning|hard stop): [a-z_]+; count=[0-9]+; [^\n]*\])+$",
+        content,
+    )
+    return (content[:match.start()], match[0]) if match else (content, "")
+
+
 def _registered_tool_summary(tool_name: str, args: dict, content: str) -> str | None:
     from tools.registry import registry
     entry = registry.get_entry(tool_name)
     if entry is not None and entry.result_summary is not None:
         try:
+            original = content
+            content, guidance = _toolguard_summary_parts(content)
+            try:
+                leading = len(content) - len(content.lstrip())
+                value, end = json.JSONDecoder().raw_decode(content.lstrip())
+                end += leading
+                trailing = content[end:]
+                if isinstance(value, (dict, list)) and trailing.strip():
+                    # Unrecognized adjuncts are neither JSON nor disposable
+                    # content. Keep them intact rather than guessing a split.
+                    return original
+            except (ValueError, TypeError):
+                pass
             summary = entry.result_summary(args, content)
-            if isinstance(summary, str) and 0 < len(summary) <= 2048 - len(_REGISTERED_SUMMARY_PREFIX):
-                projected = _REGISTERED_SUMMARY_PREFIX + summary
+            if isinstance(summary, str) and 0 < len(summary) <= 2048 - len(_REGISTERED_SUMMARY_PREFIX) - len(guidance):
+                projected = _REGISTERED_SUMMARY_PREFIX + summary + guidance
                 # A small original can be safer AND shorter than its projection. Do
                 # not discard an explicit outcome merely because metadata would grow it.
-                return projected if len(projected) < len(content) else content
+                return projected if len(projected) < len(original) else original
+            if guidance:
+                return original
         except Exception as exc:
             logger.debug("Registered tool summary failed for %s: %s", tool_name, exc)
+            if guidance:
+                return original
     return None
 
 
@@ -1943,11 +1990,25 @@ def _summarize_tool_result_unguarded(tool_name: str, tool_args: str, tool_conten
     """Build the summary line (unguarded; see ``_summarize_tool_result``)."""
     args = _json_dict(tool_args)
     content = tool_content or ""
+    original, guidance = _toolguard_summary_parts(content)
+    if guidance:
+        # Built-in summaries need the same warning/halt preservation as plugin
+        # callbacks. Unknown or oversized adjuncts never get silently elided.
+        summary = _summarize_tool_result(tool_name, tool_args, original)
+        if summary == original:
+            return content
+        if not summary.startswith(_REGISTERED_SUMMARY_PREFIX):
+            summary = _REGISTERED_SUMMARY_PREFIX + summary
+        return summary + guidance if len(summary) + len(guidance) <= 2048 else content
     content_len = len(content)
     line_count = content.count("\n") + 1 if content.strip() else 0
     registered = _registered_tool_summary(tool_name, args, content)
     if registered is not None:
         return registered
+    if tool_name == "tool_call":
+        # No verified one-to-one result identity: do not discard outcome or
+        # recovery data with a generic bridge-argument stub.
+        return content
     summarizer = _TOOL_RESULT_SUMMARIZERS.get(tool_name)
     if summarizer is not None:
         return summarizer(tool_name, args, content, content_len, line_count)
@@ -3182,6 +3243,9 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
             or _is_summary_stub(content) or len(content) <= min_prune_chars
         ):
             return False
+        if msg.get("tool_name") and msg.get("tool_call_id") not in call_id_to_tool:
+            # Executor identity alone cannot recover the paired arguments.
+            return False
         tool_name, tool_args = call_id_to_tool.get(msg.get("tool_call_id", ""), ("unknown", ""))
         if protected_skills and tool_name == "skill_view":
             _skill = _json_dict(tool_args).get("name", "")
@@ -3663,7 +3727,11 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 continue
             if len(content) < _LEAN_TAIL_DEMOTE_MIN_CHARS or SKILL_PRUNED_MARKER_PREFIX in content or _is_summary_stub(content):
                 continue
+            if msg.get("tool_name") and msg.get("tool_call_id") not in call_id_to_tool:
+                continue
             name, args = call_id_to_tool.get(msg.get("tool_call_id", ""), (msg.get("tool_name") or "", ""))
+            if name == "tool_call":
+                continue
             summary = _registered_tool_summary(name, _json_dict(args), content)
             if summary == content:
                 continue

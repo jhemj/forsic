@@ -313,12 +313,15 @@ def bridge_tool_schemas(deferred_count: int, listing: Optional[str] = None,
             "— one entry per invocation; a single call is an array of one. "
             "Local tools require one entry per tool_call. Only connectors__ names "
             "may be batched together; mixed and multi-local batches are rejected. "
+            "Independent local invocations can be separate tool_call calls in the same assistant response. "
             "Connector entries execute individually with results in input order. "
             f"Argument shapes match each tool's schema (see `{TOOL_DESCRIBE_NAME}`). "
             "Policy, hooks, and approvals run as for directly-listed tools.",
             {
                 "calls": {
                     "type": "array",
+                    "minItems": 1,
+                    **({} if connections_granted else {"maxItems": 1}),
                     "items": {
                         "type": "object",
                         "properties": {
@@ -326,6 +329,7 @@ def bridge_tool_schemas(deferred_count: int, listing: Optional[str] = None,
                             "arguments": {"type": "object", "description": "Arguments matching the tool schema."},
                         },
                         "required": ["name", "arguments"],
+                        "additionalProperties": False,
                     },
                     "description": "One local invocation, or one or more connector invocations. Never mix local and connector tools.",
                 },

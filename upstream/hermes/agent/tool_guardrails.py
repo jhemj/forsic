@@ -315,8 +315,9 @@ class ToolCallGuardrailController:
 
     def reset_for_turn(self) -> None:
         self._exact_failure_counts: dict[ToolCallSignature, int] = {}
-        self._same_tool_failure_counts: dict[str, int] = {}
-        self._feedback_batch_failure_groups: set[str] | None = None
+        self._same_tool_failure_counts: dict[str | tuple[str, str], int] = {}
+        self._feedback_batch_failure_groups: set[str | tuple[str, str]] | None = None
+        self._bridge_envelope_signatures: set[ToolCallSignature] = set()
         # signature -> a mutating call succeeded since its last failure
         self._progress_since_failure: dict[ToolCallSignature, bool] = {}
         self._no_progress: dict[ToolCallSignature, tuple[str, int]] = {}
@@ -363,6 +364,27 @@ class ToolCallGuardrailController:
     def halt_decision(self) -> ToolGuardrailDecision | None:
         return self._halt_decision
 
+    def note_bridge_resolution(self, bridge_name: str, args: Mapping[str, Any], *, resolved: bool) -> None:
+        """Record trusted executor provenance before observing a bridge result.
+
+        A valid envelope ends the envelope failure streak even if its underlying
+        tool fails. Only envelope failures are reset: concrete tool failures and
+        valid connector batches retain their own recovery budgets.
+        """
+        signature = ToolCallSignature.from_call(bridge_name, args)
+        if not resolved:
+            self._bridge_envelope_signatures.add(signature)
+            return
+        group = (bridge_name, "envelope")
+        self._same_tool_failure_counts.pop(group, None)
+        if self._feedback_batch_failure_groups is not None:
+            self._feedback_batch_failure_groups.discard(group)
+        for previous in tuple(self._bridge_envelope_signatures):
+            if previous.tool_name == bridge_name:
+                self._exact_failure_counts.pop(previous, None)
+                self._progress_since_failure.pop(previous, None)
+                self._bridge_envelope_signatures.discard(previous)
+
     def _decide(
         self, action: str, code: str, tool_name: str, count: int, signature: ToolCallSignature,
         *, message: str | None = None, **fmt: Any,
@@ -408,6 +430,8 @@ class ToolCallGuardrailController:
         failure_group = comparison(tool_name, args).get('failure_group', tool_name)
         if not isinstance(failure_group, str) or not failure_group:
             failure_group = tool_name
+        if signature in self._bridge_envelope_signatures:
+            failure_group = (tool_name, "envelope")
 
         if failed:
             # An identical failing call is only a REPLAY if nothing landed in between;

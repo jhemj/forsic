@@ -3452,6 +3452,8 @@ display:
     goal_runtime_paused: "⏸ 목표의 전체 실행 시간 한도를 모두 사용하여 일시정지했습니다. 중간 결과와 미처리 검토 지적은 보존되어 있습니다. 계속하려면 새 실행 시간 한도로 새 목표를 명시적으로 설정해 주세요."
     goal_runtime_interrupt: "목표의 전체 실행 시간 한도를 모두 사용하여 중간 결과를 보존하고 일시정지했습니다."
     goal_runtime_history_interrupt: "이전 실행 시간 기록을 확인할 수 없어 중간 결과를 보존하고 일시정지했습니다."
+    runtime_handoff_followup_started: "새 요청의 범위로 추가 조사를 시작합니다. 전체 실행 시간 상한은 {seconds}초이며, 이전 조사 결과와 보고서는 보존됩니다."
+    runtime_handoff_followup_not_started: "조사 상태가 바뀌었거나 새 실행 시간 한도를 저장하지 못해 추가 조사를 시작하지 않았습니다. 메시지는 보존되어 있습니다. 현재 상태를 확인한 뒤 다시 보내주세요."
     goal_iteration_handoff: "실행 구간 전환 중 — 진행 상황과 남은 조사 예산을 확인합니다"
     iteration_summary: "모델 요청 한도에 도달했습니다({used}/{max}회) — 요약을 요청합니다"
     uncompressed_context_overflow: "⚠️ 세션 컨텍스트(약 {tokens} 토큰)가 압축이 비활성화된 상태(compression.enabled: false)에서 모델 컨텍스트 창(약 {context_length} 토큰)을 초과했어요. /compact로 기록을 압축하거나 config.yaml에서 압축을 활성화해 주세요."

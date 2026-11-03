@@ -1,0 +1,11 @@
+.forsic-review-history { padding: 16px; line-height: 1.65; }
+.forsic-review-history h3 { margin: 0 0 8px; font-size: 16px; }
+.forsic-review-history .fi-review-question { margin-top: 18px; }
+.forsic-review-history .fi-review-prompt h4 { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; }
+.forsic-review-history .fi-review-response p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.forsic-review-history .frh-answer + .frh-answer { border-top: 1px solid var(--forsic-border); margin-top: 14px; padding-top: 12px; }
+.forsic-review-history code { overflow-wrap: anywhere; }
+
+.forsic-review-history .fi-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.forsic-review-history .fi-overview > span { flex-wrap: wrap; padding: 2px 8px; border: 0; }
+.forsic-review-history .frh-answer p { font-size: var(--forsic-font-secondary, 14px); }

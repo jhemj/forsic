@@ -161,12 +161,9 @@ it('keeps semantic summaries separate from identifiers and enriches only after a
       const detail = host.querySelector('[aria-label="선택한 연결의 설명"]')!
       expect(detail.textContent).toContain(data.sources[0].display_summary)
       expect(detail.querySelector('details')?.textContent).toContain('E-one · immutable-v1')
-      await clickText(host, '렌 · 독립 검토')
-      expect(host.querySelector('[aria-label="저장된 질문과 답"]')).toBeNull()
-      expect(host.querySelector('[aria-label="사건의 현재 답"]')).toBeNull()
-      expect(host.querySelector('[aria-label="출처에 연결된 관측"]')).toBeNull()
-      expect(host.querySelector('.fi-review-prompt')?.textContent).toContain('렌 · 검토 질문')
-      expect(host.querySelector('[aria-label="독립 검토 질문"]')?.textContent).toContain(data.review_questions![0].question)
+      expect(host.querySelector('.fi-review-section')).toBeNull()
+      expect([...host.querySelectorAll('nav button')].some(button => button.textContent?.includes('렌'))).toBe(false)
+      await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="보존 원문 닫기"]')!.click())
       await clickText(host, '요약 정리')
       expect(fetch).toHaveBeenCalledExactlyOnceWith('/api/plugins/forsic/investigation-enrich', expect.objectContaining({method: 'POST', body: JSON.stringify({session_id: 'a', profile: 'synthetic-profile'})}))
       expect(host.textContent).toContain('표시용 요약 완료')
@@ -176,31 +173,6 @@ it('keeps semantic summaries separate from identifiers and enriches only after a
     }, data)
     expect(readSource).toHaveBeenCalledExactlyOnceWith({source, pointer: '', offset: 0})
   } finally {fetch.mockRestore()}
-})
-
-it('distinguishes validated reviewer responses from missing and unverified dispositions', async () => {
-  const data = monitorFixture()
-  const response = {question_id: 'Q-a', revision: 2, disposition: 'scope_limited' as const, reason: '독립 실행 기록을 확인했으나 성공 범위는 제한됩니다.', limitation: '결과 로그 미확보', citation_refs: ['obs:synthetic/record']}
-  data.review_questions = [
-    {id: 'R-saved', question: '독립 기록은 확인했는가?', disposition: 'scope_limited', disposition_validation: 'validated_saved_response', response},
-    {id: 'R-missing', question: '결과 로그는 있는가?', disposition: 'not_recorded', disposition_validation: 'unverified_or_not_recorded'},
-    {id: 'R-unverified', question: '이전 처분은 검증되었는가?', disposition: 'accepted', response},
-  ]
-  await withMonitor(async host => {
-    await clickText(host, '렌 · 독립 검토')
-    const cards = host.querySelectorAll('.fi-review-question')
-    expect(cards).toHaveLength(3)
-    expect(cards[0].querySelector('.fi-review-response')?.textContent).toContain(response.reason)
-    expect(cards[0].textContent).toContain('범위 한정')
-    expect(cards[0].textContent).toContain(response.limitation)
-    expect(cards[0].textContent).toContain(response.citation_refs[0])
-    expect(cards[0].textContent).not.toContain('답변 미기록')
-    expect(cards[1].querySelector('.fi-review-status')?.textContent).toBe('답변 미기록')
-    expect(cards[2].querySelector('.fi-review-response')?.textContent).toContain('미검증')
-    expect(cards[2].textContent).not.toContain(response.reason)
-    await clickText(host, '시간 흐름')
-    expect(host.querySelector('[aria-label="저장된 질문과 답"]')?.textContent).toContain(data.questions[0].answer)
-  }, data)
 })
 
 it('leads with the saved answer, keeps technical diagrams optional, and leaves Ren outside reading-mode styles', async () => {
@@ -218,8 +190,7 @@ it('leads with the saved answer, keeps technical diagrams optional, and leaves R
     expect(chain.textContent).toContain('관측-O-a')
     expect(chain.textContent).not.toContain('관측-O-old')
     expect((host.querySelector('.fi-map-workspace > details.fi-optional-chart') as HTMLDetailsElement).open).toBe(false)
-    await clickText(host,'렌 · 독립 검토')
-    expect(host.querySelector('.fi-human-panel')).toBeNull()
-    expect(host.querySelector('.fi-review-section')).not.toBeNull()
+    expect(host.querySelector('.fi-human-panel')).not.toBeNull()
+    expect(host.querySelector('.fi-review-section')).toBeNull()
   })
 })

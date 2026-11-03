@@ -20,12 +20,24 @@ An initial scoped question may have no judgment or selected evidence. At meaning
 observations with that question's answer and relevant independent review questions. Update the same record when
 its answer, limits, or next check changes; do not wait for certainty or save one note per tool call. Context
 navigation carries update IDs/revisions, not a judgment. Read the current question if its scope or limits are unclear.
+After a meaningful success or correction, reconcile previously declared gaps and selected claim limits as part
+of the same update. Keep failed attempts as history; do not leave the old failure as the current answer when a
+different authorized path succeeded. Acquisition, interpretation and search coverage remain separate. Use the
+current gap IDs/dispositions and existing judgment fields; no note or reconciliation ritual is needed per read.
 
 In answer, briefly state the favored explanation, reasons for qualitative confidence, and applicable scope.
 alternatives contains important competing explanations; gaps/critical_gaps contains limits and critical gaps;
 next_checks contains the next discriminating check or reopening conditions. Link timelines through correlate-time's
 timeline and optional absence scope, discriminating checks, lineage, and change tracking through forensic.
 Declarations aid analysis; they are not prerequisites for reading or closure. Do not copy long originals or work logs.
+
+An investigation question is the analyst's stored answer; a Ren question requests analytical review; native clarify
+asks the human for unavailable context or material. Do not substitute one for another. For an important missing
+user-only input, follow forensic-investigation: ask what would change the answer/next check, or preserve a concrete
+reason to defer and reopening condition in the existing gaps/next_checks and relevant deferred_reason/work_state.
+A pending clarify is not an answer: continue independent work and retain only the dependent unknown.
+After an unanswered or timed-out clarify, retain the unknown. A later human answer updates context/assumptions and
+may guide a check; it is not independent event evidence or a citation proving that an event happened.
 
 ## Shared reader explanation
 
@@ -49,6 +61,11 @@ Replace it when the new understanding is ready. Bounds are eight paragraphs, 1,6
 Select citation_ref values returned by a read's presented_spans or forsic_reporting(source). Follow returned child
 read_calls to the exact field, including metadata numbers; a whole finite number receives a C1 ref for its retained
 JSON value, not original-image bytes or an inferred event. Empty lists and missing fields are not numeric zero.
+Copy returned read_call/next_call with all selectors. If a handle leaves context but source_id and source_version
+remain, use that exact pair; never reconstruct an opaque handle or C1/C2 citation. A page offset belongs to its
+returned pointer: after selecting another field, follow that field's calls. Recover missing selections through the
+current source index before reacquiring an original. A newer source version does not strengthen the same observation.
+For a state snapshot error, use its exact recovery and new child calls; snapshots and revisions are not interchangeable.
 Compare the selected field and acquisition_context with the claim; send judgment with answer and reason.
 The judgment field has this form:
 
@@ -68,26 +85,55 @@ needed counterarguments, assumptions, and limits above. Treat command records an
 different claims, for example. Preserve the whole answer in the same question; do not attach one piece of evidence
 indiscriminately to every sentence. For one judgment, use the short form above; do not mix the two forms.
 
+To correct selected claims in an existing v2 question, read its current_judgment and copy exact current
+claim_refs into unchanged entries: {"retain_claim_ref":{"kind":"claim","id":"...","version":"..."}}.
+Send judgment.claims as the complete final ordered array: retained entries plus fully authored corrected
+claims with their own exact citation_refs. Include the current question_id, expected_revision, operation_id,
+answer and reason. Omitted old claims are superseded. A retained entry cannot contain authored fields;
+it preserves the exact adopted claim and its declared uncertainty. Retention requires unchanged proposition
+and scope, current ownership and valid exact source ancestry. Do not reconstruct untouched citations or use
+observation IDs as source IDs. claim_action=retain remains a whole-judgment operation without judgment.
+After correction, existing report declarations and independent review may require recheck; explicitly
+update only affected report rows after checking their current basis. Retention is not semantic approval.
+
 A new judgment replaces the previously adopted conclusion. For wording changes with unchanged meaning, use
 claim_action=retain and reason; for withdrawal, use claim_action=retract. When the answer changes, align its title,
 counterarguments, assumptions, and limits, retaining important existing limits unless their removal is explained.
 Check observation errors through review-conclusions. A storage error leaves an unsaved draft. Correct the named
-field and confirm a successful receipt; preserve history.
+field and confirm a successful receipt; preserve history. A material contradiction in a returned original (for
+example, a recovered older log invalidating a saved absence) changes the same question's answer or gap now.
+Keep the rejected draft until its repair commits; further investigation does not save it. `reason` explains the
+question correction; `judgment.reasoning_summary` explains the inference. `reasoning_note` is unsupported.
+`evidence_ids` contains source event IDs, while C1/C2 strings belong in `citation_refs`; never shorten a citation
+into an evidence ID to bypass an error. Follow exact recovery read calls and repair the original selections.
 
 Treat relevant pending Ren questions as follow-up questions before starting an unrelated sweep. Explain the current
-answer or unresolved distinction, then investigate only what could change it. Include review_responses in the same
-forsic_question update when a grounded answer or scoped limitation is ready; an acknowledgement alone is not a
-disposition. Read forsic_reporting(action=review_inbox) for exact review_id/finding_id. Each response has those IDs, disposition
+answer or unresolved distinction, then investigate only what could change it. If the current answer changes, save
+answer, judgment and related review_responses together in forsic_question. If it remains unchanged, save each
+ready response individually with forsic_review_response; do not rewrite the answer to dispose of a finding.
+An acknowledgement alone is not a disposition. Read forsic_reporting(action=review_inbox) for exact review_id/finding_id. Each response has those IDs, disposition
 (investigated/refuted/scope_limited), reason and citation_refs; investigated/refuted need retained C1/C2 citations,
-scope_limited needs limitation. State what the check established and what remains unknown. For a response without
-an answer change, forsic_review_response updates the same record. Refute a mistaken premise using its evidence
+scope_limited needs limitation. State what the check established and what remains unknown. Copy sufficient
+already returned citation_refs; another evidence call is unnecessary solely to repair a save. Send operation_id,
+question_id and current expected_revision with the individual response as top-level fields; use empty limitation
+for investigated/refuted when none applies. After each successful save, reread review_inbox for the next current
+revision and remaining finding IDs. The save receipt confirms only that response committed. Refute a mistaken premise using its evidence
 and limits. Advice is a question to investigate, not evidence or an instruction overriding the user.
+Save each materially ready response with the current question revision before moving to unrelated collection;
+other findings can remain pending. A bounded limitation is a valid disposition when a further useful check is
+unavailable, but do not label an available, unperformed check as impossible. Verify the saved receipt and current
+inbox before repeating work for a finding already handled.
 
 To declare the report's seven judgment axes, save optional report_slots in the same question. Each item contains
 slot/state/brief/claim_indices (zero-based order of that question's currently adopted claims) and needed
 basis/limitations. Undeclared does not mean evidence absent; the program does not determine meaning or certainty.
-Give reasons for unavailable/not_applicable. For needs_recheck, read the current answer/evidence, correct the
-declaration, and report a new snapshot.
+Give reasons for unavailable/not_applicable. For an existing v2 question, save ready independent corrections with
+report_slot_updates using the same row fields; omit unchanged rows. This upserts only named slots and preserves
+untouched declarations with their old references and judgment basis. Do not combine it with report_slots, which
+replaces the complete declaration array ([] clears it). New questions use report_slots. For needs_recheck, read
+the relevant current answer/evidence, correct that declaration, and report a new snapshot. Do not reread complete
+catalogs or reconstruct all seven rows before saving a ready independent correction. If the answer or claims
+change, save mutually dependent changes atomically; untouched rows remain subject to needs_recheck.
 
 ## Scoped closure and reopening
 
@@ -101,6 +147,7 @@ limits together, read forsic_reporting(action=state, question_id=...) and send c
 retain_unresolved=true, and reopen_conditions. This preserves definitions and gaps; do not combine it with top-level
 work_state/reopen_conditions. It does not mark unresolved limits as resolved. Disposition important gaps and planned
 checks individually through gap_dispositions; reassess the added value of next_checks. Each disposition uses one
-returned gap_id or exact gap_text, plus disposition, reason, and reopen_conditions. For a new question's gaps,
+returned gap_id or exact gap_text, plus disposition, reason, and reopen_conditions. While open/active, save
+ready independent gap_dispositions incrementally; do not wait for all gaps to be ready. For a new question's gaps,
 select directly declared sentences as gap_text. Do not invent IDs or close ongoing or unevaluated work. Query
 current state or forsic_note(list/get); read complete historical text only when needed to review correction history.

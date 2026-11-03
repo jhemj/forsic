@@ -10,8 +10,16 @@ Current schemas and returned next_call define call forms. This table is a tool-s
 | Save/correct current answer | forsic_question | Atomic receipt for the current answer and assessment; not semantic validation |
 | Read state, gaps, history | forsic_reporting(action=state/gaps), forsic_note(list/get) | Index and questions in current owned scope, and explicitly selected history |
 | Optional advance check | forsic_mission → returned next_call → forsic_assess | Plan, actual execution, local assessment; not a prerequisite for ordinary exploration |
+| Write/review report | forsic_reporting(action=compose) | Fixed template groups; review returns a complete node index. Exact field/material pages use returned pointer and draft-bound snapshot_id. Save returns fresh CAS edit_refs |
 | Generate report | forsic_reporting(action=render) | Integrated HTML/Word report from the same snapshot with an appendix in the same document |
 | Approved delivery | forsic_reporting(action=finalize) | Existing mirror delivery status; neither investigation completion nor new transfer approval |
 
 Read answer-question for save/correction arguments, mission_policy for optional checks, and report_contract
 for outputs when needed. Do not directly modify originals or the ledger to pass validation.
+
+Compose returns `field_contract.cell_labels` in the exact order expected by `draft.entries[].cells`.
+`report_identity` has hostname / representative IP / image acquisition time. `major_findings` has a compact
+time-or-finding summary / integrated judgment, basis and limit. Unknown certainty may still permit a
+supported estimate; use the packet's writing guidance. These are native agent writing tasks, not automatic
+facts extracted from folder names or report timestamps. Old editorial contracts require fresh writing and
+review from preserved material; saved historical report files remain unchanged.

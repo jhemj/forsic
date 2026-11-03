@@ -834,6 +834,13 @@ export interface GoalSnapshot {
   status: string
   turns_used: number
   max_turns: number
+  runtime_budget_seconds?: number | null
+  runtime_elapsed_seconds?: number
+  runtime_started_at?: number | null
+  runtime_accounting_known?: boolean
+  runtime_checkpoints?: RuntimeCheckpointSnapshot[]
+  runtime_phase?: string | null
+  runtime_checkpoint_due_seconds?: number | null
   contract: GoalContractSnapshot
   subgoals: string[]
   gates: GoalGateSnapshot[]
@@ -844,6 +851,14 @@ export interface GoalSnapshot {
   last_verdict?: string | null
   last_reason?: string | null
   wait_barrier?: WaitBarrierUntil | WaitBarrierTarget | null
+}
+export interface RuntimeCheckpointSnapshot {
+  threshold_seconds: number
+  decision: 'continue' | 'finish'
+  reason: string
+  decided_at: number
+  elapsed_seconds: number
+  source_message_id: string
 }
 /** ``hermes_cli/goals.py::GoalContract.to_dict``. */
 export interface GoalContractSnapshot {

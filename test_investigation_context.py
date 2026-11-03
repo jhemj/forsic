@@ -18,6 +18,288 @@ from test_report_driven import fixture
 
 
 class InvestigationContextTests(unittest.TestCase):
+    def test_selected_delivery_phase_outranks_old_compose_after_compression(self):
+        state, packet, _ = self.report_receipt()
+        resolved = context.resolve_context(**self.kwargs())
+        task = {'kind': 'report_followup_task', 'question_ids': [q['id'] for q in state['questions']],
+                'source_goal_id': 'previous', 'legacy_tracker_ids': []}
+        with patch('forsic_plugin.report_followup_work.classify', return_value=task):
+            with patch('forsic_plugin.report_followup_work.selected_version', return_value={
+                    'stage': 'deliver_selected_version', 'pending': None, 'bundle_id': 'current-bundle',
+                    'selection_receipt': 'current-selection'}):
+                body = json.loads(context.project_context(resolved, state)[0])
+                self.assertEqual(body['reports']['continuation']['stage'], 'deliver_selected_version')
+                self.assertEqual(body['reports']['continuation']['bundle_id'], 'current-bundle')
+                self.assertIsNone(body['reports']['continuation']['next_call'])
+            # The trusted gate rejects a selection for a different current draft.
+            with patch('forsic_plugin.report_followup_work.selected_version', return_value={
+                    'stage': 'author_current_version', 'pending': 'Current draft needs authoring'}):
+                body = json.loads(context.project_context(resolved, state)[0])
+                self.assertEqual(body['reports']['continuation']['snapshot_id'], packet['snapshot_id'])
+                self.assertEqual(body['reports']['continuation']['next_call'], packet['next_call'])
+
+    def test_report_core_navigation_survives_node_history_budget_pressure(self):
+        state, packet, _ = self.report_receipt()
+        resolved = context.resolve_context(**self.kwargs())
+        reports = context._report_context(resolved, state, state['questions'])
+        reports['continuation']['delivered_content']['delivered_node_ids'] = ['synthetic-' + 'x'*150] * 12
+        with patch.object(context, '_report_context', return_value=reports):
+            text, _, _ = context.project_context(resolved, state)
+        body = json.loads(text)
+        self.assertLessEqual(len(text.encode()), 5000)
+        core = body['reports']['continuation']
+        self.assertEqual(core['snapshot_id'], packet['snapshot_id'])
+        self.assertEqual(core['next_call'], packet['next_call'])
+        self.assertNotIn('delivered_node_ids', core.get('delivered_content', {}))
+        self.assertEqual(body['active_questions'][0]['id'], state['questions'][0]['id'])
+
+    def authored_state(self):
+        from forsic_plugin.report_driven.narrative import status, TEMPLATE_VERSION
+        state = current(self.case)
+        progress = status(state)
+        fields = {'major_findings': {'complete': False, 'entries': [
+            dict(node_id='major_findings.synthetic' + str(i), cells=['Synthetic text', 'Scoped detail'],
+                 basis_keys=['Q1'], citation_refs=[], status='saved') for i in range(2)]}}
+        state['report_narratives'] = [dict(schema='forsic-report-narrative-2', template_version=TEMPLATE_VERSION,
+            question_ids=progress['question_ids'], basis_id=progress['basis_id'], revision=4,
+            draft_revision=3, fields=fields, review=None)]
+        return state
+
+    def authored_read(self, state, pointer, *, packet_change=None, session=None):
+        from forsic_plugin.report_driven.narrative import prepare, status, _review_identity
+        args = dict(action='compose', question_ids=status(state)['question_ids'], section='review',
+                    pointer=pointer, snapshot_id=_review_identity(status(state)))
+        packet = prepare(state, args, self.case)
+        if packet_change:
+            packet.update(packet_change)
+        sid = session or self.sid
+        started = self.case.record('tool_start', dict(tool='forsic_reporting', arguments=args), sid)
+        self.case.record('tool_result', dict(packet, tool='forsic_reporting', started_id=started), sid)
+        return packet
+
+    def test_authored_delivery_survives_second_compression_and_navigates_unread_node(self):
+        from forsic_plugin.report_continuation import projection
+        state = self.authored_state()
+        self.authored_read(state, '/fields/major_findings/entries/0')
+        self.session(self.sid, goal=self.goal, end='compression')
+        self.session('report-first-child', parent=self.sid, end='compression')
+        self.session('report-second-child', parent='report-first-child')
+        resolved = context.resolve_context(**self.kwargs('report-second-child'))
+        view = projection(resolved, state, [q['id'] for q in state['questions']])
+        self.assertEqual(view['delivered_content']['delivered_node_ids'], ['major_findings.synthetic0'])
+        self.assertEqual(view['delivered_content']['role'], 'delivered_not_semantically_reviewed')
+        self.assertEqual(view['next_call']['arguments']['pointer'], '/fields/major_findings/entries/1')
+        # Legacy collection pages carry complete nodes in items[].value.
+        self.authored_read(state, '/fields/major_findings/entries', session='report-second-child')
+        view = projection(resolved, state, [q['id'] for q in state['questions']])
+        self.assertEqual(view['delivered_content']['delivered_node_count'], 2)
+        self.assertIsNone(view['next_call'])
+        self.assertFalse(view['delivered_content']['window_partial'])
+
+    def test_authored_delivery_excludes_partial_nodes_and_stale_snapshot(self):
+        from forsic_plugin.report_continuation import projection
+        state = self.authored_state()
+        self.authored_read(state, '/fields/major_findings/entries/0', packet_change={'complete_value': False})
+        self.authored_read(state, '/fields/major_findings/entries/1', packet_change={'snapshot_id': 'rd2.obsolete'})
+        self.authored_read(state, '/index')
+        resolved = context.resolve_context(**self.kwargs())
+        view = projection(resolved, state, [q['id'] for q in state['questions']])
+        self.assertEqual(view['delivered_content']['delivered_node_count'], 0)
+        self.assertEqual(view['next_call']['arguments']['pointer'], '/fields/major_findings/entries/0')
+
+    def test_authored_delivery_recognizes_old_complete_node_member_page(self):
+        from forsic_plugin.report_continuation import projection
+        state = self.authored_state()
+        entry = state['report_narratives'][0]['fields']['major_findings']['entries'][0]
+        self.authored_read(state, '/fields/major_findings/entries/0', packet_change={
+            'value': None, 'complete_value': True,
+            'items': [{'key': key, 'value': value} for key, value in entry.items()]})
+        resolved = context.resolve_context(**self.kwargs())
+        view = projection(resolved, state, [q['id'] for q in state['questions']])
+        self.assertEqual(view['delivered_content']['delivered_node_ids'], [entry['node_id']])
+        self.assertEqual(view['next_call']['arguments']['pointer'], '/fields/major_findings/entries/1')
+
+    def test_saved_complete_review_keeps_render_stage_without_restarting_unread_nodes(self):
+        from forsic_plugin.report_continuation import projection
+        from forsic_plugin.report_driven.narrative import status, material, basis, _draft_hash, _review_identity
+        from forsic_plugin.report_driven.template_contract import WRITING_ORDER, REVIEW_CHECKS
+        from forsic_plugin.report_driven.authoring_policy import RESOLUTION_NODES
+        state = self.authored_state()
+        narrative = state['report_narratives'][0]
+        keys = [row['key'] for row in material(basis(state, narrative['question_ids'])[1])]
+        narrative['fields'] = {group: {'complete': True, 'entries': [dict(
+            node_id=group + '.synthetic', cells=['Scoped synthetic text'], basis_keys=keys,
+            citation_refs=[], status='saved')]} for group in WRITING_ORDER}
+        narrative['review'] = dict(basis_id=narrative['basis_id'], draft_hash=_draft_hash(narrative['fields']),
+            draft_revision=narrative['draft_revision'], comparisons=[{'statement': 'Synthetic review'}],
+            checks=[{'check': key, 'result': 'satisfied'} for key in REVIEW_CHECKS], findings=[],
+            answerability_checks=[{'node_id': node, 'outcome': 'limited'} for node in RESOLUTION_NODES])
+        progress = status(state)
+        self.assertTrue(progress['ready'])
+        call = {'tool': 'forsic_reporting', 'arguments': {'action': 'render', 'question_ids': progress['question_ids']}}
+        started = self.case.record('tool_start', dict(tool='forsic_reporting', arguments={
+            'action': 'compose', 'question_ids': progress['question_ids'], 'expected_revision': 3,
+            'review': {'synthetic': True}}), self.sid)
+        self.case.record('tool_result', dict(tool='forsic_reporting', started_id=started, saved=True,
+            snapshot_id=_review_identity(progress), question_ids=progress['question_ids'], next_call=call), self.sid)
+        resolved = context.resolve_context(**self.kwargs())
+        view = projection(resolved, state, progress['question_ids'])
+        self.assertEqual(view['stage'], 'render_required')
+        self.assertEqual(view['review_status'], 'complete')
+        self.assertEqual(view['delivered_content']['delivered_node_count'], 0)
+        self.assertEqual(view['next_call'], call)
+
+    def report_receipt(self, *, session=None, snapshot=None, error=False, when=None, next_call=None):
+        from forsic_plugin.report_driven.narrative import prepare, status, _review_identity
+        state = current(self.case)
+        ids = [q['id'] for q in state['questions']]
+        sid = session or self.sid
+        args = dict(action='compose', question_ids=ids, section='review',
+                    pointer='/material', snapshot_id=_review_identity(status(state, ids)), limit=1)
+        packet = prepare(state, args, self.case)
+        self.assertIsNotNone(packet['next_call'])
+        if snapshot:
+            packet['snapshot_id'] = snapshot
+        if next_call:
+            packet['next_call'] = next_call
+        if error:
+            packet['error'] = 'synthetic failed delivery'
+        started = self.case.record('tool_start', dict(tool='forsic_reporting', arguments=args), sid)
+        if when is not None:
+            with self.case.connect() as db:
+                db.execute('UPDATE events SET time=? WHERE id=?', (when, started))
+        result = self.case.record('tool_result', dict(packet, tool='forsic_reporting', started_id=started), sid)
+        return state, packet, result
+
+    def test_report_page_continuation_survives_compression_read_only(self):
+        state, packet, result = self.report_receipt()
+        self.session(self.sid, goal=self.goal, end='compression')
+        self.session('report-compressed-child', parent=self.sid)
+        resolved = context.resolve_context(**self.kwargs('report-compressed-child'))
+        before = self.case.db.read_bytes()
+        text, _, _ = context.project_context(resolved, state)
+        restored = json.loads(text)['reports']['continuation']
+        self.assertEqual(restored['receipt_id'], result)
+        self.assertEqual(restored['snapshot_id'], packet['snapshot_id'])
+        self.assertEqual(restored['next_call'], packet['next_call'])
+        self.assertEqual(restored['last_read']['pointer'], '/material')
+        self.assertLessEqual(len(text.encode()), 5000)
+        self.assertNotIn('edit_ref', json.dumps(restored))
+        compact, _, _ = context.project_context(resolved, state, max_bytes=3500)
+        compact_body = json.loads(compact)
+        self.assertLessEqual(len(compact.encode()), 3500)
+        self.assertTrue(compact_body['reports']['continuation_omitted'])
+        self.assertEqual(compact_body['active_questions'][0]['id'], state['questions'][0]['id'])
+        self.assertEqual(self.case.db.read_bytes(), before)
+        self.assertEqual(current(self.case), state)
+
+    def test_report_continuation_ignores_other_session_old_goal_and_failed_receipts(self):
+        state, packet, result = self.report_receipt()
+        self.report_receipt(session='foreign')
+        self.report_receipt(when=self.goal.created_at - 1)
+        self.report_receipt(error=True)
+        resolved = context.resolve_context(**self.kwargs())
+        restored = context._report_context(resolved, state, state['questions'])['continuation']
+        self.assertEqual(restored['receipt_id'], result)
+        self.assertEqual(restored['next_call'], packet['next_call'])
+
+    def test_report_continuation_does_not_restore_stale_snapshot_or_write_contract(self):
+        state, _, _ = self.report_receipt()
+        self.report_receipt(snapshot='rd2.obsolete')
+        resolved = context.resolve_context(**self.kwargs())
+        self.assertNotIn('continuation', context._report_context(resolved, state, state['questions']))
+        self.report_receipt(next_call={'tool': 'forsic_reporting', 'arguments': {
+            'action': 'compose', 'question_ids': [state['questions'][0]['id']], 'draft': {'unsafe': True}}})
+        restored = context._report_context(resolved, state, state['questions'])['continuation']
+        self.assertIsNone(restored['next_call'])
+
+    def test_report_continuation_uses_latest_save_navigation_and_current_review_stage(self):
+        state, packet, _ = self.report_receipt()
+        ids = [q['id'] for q in state['questions']]
+        next_call = {'tool': 'forsic_reporting', 'arguments': {'action': 'compose', 'question_ids': ids}}
+        started = self.case.record('tool_start', dict(tool='forsic_reporting', arguments={
+            'action': 'compose', 'question_ids': ids, 'expected_revision': -1,
+            'review': {'synthetic': True}}), self.sid)
+        saved = self.case.record('tool_result', dict(tool='forsic_reporting', started_id=started,
+            saved=True, snapshot_id=packet['snapshot_id'], question_ids=ids,
+            section='review', next_call=next_call, edit_refs={'review': 'must-not-restore'}), self.sid)
+        resolved = context.resolve_context(**self.kwargs())
+        restored = context._report_context(resolved, state, state['questions'])['continuation']
+        self.assertEqual(restored['receipt_id'], saved)
+        self.assertEqual(restored['next_call'], next_call)
+        from forsic_plugin.report_driven.narrative import status
+        self.assertEqual(restored['review_status'], status(state, ids)['review_status'])
+        self.assertNotIn('must-not-restore', json.dumps(restored))
+        self.save_note(answer='Synthetic changed judgment')
+        changed = current(self.case)
+        self.assertNotIn('continuation', context._report_context(resolved, changed, changed['questions']))
+
+    def test_derived_history_does_not_displace_second_current_question(self):
+        from test_derived_observation_scope import triage_receipt
+        from forsic_plugin.report_driven.host import checked
+        self.note.update(answer='Observation remains uncertain.', reason='Compare retained record.',
+                         gaps=[], critical_gaps=[], alternatives=[], next_checks=[])
+        self.save_note(priority='contextual')
+        invoke(self.case, dict(action='question', payload=dict(
+            operation_id='second-current-question', question='Was a scheduled task executed?',
+            scope='Selected synthetic configuration', answer='Execution unknown. '+'x'*50,
+            priority='contextual'),
+            _goal_id=goal_identity(self.goal), _session_id=self.sid, _question_contract='v2'))
+        triage_receipt(self.case, self.sid, state='partial')
+        state = current(self.case)
+        checked(state)
+        before = deepcopy(state)
+        resolved = context.resolve_context(**self.kwargs())
+        ids = [q['id'] for q in state['questions']]
+        # Both questions have the same priority; random UUID ordering used to
+        # decide whether the larger first record displaced the second answer.
+        for order in (ids, list(reversed(ids))):
+            def ordered(values, *, key):
+                return sorted(values, key=lambda q: order.index(q['id'])) if values and 'priority' in values[0] else sorted(values, key=key)
+            with self.subTest(order=order), patch.object(context, 'sorted', side_effect=ordered, create=True):
+                text, _, _ = context.project_context(resolved, state)
+                body = json.loads(text)
+                self.assertLessEqual(len(text.encode()), 5000)
+                self.assertEqual({q['id'] for q in body['active_questions']}, set(ids))
+                self.assertEqual({q['id']: q['answer_is_model_assessment'] for q in body['active_questions']},
+                                 {q['id']: q['answer'] for q in state['questions']})
+                self.assertTrue(all(q['details_call']['arguments']['question_id'] == q['id']
+                                    for q in body['active_questions']))
+                self.assertEqual(body['omitted']['active_questions'], 0)
+                self.assertGreater(body['omitted']['derived_observations'], 0)
+        self.assertEqual(state, before)
+
+    def test_derived_input_navigation_survives_compaction_without_displacing_current_answer(self):
+        from test_derived_observation_scope import triage_receipt
+        for state in ('complete', 'partial', 'skipped'):
+            triage_receipt(self.case, self.sid, state=state)
+        self.session(self.sid, goal=self.goal, end='compression')
+        self.session('derived-compressed-child', parent=self.sid)
+        resolved = context.resolve_context(**self.kwargs('derived-compressed-child'))
+        state = current(self.case)
+        before = deepcopy(state)
+        text, _, _ = context.project_context(resolved, state)
+        body = json.loads(text)
+        self.assertLessEqual(len(text.encode()), 5000)
+        self.assertEqual(body['active_questions'][0]['answer_is_model_assessment'], self.note['answer'])
+        derived = body['derived_observations'][0]
+        self.assertEqual(derived['kind'], 'triage')
+        self.assertIn(derived['coverage']['state'], ('skipped', 'partial'))
+        selected = derived['selected_inputs'][0]
+        self.assertIn(selected['state'], ('skipped', 'partial'))
+        ref = selected['source_ref']
+        self.assertEqual(ref['version'], next(source['version'] for source in state['sources'] if source['id'] == ref['id']))
+        self.assertEqual(derived['read_call']['arguments']['pointer'], '/coverage')
+        self.assertEqual(body['scope_inventory']['counts']['body_read'], 0)
+        self.assertEqual(body['derived_scope_inventory']['omitted']['receipts'] + len(
+            body['derived_observations']) + body['omitted']['derived_observations'], 3)
+        text, _, _ = context.project_context(resolved, state, max_bytes=3500)
+        small = json.loads(text)
+        self.assertLessEqual(len(text.encode()), 3500)
+        self.assertEqual(small['active_questions'][0]['answer_is_model_assessment'], self.note['answer'])
+        self.assertGreater(small['omitted']['derived_observations'], 0)
+        self.assertEqual(state, before)
+
     def test_compaction_projects_actual_query_scope_for_this_conversation_without_body_or_verdict(self):
         partial=self.case.record('tool_result',dict(tool='forsic_search',path='synthetic.log',search_text='literal',
             match_type='casefold_literal',matches=[],bytes_scanned=80,coverage_complete=False,scan_exhausted=False,
@@ -190,6 +472,78 @@ class InvestigationContextTests(unittest.TestCase):
                 self.assertTrue(item['answer_qualifications_omitted'])
                 self.assertEqual(body['omitted'][section], 0)
                 self.assertGreater(body['omitted']['observed_scope'], 0)
+
+    def test_important_gap_navigation_survives_compaction_and_reads_exact_obligation(self):
+        # No keyword classifier: local and human-only obligations use the same
+        # existing note contract, and neither is silently answered by projection.
+        self.note.update(gaps=['Read the retained scheduler log',
+                              'Can the operator supply the approved change record?'],
+                         critical_gaps=[], alternatives=[], next_checks=[])
+        self.save_note(priority='material', work_state='active')
+        self.session(self.sid, goal=self.goal, end='compression')
+        self.session('gap-compressed-child', parent=self.sid)
+        resolved = context.resolve_context(**self.kwargs('gap-compressed-child'))
+        state = current(self.case)
+        before = deepcopy(state)
+        for work_state in ('active', 'blocked_external', 'scoped_closed'):
+            for budget in (3500, 5000):
+                with self.subTest(work_state=work_state, budget=budget):
+                    candidate = deepcopy(state)
+                    candidate['questions'][0]['work_state'] = work_state
+                    text, _, _ = context.project_context(resolved, candidate, max_bytes=budget)
+                    section = 'closed_index' if work_state == 'scoped_closed' else 'active_questions'
+                    item = json.loads(text)[section][0]
+                    self.assertLessEqual(len(text.encode()), budget)
+                    self.assertEqual(item['answer_is_model_assessment'], self.note['answer'])
+                    self.assertEqual(item['remaining_gap_count'], 2)
+                    if 'remaining_gap_examples' in item:
+                        self.assertEqual(item['remaining_gap_examples'][0]['text'], self.note['gaps'][0])
+                        lookup = item['remaining_gap_examples'][0]['read_call']['arguments']
+                    else:
+                        # Optional previews yield to the current answer under
+                        # pressure; its exact state lookup still recovers gaps.
+                        self.assertIn('remaining_gap_examples', item['omitted_fields'])
+                        detail = invoke(self.case, item['details_call']['arguments'])
+                        lookup = detail['gap_lookup']['arguments']
+                    self.assertEqual(lookup['question_id'], candidate['questions'][0]['id'])
+                    detail = invoke(self.case, lookup)
+                    records = [entry['value'] for entry in detail['items']]
+                    snapshot = detail['snapshot_id']
+                    seen = set()
+                    while detail.get('next_call'):
+                        call = detail['next_call']['arguments']
+                        self.assertEqual(call['question_id'], lookup['question_id'])
+                        self.assertEqual(call['snapshot_id'], snapshot)
+                        coordinate = (call['pointer'], call['offset'])
+                        self.assertNotIn(coordinate, seen)
+                        seen.add(coordinate)
+                        self.assertLessEqual(len(seen), len(self.note['gaps']))
+                        detail = invoke(self.case, call)
+                        records.extend(entry['value'] for entry in detail['items'])
+                    self.assertEqual(detail['gap_scope']['selected_count'], len(self.note['gaps']))
+                    self.assertEqual(len(records), len(self.note['gaps']))
+                    self.assertEqual(len({record['id'] for record in records}), len(records))
+                    self.assertEqual({g['original_obligation'] for g in records}, set(self.note['gaps']))
+                    self.assertTrue(all(g['disposition'] == 'open' for g in records))
+        self.assertEqual(state, before)
+        self.assertEqual(current(self.case), before)
+
+    def test_foreign_gap_is_not_projected_and_resolved_gap_is_not_reopened(self):
+        resolved = context.resolve_context(**self.kwargs())
+        state = current(self.case)
+        for gap in state['gaps']:
+            gap['disposition'] = 'resolved'
+        foreign = deepcopy(state['gaps'][0])
+        foreign.update(id='G-foreign', original_obligation='Foreign human question', disposition='open')
+        foreign['question_ref']['id'] = 'Q-foreign'
+        state['gaps'].append(foreign)
+        before = deepcopy(state)
+        text, _, _ = context.project_context(resolved, state)
+        item = json.loads(text)['active_questions'][0]
+        self.assertEqual(item['remaining_gap_count'], 0)
+        self.assertFalse(item.get('remaining_gap_examples'))
+        self.assertNotIn('Foreign human question', text)
+        self.assertEqual(state, before)
 
     def test_contextual_open_is_not_an_all_open_completion_gate(self):
         self.save_note(priority='contextual', deferred_reason='Low impact auxiliary detail')

@@ -20,12 +20,13 @@ export function ForsicToolCall({call}: {call: InspectorToolCall}) {
         <strong className={detail.purpose ? 'fc-tool-purpose' : undefined}>{detail.purpose || detail.label}</strong>
         {detail.purpose && <span className="fc-tool-kind">{detail.label}</span>}
         {detail.target && <span className="fc-tool-target" data-command={call.name === 'forsic_shell'}>{detail.target}</span>}
-        {detail.summary && <span className="fc-tool-summary">{detail.summary}</span>}
+        {detail.summary && <span className="fc-tool-summary">{call.status === 'error' && !outcome ? '요청 처리 실패 · 상세 확인' : detail.summary}</span>}
       </span>
       <span className="fc-tool-meta"><span className="fc-tool-badge">{toolStatusLabel(call)}</span>{duration && <small>{duration}</small>}</span>
       <ChevronDown className="fc-tool-chevron" size={13} aria-hidden="true"/>
     </summary>
     <div className="fc-tool-body">
+      {call.status === 'error' && detail.summary && <p className="fc-tool-error-detail">{detail.summary}</p>}
       {detail.description && <p>{detail.description}</p>}
       {outcome && <p className="fc-tool-caption">반환된 명령 상태이며 조사 결론이나 원본 증거의 직접 관측을 뜻하지 않습니다.</p>}
       {!outcome && call.status === 'completed' && <p className="fc-tool-caption">도구 실행 성공을 뜻하며, 조사 결론이나 전체 범위 확인을 뜻하지 않습니다.</p>}

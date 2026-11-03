@@ -211,7 +211,7 @@ class ForsicRemotePolicy:
                     if not native_profiles or any(p != selected.profile for p in native_profiles):
                         return False
                 return selected.bound(match[1])
-            return bool(re.fullmatch(r'/api/plugins/forsic/(?:investigations(?:/[^/]+/conversations)?|evidence-sources|evidence-browser|evidence-connection|status|evidence/[^/]+|indicators|indicator-export/[^/]+|reports/[^/]+|report-text/[^/]+|download/[^/]+|report-driven|report-bundles/[^/]+/[^/]+|investigation-view|source-page|library(?:/[^/]+(?:/sources/[^/]+)?)?)', path))
+            return bool(re.fullmatch(r'/api/plugins/forsic/(?:investigations(?:/[^/]+/conversations)?|evidence-sources|evidence-browser|evidence-connection|status|evidence/[^/]+|indicators|indicator-export/[^/]+|reports/[^/]+|report-text/[^/]+|download/[^/]+|report-driven|report-bundles/[^/]+/[^/]+|investigation-view|review-history|source-page|library(?:/[^/]+(?:/sources/[^/]+)?)?)', path))
         return method == 'POST' and (path in ('/api/auth/ws-ticket', '/auth/password-login', '/auth/logout') or bool(re.fullmatch(
             r'/api/plugins/forsic/(?:investigations(?:/[^/]+/(?:conversations|close))?|investigation-enrich|library|evidence-collection/exports|report-bundles/[a-f0-9]{64}/word)', path)))
 

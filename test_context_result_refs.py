@@ -17,6 +17,19 @@ import test_efficiency_contracts as efficiency
 
 
 class ContextResultRefsTests(unittest.TestCase):
+    def test_report_recovery_survives_native_pruning_without_automatic_write(self):
+        from forsic_plugin.report_driven.narrative import ReportAuthoringError
+        error = ReportAuthoringError('stale draft', {'question_ids': ['Q-synthetic']}, 'scope')
+        body = {'error': str(error), **error.details}
+        result = json.loads(summarize('forsic_reporting', {}, json.dumps(body)))
+        self.assertTrue(result['error_present'])
+        self.assertEqual(result['recovery'], body['recovery'])
+        self.assertEqual(result['recovery']['arguments']['action'], 'compose')
+        self.assertNotIn('draft', result['recovery']['arguments'])
+        body['recovery']['arguments']['question_ids'] = ['x' * 2000]
+        oversized = json.loads(summarize('forsic_reporting', {}, json.dumps(body)))
+        self.assertNotIn('recovery', oversized)
+
     def test_real_read_prunes_to_exact_retrievable_source_with_scope_and_no_body_mutation(self):
         from agent.context_compressor import MAX_ITERATIONS_SUMMARY_REQUEST, _LEGACY_MAX_ITERATIONS_SUMMARY_REQUEST
         for marker in (MAX_ITERATIONS_SUMMARY_REQUEST, _LEGACY_MAX_ITERATIONS_SUMMARY_REQUEST):

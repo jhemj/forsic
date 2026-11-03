@@ -63,8 +63,10 @@ def schema(contract_version='v1'):
     aggregate = {'type':'object','properties':{
         'citation_refs':{**strings,'description':'Copy returned C1/C2 refs for the supporting retained text or whole finite number. Follow source field read_calls for other values; do not substitute a nearby field. No preparation or mission required.'},
         'counter_citation_refs':strings,
-        'assertion_kind':{'type':'string','enum':['fact','interpretation']},
-        'inference_strength':{'type':'string','enum':['favored','plausible','unrated']},
+        'assertion_kind':{'type':'string','enum':['fact','interpretation'],
+            'description':'fact requires inference_strength=unrated; favored/plausible apply only to interpretation.'},
+        'inference_strength':{'type':'string','enum':['favored','plausible','unrated'],
+            'description':'For fact use unrated; favored/plausible describe interpretations. When optional, omission defaults to unrated.'},
         'reasoning_summary':{**string,'description':'Compare the strongest answer fact to cited text/acquisition_context: observations, inferred links, strongest alternative. Commands/search patterns are not outputs; byte previews are not decoded coverage. Interpretation labels/later caveats cannot justify stronger facts.'},
         'assumptions':strings,'limitations':strings},
         'required':(['citation_refs','assertion_kind','reasoning_summary'] if contract_version == 'v2' else
@@ -77,8 +79,12 @@ def schema(contract_version='v1'):
     claim['required'] = [*claim['required'],'statement']
     return {'description':'Use one compound judgment, or explicitly author claims with their own exact citations. Claims do not split or replace the full question answer automatically.',
             'anyOf':[aggregate, {'type':'object','properties':{'claims':{
-                'type':'array','minItems':1,'items':claim,
-                'description':'Explicit analyst-authored claims; each retains its own support, counterevidence and uncertainty. No inherited citations or semantic approval.'}},
+                'type':'array','minItems':1,'items':({'anyOf':[claim, {
+                    'type':'object','properties':{'retain_claim_ref':{'type':'object',
+                        'properties':{'kind':{'type':'string','enum':['claim']},'id':string,'version':string},
+                        'required':['kind','id','version'],'additionalProperties':False}},
+                    'required':['retain_claim_ref'],'additionalProperties':False}]} if contract_version == 'v2' else claim),
+                'description':'Explicit analyst-authored claims; each retains its own support, counterevidence and uncertainty. For an existing unchanged question definition, select unchanged current adopted claims with retain_claim_ref (exact kind/id/version); authored items require exact citations. The array selects the complete final set in order. No semantic approval.'}},
                 'required':['claims'],'additionalProperties':False}]}
 
 
@@ -133,7 +139,117 @@ def selection(case,state,value):
     return choices[index]
 
 
-def records(case,state,note,judgment,contract_version='v1'):
+
+def reference_problems(case, state, payload):
+    """Read-only admission of independent selectors; final writer rechecks them."""
+    from ..notes import sources
+    from .assessment_basis import _citation
+    problems=[]
+    ids=payload.get('evidence_ids', [])
+    for index, value in enumerate(ids if isinstance(ids, list) else []):
+        # Shape and the citation-in-evidence_ids category have their own errors.
+        if not isinstance(value, str) or value.startswith(('C1:', 'C2:')):
+            continue
+        try:
+            sources(case, [value])
+        except ValueError as exc:
+            problems.append({'path': f'payload.evidence_ids[{index}]', 'error': str(exc),
+                'recovery': {'read_call': {'tool': 'forsic_reporting', 'arguments': {'action': 'state'}},
+                    'meaning': 'Select an actual retained source; no similar ID was substituted.'}})
+    judgment=payload.get('judgment')
+    if not isinstance(judgment, dict):
+        return problems
+    claims=judgment.get('claims', [judgment])
+    for index, claim in enumerate(claims if isinstance(claims, list) else []):
+        if not isinstance(claim, dict):
+            continue
+        base=f'payload.judgment.claims[{index}]' if 'claims' in judgment else 'payload.judgment'
+        for role in ('citation_refs', 'counter_citation_refs'):
+            values=claim.get(role, [])
+            for ref_index, value in enumerate(values if isinstance(values, list) else []):
+                if not isinstance(value, str):
+                    continue
+                try:
+                    selected=selection(case, state, value)
+                    _citation(case, state, selected)
+                except ValueError as exc:
+                    problem={'path': f'{base}.{role}[{ref_index}]', 'error': str(exc)}
+                    problem['recovery']=reference_recovery(case, state, value)
+                    problems.append(problem)
+    return problems
+
+
+def reference_recovery(case, state, value):
+    """Navigation only: do not repair or adopt any submitted selection."""
+    from ..notes import EVIDENCE_TOOLS
+    from .assessment_basis import REF, _receipt
+    from .host import source_record
+    from .source_handles import resolve_source_handle
+    failed=_failed_output_recovery(case, value)
+    if failed and any(s['id']==failed['source_ref']['id'] and s['version']==failed['source_ref']['version']
+                      for s in state.get('sources', [])):
+        return failed
+    source_id=None
+    direct=DIRECT.fullmatch(value)
+    receipt=REF.fullmatch(value)
+    if direct:
+        source_id=direct[1]
+    elif receipt:
+        try:
+            _, args=_receipt(case, receipt[1], 'source')
+            source_id=resolve_source_handle(case, args).get('source_id')
+        except ValueError:
+            pass
+    source=next((s for s in state.get('sources', []) if s['id']==source_id), None)
+    event=case.event(source_id) if source else None
+    if (event and event['kind']=='tool_result' and event['data'].get('tool') in EVIDENCE_TOOLS
+            and source_record(event)['version']==source['version']):
+        return {'read_call': {'tool': 'forsic_reporting', 'arguments': {
+                    'action': 'source', 'source_id': source['id'], 'source_version': source['version']}},
+                'meaning': 'Read this retained case source and explicitly reselect a returned citation. Identity does not establish execution success or admissible body evidence. The submitted citation was not repaired, validated or upgraded.'}
+    return {'read_call': {'tool': 'forsic_reporting', 'arguments': {'action': 'state'}},
+            'meaning': 'Reselect a source from this case. No malformed or foreign reference was promoted to a source selector.'}
+
+
+def retained_claims(case, state, old, note, judgment, contract_version):
+    """Validate explicit reuse against the committed note, before retiring anything."""
+    from .host import find
+    from .assessment_basis import _citation
+    result={}
+    for submitted in judgment.get('claims', []):
+        if not isinstance(submitted, dict) or 'retain_claim_ref' not in submitted:
+            continue
+        if contract_version != 'v2' or not old or old.get('question_contract_version') != 'v2':
+            raise ValueError('retain_claim_ref requires an existing v2 question')
+        if old['definition_version'] != note['definition_version']:
+            raise ValueError('Cannot retain claims across a changed question definition')
+        selected=submitted['retain_claim_ref']
+        if not isinstance(selected, dict) or set(submitted) != {'retain_claim_ref'}:
+            raise ValueError('retain_claim_ref cannot include authored claim fields')
+        own=find(state, 'questions', 'Q-'+old['note_id']).get('claim_refs', [])
+        if selected not in own:
+            raise ValueError('Retain an exact current claim reference owned by this question')
+        claim=find(state, 'claims', selected['id'])
+        if claim['version'] != selected['version'] or claim['status'] != 'adopted' or claim['scope'] != note['scope']:
+            raise ValueError('Retained claim is stale, retired or outside this question scope')
+        if claim['id'] in result:
+            raise ValueError('Duplicate retain_claim_ref')
+        if not claim.get('source_refs'):
+            raise ValueError('Retained claim needs exact grounded observations')
+        for reference in [*claim['source_refs'], *claim.get('counterevidence_refs', [])]:
+            if reference.get('kind') != 'observation':
+                raise ValueError('Retained claim needs exact grounded observations')
+            observation=find(state, 'observations', reference['id'])
+            if observation['version'] != reference['version']:
+                raise ValueError('Retained observation version changed')
+            _citation(case, state, dict(source_id=observation['source_ref']['id'],
+                source_version=observation['source_ref']['version'], pointer=observation['field_pointer'],
+                literal=observation['literal'], byte_start=observation['byte_start']))
+        result[claim['id']]=deepcopy(claim)
+    return result
+
+
+def records(case,state,note,judgment,contract_version='v1',retained=None):
     """Called under the note transaction: mechanically bind analyst selections."""
     from .assessment_basis import _citation
     from .host import digest, ref
@@ -143,6 +259,13 @@ def records(case,state,note,judgment,contract_version='v1'):
     if problems:raise ValueError('Invalid judgment: '+str(problems))
     observations=[];claims=[];source_ids=[]
     for index, submitted in enumerate(judgment.get('claims',[judgment])):
+        if 'retain_claim_ref' in submitted:
+            claim=deepcopy((retained or {})[submitted['retain_claim_ref']['id']])
+            claims.append(claim)
+            for reference in [*claim['source_refs'], *claim.get('counterevidence_refs', [])]:
+                observation=next(o for o in state['observations'] if o['id']==reference['id'])
+                source_ids.append(observation['source_ref']['id'])
+            continue
         if not submitted['citation_refs'] or not submitted['reasoning_summary'].strip():
             raise ValueError('Every grounded claim needs explicit evidence selections and reasoning')
         analysis={'counter_citation_refs':[], 'inference_strength':'unrated', 'assumptions':[], 'limitations':[], **submitted}

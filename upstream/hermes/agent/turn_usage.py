@@ -1,6 +1,6 @@
 """Per-response usage accounting for the conversation turn loop.
 
-After every successful model API call, ``record_response_usage`` folds ``response.usage``
+For every returned model API attempt, ``record_response_usage`` folds ``response.usage``
 into: the context compressor (``update_from_response`` + the compression-budget rearm
 latch), the usage anchor for display/compression math, per-session token/cost counters,
 the state.db token-delta queue, and the observability log line. MoA sessions additionally

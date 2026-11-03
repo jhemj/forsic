@@ -114,6 +114,8 @@ VALID_HOOKS: Set[str] = {
     # requires a valid result when memory.tenant_managed is enabled.
     "native_memory_policy",
     "pre_tool_call", "post_tool_call", "transform_terminal_output", "transform_tool_result",
+    # Native asynchronous clarify settlement: session_id, server_request_id, questions, result.
+    "clarification_resolved",
     # transform_llm_output: return a replacement string (first non-None wins) or None.
     "transform_llm_output", "pre_llm_call", "post_llm_call",
     # Read-only durable-state projections, separate from visible assistant output. Goal kwargs:

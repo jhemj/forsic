@@ -66,11 +66,34 @@ REMEDIES = {
     'sensitive_export_receipt_invalid': 'Select a complete retained export receipt with an exported-byte SHA-256; export_line selects one exact retained stream line.',
     'sensitive_export_destination_invalid': 'Select an export whose retained destination is a file inside this conversation workspace.',
     'sensitive_export_file_unavailable': 'The selected workspace export is unavailable or not a permitted regular file. Inspect it or obtain a new explicit export.',
+    'sensitive_result_processing_failed': 'The detector returned, but host validation or retention failed. This is not a selection failure or evidence of absence. An operator must inspect the restricted failure receipt; do not retry unchanged code and inputs.',
 }
 
 
 class ScanRejected(ValueError):
     """Actionable public code, never a source value or detector diagnostic."""
+
+    def __init__(self, code, *, selection_recovery=None):
+        super().__init__(code)
+        self.selection_recovery = selection_recovery
+
+
+def _selection_rejected(reason, index, event):
+    """Navigate a validated retained source without echoing a rejected value."""
+    from .report_driven.host import source_record
+    instructions = {
+        'source_failed': 'This retained source is an error result. Select a successful evidence result.',
+        'pointer_absent': 'The pointer does not exist in this retained result. Read the result and copy a returned pointer; do not infer an arguments/path field.',
+        'not_text_scalar': 'Select one returned text scalar. Lists and objects are not scan inputs.',
+        'not_body_text': 'Select retained body text, not metadata or an already masked scan result.',
+        'not_evidence_file': 'This is not an ordinary selected-file path. For image-internal evidence, select one returned body scalar with retained_text, or an explicit hash-bound workspace_export for the original file content.',
+    }
+    return ScanRejected('sensitive_source_selection_invalid', selection_recovery={
+        'target_index': index, 'reason': reason, 'instruction': instructions[reason],
+        'source_call': {'tool': 'forsic_reporting', 'arguments': {'action': 'source',
+            'source_id': event['id'], 'source_version': source_record(event)['version']}},
+        'skill_call': {'tool': 'forsic_skill', 'arguments': {'action': 'read', 'name': 'scan-sensitive-data'}},
+        'coverage_note': 'Selection failed before scanning; no claim about data absence, holdings or disclosure follows.'})
 
 
 def _complete_export_receipt(receipt):
@@ -348,13 +371,13 @@ def _stage(case, args, session_id, directory, native):
         if source_record(event)['version'] != target.get('source_version'):
             raise ScanRejected('sensitive_source_version_changed')
         if data.get('error') and target['kind'] != 'workspace_export':
-            raise ScanRejected('sensitive_source_selection_invalid')
+            raise _selection_rejected('source_failed', i - 1, event)
         try:
             value = select(data, target['pointer'])
         except ValueError:
-            raise ScanRejected('sensitive_source_selection_invalid') from None
+            raise _selection_rejected('pointer_absent', i - 1, event) from None
         if not isinstance(value, str):
-            raise ScanRejected('sensitive_source_selection_invalid')
+            raise _selection_rejected('not_text_scalar', i - 1, event)
         key = f'F{i:04d}'
         item = {'input_id': key, 'path': '/scan-input/' + key,
             'encoding': target['encoding'], 'format': target['format'],
@@ -364,7 +387,7 @@ def _stage(case, args, session_id, directory, native):
         if target['kind'] == 'retained_text':
             identity = ('text', event['id'], target['pointer'])
             if field_role(data, target['pointer']) != 'body' or data.get('schema') == SCHEMA:
-                raise ValueError('Select retained body text, not metadata or a masked scan')
+                raise _selection_rejected('not_body_text', i - 1, event)
             if target['encoding'] not in ('auto', 'utf-8'):
                 raise ValueError('Retained text is already UTF-8; do not reinterpret its encoding')
             raw = value.encode('utf-8')
@@ -382,7 +405,7 @@ def _stage(case, args, session_id, directory, native):
                     or (tool in ('forsic_read', 'forsic_read_bytes', 'forsic_hash') and target['pointer'] == '/path')
                     or (tool == 'forsic_search' and re.fullmatch(r'/matches/\d+/path', target['pointer'])))
                 if not allowed:
-                    raise ValueError('Use a retained selected-file path, not an image-internal or arbitrary path')
+                    raise _selection_rejected('not_evidence_file', i - 1, event)
                 # Reject a symlink even though Case.path normally resolves paths.
                 _no_symlinks(case.root / value)
                 path = case.path(value)
@@ -473,7 +496,7 @@ def _safe_helper(body, scan_id):
                    external_disclosure='not_assessed', real_person_data='not_assessed',
                    count_method='retained_unique_source_span_and_value',
                    counts_are_lower_bounds=body.get('summary',{}).get('counts_are_lower_bounds') is True)
-    rules = tomllib.loads((Path(__file__).parents[1] / 'tools/sensitive/gitleaks.toml').read_text())['rules']
+    rules = tomllib.loads((Path(__file__).resolve().parents[1] / 'tools/sensitive/gitleaks.toml').read_text())['rules']
     trusted_rules = {rule['id'] for rule in rules} | ENTITIES
     findings = []
     for finding in body.get('findings', []):
@@ -594,6 +617,7 @@ def invoke(case, submitted, session_id, native_execution=None):
             inputs_dir.mkdir(mode=0o700)
             inputs = _stage(case, args, session_id, inputs_dir, native_execution)
             code_hash = _sha(Path(snapshot['helpers']['sensitive_scan.py']['path']).read_bytes())
+            host_policy_hash = _sha(Path(__file__).resolve().read_bytes())
             lock_hash = snapshot['declared_lock_sha256']
             identity = {'case_id': case.config['case_id'], 'session_id': session_id,
                 'inputs': inputs, 'profiles': args['profiles'], 'mode': args['mode'],
@@ -616,6 +640,16 @@ def invoke(case, submitted, session_id, native_execution=None):
                 if _sha(raw) != prior['safe_sha256']:
                     raise ValueError('Retained scan integrity check failed')
                 safe = json.loads(raw)
+                if (not args.get('resume_ref')
+                        and safe.get('error_code') in ('sensitive_scan_rejected', 'sensitive_result_processing_failed')
+                        and safe.get('execution', {}).get('state') == 'returned'
+                        and safe['execution'].get('exit_code') == 0
+                        and safe['execution'].get('termination_confirmed') is True
+                        and prior.get('host_policy_sha256') != host_policy_hash):
+                    # Preserve the old receipt. One new attempt after a host
+                    # repair is allowed; successful scans and exact resumes
+                    # retain their original reuse semantics.
+                    continue
                 shutil.rmtree(job)
                 job = None
                 safe.update(reused=True, reused_from_scan=old.name)
@@ -623,6 +657,7 @@ def invoke(case, submitted, session_id, native_execution=None):
             if args.get('resume_ref'):
                 raise ValueError('The retained resume reference is unavailable')
             manifest = {'schema': SCHEMA, 'scan_id': job.name, 'request_fingerprint': fingerprint,
+                'host_policy_sha256': host_policy_hash,
                 'identity': identity, 'state': 'prepared', 'created_at': time.time(),
                 'native_call': native_execution.record() if native_execution else None}
             _write(job / 'manifest.json', _json(manifest))
@@ -709,7 +744,13 @@ def invoke(case, submitted, session_id, native_execution=None):
             return safe
     except (OSError, ValueError, KeyError, TypeError) as exc:
         code = exc.args[0] if isinstance(exc,ScanRejected) and exc.args[0] in REMEDIES else 'sensitive_scan_rejected'
+        execution = safe.get('execution', {})
+        if (code == 'sensitive_scan_rejected' and execution.get('state') == 'returned'
+                and execution.get('exit_code') == 0 and execution.get('termination_confirmed') is True):
+            code = 'sensitive_result_processing_failed'
         safe = _failure(code, safe.get('execution'))
+        if isinstance(exc, ScanRejected) and exc.selection_recovery is not None:
+            safe['selection_recovery'] = exc.selection_recovery
         if job is not None:
             try:
                 _write(job / 'host-failure.json', _json({'error_type': type(exc).__name__, 'detail': str(exc)}))

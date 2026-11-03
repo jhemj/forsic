@@ -52,7 +52,11 @@ def independent_review_projection(review_context, state):
     projection['enabled'] = True
     # Received attempts are represented by the retained receipt. Other current
     # final receipts supply their own availability status when re-rendered.
-    attempt_status = (review_context.get('attempt') or {}).get('status')
+    from .independent_gate import attempt_for_context
+    attempt = attempt_for_context(review_context, result) or {}
+    if attempt.get('diagnostic'):
+        projection['last_attempt'] = attempt
+    attempt_status = attempt.get('status')
     unavailable = (attempt_status if attempt_status in AVAILABILITY_LIMITS else
                    result.get('latest_final_status') if not result.get('final_review_current') else None)
     projection['availability_status'] = unavailable if unavailable in AVAILABILITY_LIMITS else None
@@ -70,7 +74,17 @@ def _review_gate(case, state, manifest, context):
         return None, None
     if context['resolved']['case'].manifest != case.manifest:
         raise ValueError('Independent review and report case manifests differ')
-    if projection.get('requires_followup') or projection.get('pending_finding_ids'):
+    attempt = projection.get('last_attempt') or {}
+    if attempt.get('diagnostic') and attempt.get('followup_action') == 'repair':
+        status = 'independent_review_incomplete'
+        next_step = ('독립 검토 실행이 실패했습니다. diagnostic의 원인을 복구한 뒤 현재 보고서의 finalize로 '
+                     '다시 검토하세요. 대기 중인 검토가 아니며 같은 답변 반복만으로 복구되지 않습니다. '
+                     '보존된 미처리 의견은 review_inbox에서 별도로 확인하세요.')
+    elif ((projection.get('executive_followup') or {}).get('status') == 'blocked'
+            and not projection.get('pending_finding_ids')):
+        status = 'independent_review_incomplete'
+        next_step = '요청한 임원 독자 질문·답이 미완료입니다. 보존된 가용성 한계와 검토 중단 상태를 알리고 원인을 복구한 뒤 재개하세요. 같은 미확정 요청은 자동 재전송하지 않습니다.'
+    elif projection.get('requires_followup') or projection.get('pending_finding_ids'):
         status = 'independent_review_pending'
         next_step = 'review_inbox에서 보존된 중요 의견을 읽고 review_response로 근거와 처분을 저장한 뒤 보고서를 다시 생성하세요.'
     elif ((projection.get('executive_followup_required') or projection.get('executive_followup'))
@@ -87,6 +101,9 @@ def _review_gate(case, state, manifest, context):
         return projection, None
     blocked = {'finalized': False, 'delivery_status': status, 'draft_preserved': True,
                'bundle_id': manifest['bundle_id'], 'review': projection, 'next_step': next_step}
+    if attempt.get('diagnostic'):
+        blocked.update(diagnostic=attempt['diagnostic'], followup_action=attempt.get('followup_action'),
+                       followup_actionable=attempt.get('followup_actionable'))
     if status == 'independent_review_pending':
         blocked['recovery'] = {'tool':'forsic_reporting','arguments':{'action':'review_inbox'}}
     return projection, blocked
@@ -214,6 +231,16 @@ def finalize(case, state, bundle_id, *, review_context=None, snapshot_id=None, r
             'finalization_receipt': receipt, 'reused': existing is not None,
             'delivery_status': 'ready_for_configured_case_topic', 'published': False,
             'meaning': data['meaning'] + '; 실제 첨부 성공은 Telegram 전송 영수증으로 별도 확인'}
+    result['report_work'] = {
+        'stage': 'deliver_selected_version', 'same_content_rewrite_needed': False,
+        'next_step': 'Deliver this selected bundle within the approved channel. Reuse its checks and selection; '
+            'do not restart authoring or the three review rounds for cosmetic wording. Reopen only affected '
+            'work for new evidence, a material error or new user scope.',
+        'verification': {'artifact_integrity': 'passed',
+            'independent_review_current': bool(review and review.get('final_review_current')),
+            'layout': manifest.get('layout_review', {'status': 'unverified'})},
+        'meaning': 'Report selection ends unchanged drafting, not the investigation or all unknowns. '
+            'Unavailable layout/independent review remains a disclosed limitation, never a verified pass.'}
     if not manifest.get('redacted'):
         from .delivery import delivery_view
         result['delivery'] = delivery_view(now, [q for q in now['questions'] if q['id'] in manifest['question_ids']],

@@ -79,7 +79,7 @@ def _appendix_views(s,review=None,write_status=None,*,independent_review=None,sc
             return ('[재검토 필요]\n' if j['review_required'] else '')+'현재 답은 읽기용 설명(EX01)에 한 번 수록합니다.'
         return ('[재검토 필요]\n' if j['review_required'] else '')+j['answer']
     answers=table(['질문','현재 답과 범위','조사 상태와 남은 확인'],[[q['id']+' '+q['question'],current_answer(q)+'\n'+q['scope'],disposition(q)+'\n'+(', '.join(q['remaining_gap_ids']) or '남은 검사 기록 없음')+'\n재개: '+joined(q.get('reopen_conditions',[]))] for q in s['questions']],[25,45,30])
-    gaps=table(['공백','판단에 미치는 한계','다음 확인 / 재개'],[[g['id']+'\n'+g['kind'],g['original_obligation']+'\n'+g['reason'],g['feasible_next_action']+'\n'+joined(g['reopen_conditions'])] for g in s['gaps'] if g['disposition']!='resolved'],[20,45,35])
+    gaps=table(['공백','판단에 미치는 한계','다음 확인 / 재개'],[[g['id']+'\n'+g['kind'],g['original_obligation']+'\n'+g['reason'],g['feasible_next_action']+'\n'+joined(g['reopen_conditions'])] for g in s['gaps'] if g['disposition'] not in ('resolved','not_applicable')],[20,45,35])
     alternatives=table(['설명','평가 / 반론','다음 판별'],[[h['id']+' '+h['explanation'],h['status']+'\n'+refs(h['counterevidence_refs'])+'\n'+joined(h['assumptions']),h['prediction']+'\n'+h['compatibility']] for h in s['hypotheses'] if h['id'] in {r['id'] for q in s['questions'] for r in q['hypothesis_refs']}],[32,34,34])
     timeline=table(['시각과 종류','내용·근거·가정','한계'],[time_row(t) for t in s['timeline']],[28,36,36])
     # Historical recommendations stay in the ledger, but new reports do not
@@ -97,6 +97,7 @@ def _appendix_views(s,review=None,write_status=None,*,independent_review=None,sc
         impact=impact_block,scope_status=scope_status)
     sources=table(['근거 / 생성 계보','출처와 보존 지문','실제 반환 범위'],[[x['id']+'\n'+x['source_generation_group'],x['label']+'\n'+x['locator']+'\nSHA-256 '+x['content_sha256'],x['coverage']] for x in s['sources']],[23,42,35])
     observations=table(['관측 / 원문 위치','정확히 제시된 문자열','해석 한계'],[[o['id']+'\n'+o['source_ref']['id']+o['field_pointer']+f"\nUTF-8 [{o['byte_start']},{o['byte_end']})",o['literal'],o['presented_view']+'\n'+o['interpretation_limit']+('\n취득·읽기 범위: '+json.dumps(o['acquisition_context'],ensure_ascii=False) if o.get('acquisition_context') else '')] for o in s['observations']],[30,38,32])
+    answers['row_ids']=[q['id'] for q in s['questions']]
     sources['row_ids']=[x['id'] for x in s['sources']]
     observations['row_ids']=[x['id'] for x in s['observations']]
     tests=table(['검사와 결과','판별 조건','실행 / 평가'],[[t['id']+'\n'+t['target_proposition']+'\n'+str(t['physical_job_ref']),str(t['support_rule'] or '')+'\n'+str(t['refute_rule'] or '')+'\n'+t['inconclusive_rule'],t['execution_state']+' / '+t['assessment_state']+'\n'+t['design_timing']] for t in s['tests']],[34,42,24])
@@ -136,6 +137,14 @@ def _appendix_views(s,review=None,write_status=None,*,independent_review=None,sc
         if pending:independent_blocks.append(paragraph('미처분 중요 검토 의견: '+', '.join(pending)+' · 이 보고서는 초안으로 유지됩니다.'))
         if independent_review.get('availability_limitation'):
             independent_blocks.append(paragraph('독립 검토 한계 · '+independent_review['availability_limitation']))
+        for round_ in (independent_review.get('executive_followup') or {}).get('rounds', []):
+            context = round_.get('report_context') or {}
+            presented = context.get('draft_present')
+            detail = ('보고서 본문 미제공' if presented is False else
+                      '보고서 발췌 제공' if presented is True else '보고서 본문 제공 여부 미확인')
+            if presented and context.get('omitted_characters'):
+                detail += ' · 생략된 본문 있음'
+            independent_blocks.append(paragraph(str(round_['round'])+'회 검토 입력 · '+detail))
     # Current question notes own these dispositions; rendering never adopts the
     # reviewer's suggestion or hides a scoped limitation behind a completion flag.
     disposition_labels={'investigated':'조사 후 처리','refuted':'근거로 반박','scope_limited':'한계로 명시'}
@@ -243,7 +252,7 @@ def _template_appendices(pages):
         for key in keys:
             if key in remaining:append_section(blocks,remaining.pop(key))
         if blocks:result.append({'id':'appendix-'+letter,'title':'부록 '+letter+'. '+title,
-                                 'section':'appendix','blocks':blocks})
+                                 'section':'appendix','presentation_view':'audit','blocks':blocks})
     # New detail sections remain visible even when a future projection adds one.
     if remaining and not result:
         result.append({'id':'appendix-G','title':'부록 G. 전달 목록·승인·정정 이력',
@@ -261,6 +270,7 @@ def compile_views(s,review=None,write_status=None,*,independent_review=None,scop
                            scope_inventory=scope_inventory)
     projection=project_report_slots(s)
     pages=narrative_body(s)
+    retained_contract='forsic-integrated-v2' if pages and any(b.get('region') for b in pages[0]['blocks']) else None
     if pages is None:
         pages=project_integrated(s,projection)
         notices=[block for block in pages[0]['blocks'] if block.get('label')=='보고서 작성 상태']
@@ -268,6 +278,35 @@ def compile_views(s,review=None,write_status=None,*,independent_review=None,scop
                 'text':'현재 판단과 보존 근거를 대조하기 위한 기술 기록입니다. 독자용 자연어 본문은 아직 작성되지 않았습니다. 자료 부재나 침해 부재를 뜻하지 않습니다.'}
         if notices:notices[0].update(notice)
         else:pages[0]['blocks'].insert(0,notice)
+    # Reader-visible qualifications come from their structured owners, not an
+    # inferred summary of execution history. Full audit records stay below.
+    reader_notices=[]
+    for gap in s['gaps']:
+        if gap['disposition'] not in ('resolved','not_applicable') and gap['impact'] in ('material','decision_critical'):
+            reader_notices.append({'kind':'callout','label':'현재 보고서의 한계','text':gap['reason'],'region':'reader_limitation'})
+    for question in s['questions']:
+        checks=question.get('next_checks',[])
+        if checks:
+            reader_notices.append({'kind':'callout','label':'다음 확인 · 분석가가 제시한 순서',
+                'text':'\n'.join(str(index)+'. '+check for index,check in enumerate(checks,1)),
+                'region':'reader_next_checks'})
+    if scope_inventory is not None:
+        labels={'listed':'목록·메타데이터만 관측','partial_body':'본문 일부 관측',
+                'body_read':'완료된 본문 반환 기록 있음','read_failed':'본문 읽기 실패'}
+        reader_notices.append({'kind':'callout','label':'현재 자료 관측 범위',
+            'text':' / '.join(labels[key]+': '+str(scope_inventory['counts'][key]) for key in labels)+
+            '\n목록 발견·본문 반환은 분석 완료가 아닙니다. 미검토의 중요성은 질문별 한계와 종결 이유를 참조하세요.',
+            'region':'reader_coverage'})
+    if independent_review:
+        if independent_review.get('pending_finding_ids'):
+            reader_notices.append({'kind':'callout','label':'미처분 중요 검토 의견',
+                'text':', '.join(independent_review['pending_finding_ids'])+' · 이 보고서는 초안으로 유지됩니다.'})
+        if independent_review.get('availability_limitation'):
+            reader_notices.append({'kind':'callout','label':'독립 검토 한계','text':independent_review['availability_limitation']})
+    if write_status and write_status['affected_question_count']:
+        reader_notices.extend(paragraph(n['message']) for n in write_status['notices'])
+        if write_status['omitted_notice_count']:
+            reader_notices.append(paragraph(f"그 밖의 질문 {write_status['omitted_notice_count']}개도 수정 저장에 실패하여 현재 저장된 답을 사용합니다."))
     appendices=[report_slot_appendix(projection)] if any(slot['entries'] for slot in projection['slots']) else []
     # Keep the exact answer, citation labels and complete technical details in
     # this same document. Existing immutable bundles are never rewritten.
@@ -276,11 +315,39 @@ def compile_views(s,review=None,write_status=None,*,independent_review=None,scop
         item=deepcopy(original);item['section']='appendix'
         item['title']='부록 '+item['title']
         appendices.append(item)
+    if retained_contract:
+        from .audience_projection import project as audience_project, CONTRACT
+        from .narrative import status as authored_status
+        pages=audience_project(pages,authored_status(s)['fields'],s)
+        retained_contract=CONTRACT
+    for item in pages:item.setdefault('presentation_view','body')
     pages.extend(_template_appendices(appendices))
+    if reader_notices:
+        pages.append(dict(id='report-scope-records',title='감사 기록 · 조사 범위와 검토 상태',
+            section='appendix',presentation_view='audit',blocks=reader_notices))
     pages=cite_pages(pages,s,projection)
-    pages.append(reference_appendix(s,projection))
-    return {'integrated':dict(projection_version=PROJECTION_VERSION,
-        schema_version='forsic-report-view-2',reader='integrated',
+    references=reference_appendix(s,projection);references['presentation_view']='audit'
+    pages.append(references)
+    from .reader_cards import reader_cards
+    from .narrative import status as narrative_status
+    editorial=narrative_status(s)
+    document_review={'complete':'현재 본문 대조 기록 있음', 'needs_revision':'현재 본문 수정 필요',
+                     'required':'현재 본문 대조 필요'}[editorial['review_status']]
+    independent_status=('현재 답의 독립 검토 기록 있음' if independent_review and independent_review.get('final_review_current')
+                        else '현재 답의 독립 검토 미확인')
+    if independent_review and independent_review.get('pending_finding_ids'):
+        independent_status+=' · 미처분 의견 '+str(len(independent_review['pending_finding_ids']))+'건'
+    snapshot_status={'investigation':{'partial':'질문별 조사·보류 범위 참조',
+        'supported_scope_closed':'선택 질문 범위 종결 · 잔여 한계 참조'}.get(s['status']['investigation'],s['status']['investigation']),
+        'semantic':document_review+' / '+independent_status+' · 내용 정확성 자동 인증 아님',
+        'layout':{'not_rendered':'화면·인쇄 검증 미기록','rendered_not_reviewed':'렌더링 후 배치 검토 필요',
+                  'reviewed':'보존된 배치 검토 기록 있음'}[s['status']['layout_gate']],
+        'integrity':{'subject':'보고 근거 결속 검사',
+            'status':{'unverified':'미검증','passed':'통과','failed':'실패'}[s['status']['integrity_gate']]+
+                     ' · 원본 E01 해시 검증 상태와 별개'}}
+    return {'integrated':dict(reader_notices=[],reader_cards=reader_cards(s),projection_version=PROJECTION_VERSION,
+        schema_version='forsic-report-view-3' if retained_contract else 'forsic-report-view-2',
+        template_contract=retained_contract,reader='integrated',publication_status='internal_partial_snapshot',snapshot_status=snapshot_status,
         title='정보시스템 침해사고 조사 결과',data_mode=s['meta']['data_mode'],
         report_id=s['meta']['report_id'],snapshot_revision=s['meta']['snapshot_id'],
         security=s['meta']['classification'],pages=pages)}
@@ -314,7 +381,7 @@ def selected_report_state(s, question_ids):
     result['status']['investigation']='supported_scope_closed' if all(
         q['work_state']=='scoped_closed' and not q.get('judgment_review_required') for q in result['questions']) else 'partial'
     result['status']['explicit_limitations']=s['status']['explicit_limitations'][:2]+[
-        g['reason'] for g in result['gaps'] if g['impact'] in ('material','decision_critical') and g['disposition']!='resolved']
+        g['reason'] for g in result['gaps'] if g['impact'] in ('material','decision_critical') and g['disposition'] not in ('resolved','not_applicable')]
     result['coverage_summary']=f"선택 질문 {len(selected)}개 / 사건 질문 {len(s['questions'])}개. 출처 {len(cited)}개; 독립 증거 수·전체 조사 완료율이 아님."
     return result
 
@@ -348,6 +415,8 @@ def bundle(case,s,redact=(),review_id=None,question_ids=None,*,review_context=No
     if any(term in item for term in redact for item in protected):raise ValueError('Masking cannot corrupt shared IDs')
     for v in views.values():
         for p in v['pages']:p['blocks']=redact_view(p['blocks'],redact)
+        if 'reader_cards' in v:v['reader_cards']=redact_view(v['reader_cards'],redact)
+        if 'reader_notices' in v:v['reader_notices']=redact_view(v['reader_notices'],redact)
     # Persist only the safe judgment snapshot before report-only originals are read.
     private=case.output/('report-state-'+s['meta']['snapshot_id']+'.json')
     try:
@@ -359,7 +428,7 @@ def bundle(case,s,redact=(),review_id=None,question_ids=None,*,review_context=No
     sensitive=report_appendix(case,[source['id'] for source in selected['sources']])
     local_only=bool(sensitive.get('contains_sensitive_originals'))
     append_sensitive(views['integrated'],sensitive)
-    renderer_hash=digest({name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest() for name in ('views.py','workbench_views.py','render_views.py','word_export.py','write_status.py','delivery.py','reader_projection.py','reader_explanation.py','narrative.py','report_slots.py','report_research.py','gap_audit.py','report_style.json','templates/integrated_report.docx','evidence_export.py','sensitive_appendix.py')})
+    renderer_hash=digest({name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest() for name in ('views.py','workbench_views.py','render_views.py','word_export.py','write_status.py','delivery.py','reader_projection.py','audience_projection.py','typography.py','reader_cards.py','reader_explanation.py','narrative.py','template_contract.py','report_slots.py','report_research.py','gap_audit.py','report_style.json','templates/integrated_report.docx','evidence_export.py','sensitive_appendix.py')})
     # A crash leaves an unregistered hidden staging directory, not half a bundle.
     staging=Path(tempfile.mkdtemp(prefix='.report-stage-',dir=case.output))
     from .word_export import stage_inputs,FORMATS

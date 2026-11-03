@@ -190,6 +190,11 @@ def run_tool_round(
         final_response, _turn_exit_reason = SAFE_PAUSE_NOTICE, SAFE_PAUSE_REASON
         return _verdict("break")
 
+    from agent.conversation_loop import _run_budget_checkpoint_due
+    if not getattr(agent, "_interrupt_requested", False) and _run_budget_checkpoint_due(agent):
+        _turn_exit_reason = "runtime_budget_handoff"
+        return _verdict("break")
+
     # Reset per-turn retry counters so one truncation can't poison the turn.
     truncated_tool_call_retries = 0
     # Defer the paragraph break: _fire_stream_delta() prepends one "\n\n" when real

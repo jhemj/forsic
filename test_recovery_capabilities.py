@@ -4,6 +4,7 @@ import io
 import json
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -60,6 +61,61 @@ class RecoveryCapabilitiesTests(unittest.TestCase):
         export=value['executables']['ewfexport']['probes'][0]
         self.assertEqual(len(export['stdout']),1600)
         self.assertTrue(export['output_truncated'])
+
+    def test_binary_strings_presence_probe_and_missing_are_distinct(self):
+        def run(argv, **kwargs):
+            self.assertEqual(argv, ['/usr/bin/strings', '--version'])
+            self.assertEqual(kwargs, {'capture_output':True, 'timeout':3, 'check':False})
+            return SimpleNamespace(returncode=0, stdout=b'GNU strings synthetic', stderr=b'')
+        missing, probe = self.discover(set(), run)
+        probe.assert_not_called()
+        self.assertEqual(missing['executables']['strings']['state'], 'missing_executable')
+        observed, probe = self.discover({'strings'}, run)
+        self.assertEqual(observed['executables']['strings']['state'], 'available')
+        self.assertEqual(observed['executables']['strings']['probes'][0]['stdout'], 'GNU strings synthetic')
+        self.assertEqual(probe.call_count, 1)
+        self.assertEqual(observed['target_format_support'], 'not_checked')
+        self.assertEqual(observed['recovery_execution'], 'not_attempted')
+        declared = shell.workspace_info()['declared_capabilities']['binary_inspection']
+        self.assertFalse(declared['runtime_verified'])
+        self.assertEqual(declared['input_limit_bytes'], 1048576)
+        self.assertEqual(shlex.split(declared['bounded_command']),
+                         ['head', '-c', '1048576', '--', '/work/selected-binary', '|',
+                          'strings', '-a', '-n', '8', '-t', 'x'])
+
+    def test_declared_binary_recipe_limits_bytes_before_strings(self):
+        # A synthetic executable observes the actual pipe input/arguments, so
+        # the recipe's bound is exercised without relying on installed binutils
+        # or claiming that any real binary has been inspected.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'selected binary'
+            binary.write_bytes(b'A' * 1048576 + b'UNINSPECTED-TAIL')
+            executable = root / 'strings'
+            executable.write_text('#!' + sys.executable + '\n'
+                'import sys\n'
+                'assert sys.argv[1:] == ["-a", "-n", "8", "-t", "x"]\n'
+                'data = sys.stdin.buffer.read()\n'
+                'print(len(data), data[-2:].decode())\n')
+            executable.chmod(0o700)
+            command = shell.workspace_info()['declared_capabilities']['binary_inspection']['bounded_command']
+            command = command.replace('/work/selected-binary', shlex.quote(str(binary)))
+            result = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', command],
+                env={'PATH': str(root) + ':/usr/bin:/bin'}, capture_output=True, timeout=5, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, b'1048576 AA\n')
+            self.assertEqual(binary.stat().st_size, 1048576 + len(b'UNINSPECTED-TAIL'))
+
+    def test_binary_strings_probe_failure_preserves_executable_presence(self):
+        def run(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, 3)
+        value, probe = self.discover({'strings'}, run)
+        item = value['executables']['strings']
+        self.assertEqual(item['state'], 'available')
+        self.assertEqual(item['probes'][0]['state'], 'probe_failed')
+        self.assertEqual(value['target_format_support'], 'not_checked')
+        self.assertEqual(value['recovery_execution'], 'not_attempted')
+        self.assertEqual(probe.call_count, 1)
 
     def invoke(self, payload, *, state='returned', code=0, image_error=None):
         with tempfile.TemporaryDirectory() as directory:

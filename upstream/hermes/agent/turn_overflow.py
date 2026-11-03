@@ -428,6 +428,15 @@ def _recover_context_length(st: _Recovery, _retry: TurnRetryState, error_msg: st
             compression_exhausted=False, reason=FailoverReason.server_error.value, retryable=True,
         )
 
+    return _compress_context_overflow(st, _retry, context_limit_changed=bool(new_ctx and new_ctx < old_ctx))
+
+
+def _compress_context_overflow(
+    st: _Recovery, _retry: TurnRetryState, *, context_limit_changed: bool = False,
+    prompt_tokens: int = 0,
+) -> OverflowVerdict:
+    """Bounded native compression for provider-proven context pressure."""
+    agent = st.agent
     exhausted = st.count_attempt()
     if exhausted is not None:
         return exhausted
@@ -435,11 +444,12 @@ def _recover_context_length(st: _Recovery, _retry: TurnRetryState, error_msg: st
         tokens=st.approx_tokens, attempt=st.compression_attempts, cap=st.max_compression_attempts,
     ))
 
-    deferred, shrank, new_tokens = st.compress_scored_by_tokens(st.request_tokens(), fail_on_timeout=True)
+    request_tokens = max(prompt_tokens, st.request_tokens())
+    deferred, shrank, new_tokens = st.compress_scored_by_tokens(request_tokens, fail_on_timeout=True)
     if deferred is not None:
         return deferred
     st.approx_tokens = new_tokens
-    if shrank or (new_ctx and new_ctx < old_ctx):
+    if shrank or context_limit_changed:
         time.sleep(2)  # Brief pause between compression retries
         # Rebuild the full request and force normal preflight to honor it; message
         # count alone doesn't prove system/tool-inclusive pressure fell.
@@ -456,6 +466,28 @@ def _recover_context_length(st: _Recovery, _retry: TurnRetryState, error_msg: st
         ),
         log=("%sContext length exceeded: %s tokens. Cannot compress further.", agent.log_prefix, f"{new_tokens:,}"),
     )
+
+
+def recover_from_filled_context(
+    agent: Any, _retry: TurnRetryState, *, messages: List[Dict[str, Any]],
+    api_messages: Any, system_message: Any, active_system_prompt: Any,
+    conversation_history: Any, prompt_tokens: int, compression_attempts: int,
+    max_compression_attempts: int, api_call_count: int, effective_task_id: Any,
+) -> OverflowVerdict:
+    """A returned length response can prove overflow without a provider exception.
+
+    Discard its incomplete tool call and use the same compression budget, lease/fence,
+    cooldown bypass, progress check and restart contract as context-length errors.
+    """
+    st = _Recovery(
+        agent=agent, api_messages=api_messages, system_message=system_message,
+        effective_task_id=effective_task_id, api_call_count=api_call_count,
+        max_compression_attempts=max_compression_attempts, messages=messages,
+        active_system_prompt=active_system_prompt, conversation_history=conversation_history,
+        approx_tokens=prompt_tokens, compression_attempts=compression_attempts,
+        is_context_length_error=True,
+    )
+    return _compress_context_overflow(st, _retry, prompt_tokens=prompt_tokens)
 
 
 def recover_from_overflow(

@@ -7,7 +7,7 @@ from .notes import EVIDENCE_TOOLS
 
 def source_recovery(body):
     """Preserve executable navigation inputs as a unit, never repair them here."""
-    codes = {'source_version_mismatch', 'source_pointer_absent', 'unknown_retained_source', 'source_handle_rejected'}
+    codes = {'source_version_mismatch', 'source_pointer_absent', 'source_page_invalid', 'unknown_retained_source', 'source_handle_rejected', 'state_pointer_absent', 'state_page_invalid', 'state_snapshot_mismatch'}
     if body.get('error_code') not in codes:
         return {}
     result = {}
@@ -19,6 +19,10 @@ def source_recovery(body):
         result['failed_source'] = kept
         if omitted:
             result['failed_source_omitted_fields'] = omitted
+    failed_state = body.get('failed_state')
+    if isinstance(failed_state, dict):
+        result['failed_state'] = {key: failed_state[key] for key in
+            ('action', 'snapshot_id', 'question_id', 'question_ids', 'pointer', 'offset') if key in failed_state}
     call = body.get('next_call')
     if isinstance(call, dict):
         args = call.get('arguments') if call.get('tool') == 'forsic_reporting' else call
@@ -27,17 +31,99 @@ def source_recovery(body):
             source_call = (set(args) <= allowed and args.get('action') == 'source'
                            and (isinstance(args.get('source_id'), str) or isinstance(args.get('source_handle'), str)))
             state_call = body['error_code'] in ('unknown_retained_source', 'source_handle_rejected') and args == {'action': 'state'}
+            if body['error_code'].startswith('state_'):
+                state_call = (set(args) <= {'action', 'snapshot_id', 'question_id', 'question_ids', 'pointer', 'offset'}
+                              and args.get('action') in ('state', 'gaps'))
             if (source_call or state_call) and len(json.dumps(call, ensure_ascii=False)) <= 1500:
                 result['next_call'] = deepcopy(call)
             else:
                 result['recovery_call_omitted'] = True
     # Coordinates are indivisible. Spend the budget on exact selections, then
     # disclose whole-field omissions if an unusual coordinate cannot fit.
-    while len(json.dumps(result, ensure_ascii=False, separators=(',', ':'))) > 1700 and result.get('failed_source'):
-        key = max(result['failed_source'], key=lambda k: len(json.dumps(result['failed_source'][k], ensure_ascii=False)))
-        result['failed_source'].pop(key)
-        result.setdefault('failed_source_omitted_fields', []).append(key)
+    for field in ('failed_source', 'failed_state'):
+        while len(json.dumps(result, ensure_ascii=False, separators=(',', ':'))) > 1700 and result.get(field):
+            key = max(result[field], key=lambda k: len(json.dumps(result[field][k], ensure_ascii=False)))
+            result[field].pop(key)
+            result.setdefault(field + '_omitted_fields', []).append(key)
     return result
+
+
+def review_inbox_navigation(body):
+    """Retain a small index; retrieve one complete finding before answering it."""
+    if body.get('kind') != 'independent_review_inbox':
+        return {}
+    def identity(value):
+        return isinstance(value, str) and 0 < len(value) <= 160
+    findings = body.get('findings')
+    if not isinstance(findings, list):
+        return {}
+    scope = body.get('write_scope', {})
+    ids = scope.get('question_ids', []) if isinstance(scope, dict) else []
+    ids = [qid for qid in ids if identity(qid)] if isinstance(ids, list) else []
+    selection = {'question_id': ids[0]} if len(ids) == 1 else {}
+    view = {'state_at_delivery': True,
+            'lookup': {'tool': 'forsic_reporting', 'arguments': {'action': 'review_inbox', **selection}},
+            'pending_count': body.get('pending_count') if type(body.get('pending_count')) is int else None,
+            'questions': [], 'findings': [], 'omitted_findings': len(findings),
+            'meaning': 'Navigation only. Read one finding for its complete question, exact source lookup and current save inputs; saved revisions may change.'}
+    if isinstance(scope, dict) and identity(scope.get('goal_id')):
+        view['write_scope'] = {'goal_id': scope['goal_id'], 'question_ids': ids[:5],
+                               'omitted_question_ids': max(0, len(ids)-5)}
+    for question in body.get('questions', []):
+        if (isinstance(question, dict) and identity(question.get('id'))
+                and type(question.get('revision')) is int and question['id'] in ids):
+            candidate = {'id': question['id'], 'revision': question['revision']}
+            if len(view['questions']) < 5 and len(json.dumps({**view, 'questions': view['questions'] + [candidate]}, ensure_ascii=False)) <= 900:
+                view['questions'].append(candidate)
+    for finding in findings:
+        if not isinstance(finding, dict) or not all(identity(finding.get(key)) for key in ('review_id', 'finding_id')):
+            continue
+        call = {'tool': 'forsic_reporting', 'arguments': {'action': 'review_inbox',
+                'review_id': finding['review_id'], 'finding_id': finding['finding_id'], **selection}}
+        candidate = {'read_call': call}
+        trial = {**view, 'findings': view['findings'] + [candidate],
+                 'omitted_findings': len(findings)-len(view['findings'])-1}
+        if len(json.dumps(trial, ensure_ascii=False, separators=(',', ':'))) > 1700:
+            break
+        view = trial
+    return {'review_inbox': view}
+
+
+def retained_navigation(body):
+    """Keep exact page selections through native pruning without source content."""
+    from .report_driven.source_handles import handle_reference
+    source = body.get('source_coordinate_contract') == 'source-coordinates-v1'
+    state = body.get('state_coordinate_contract') == 'state-coordinates-v1'
+    if not (source or state):
+        return {}
+    result = {}
+    for key in ('read_call', 'next_call'):
+        call = body.get(key)
+        if call is None:
+            if key == 'next_call':
+                result[key] = None
+            continue
+        args = call.get('arguments') if isinstance(call, dict) and call.get('tool') == 'forsic_reporting' else call
+        if not isinstance(args, dict) or len(json.dumps(call, ensure_ascii=False)) > 900:
+            continue
+        if args.get('pointer') != body.get('pointer'):
+            continue
+        offset = 0 if key == 'read_call' else body.get('next_offset')
+        if type(offset) is not int or args.get('offset') != offset:
+            continue
+        if source:
+            allowed = {'action', 'source_id', 'source_version', 'source_handle', 'pointer', 'offset', 'limit'}
+            ref = body.get('source_ref')
+            selected = handle_reference(args['source_handle']) if 'source_handle' in args else {
+                'id': args.get('source_id'), 'version': args.get('source_version')}
+            valid = args.get('action') == 'source' and isinstance(ref, dict) and selected == ref
+        else:
+            allowed = {'action', 'snapshot_id', 'question_id', 'question_ids', 'pointer', 'offset', 'limit'}
+            valid = (args.get('action') in ('state', 'gaps') and isinstance(body.get('snapshot_id'), str)
+                     and args.get('snapshot_id') == body['snapshot_id'])
+        if valid and set(args) <= allowed:
+            result[key] = deepcopy(call)
+    return result if result.get('read_call') else {}
 
 
 def execution_summary(body):
@@ -72,8 +158,18 @@ def review_navigation(body):
     status = advice.get('status')
     status = status if isinstance(status, str) and len(status)<=120 else 'unknown'
     pending = advice.get('pending_finding_ids')
+    count = len(pending) if isinstance(pending, list) else None
+    # Reprojection of our small navigation has no finding bodies/ID array.
+    # Preserve its delivered count only for that complete presentation shape;
+    # an arbitrary same-named field is neither a review count nor validation.
+    if (count is None and advice.get('advice_body_omitted') is True
+            and advice.get('role') == 'independent_advice_not_source_evidence'
+            and advice.get('pending_scope') == 'material'
+            and advice.get('lookup') == {'tool':'forsic_reporting','arguments':{'action':'review_inbox'}}
+            and type(advice.get('pending_count')) is int and 0 <= advice['pending_count'] <= 2**53-1):
+        count = advice['pending_count']
     view = {'status': status,
-            'pending_count': len(pending) if status not in ('unavailable', 'unknown') and isinstance(pending, list) else None,
+            'pending_count': count if status not in ('unavailable', 'unknown') else None,
             'pending_scope': 'material', 'advice_body_omitted': True,
             'lookup': {'tool': 'forsic_reporting', 'arguments': {'action': 'review_inbox'}},
             'role': 'independent_advice_not_source_evidence'}
@@ -124,6 +220,11 @@ def shell_navigation(body, lookup):
     if first:
         result['shell_result_lookup'] = {'tool': 'forsic_reporting', 'arguments': {
             **lookup['arguments'], 'pointer': first['pointer'], 'limit': 4096}}
+        # Keep the exact target above; retrieve the retained profile contract
+        # instead of carrying all preparation options through compression.
+        if isinstance(body.get('execution_policy', {}).get('triage'), dict) or 'triage' in body.get('policy_details_calls', {}):
+            result['triage_profile_lookup'] = {'tool': 'forsic_reporting', 'arguments': {
+                **lookup['arguments'], 'pointer': '/execution_policy/triage', 'limit': 4}}
     return result
 
 
@@ -148,6 +249,23 @@ def summarize(tool, args, content):
     view = {'tool': tool, 'pruned': True, 'body_omitted': True,
             'meaning': 'Body omitted here, not absent from the earlier result. Not current judgment or approval; check preserved calls/state and retrieve uncertain source spans.'}
     view.update(review_navigation(body))
+    navigation = retained_navigation(body)
+    navigation.update(review_inbox_navigation(body))
+    view.update(navigation)
+    # Unavailable capabilities describe failed work, never a verdict about the
+    # submitted indicator. Keep prerequisite and exact schema discovery calls.
+    capability_repair = {}
+    for key in ('capability_recovery', 'prerequisite'):
+        value = body.get(key)
+        if isinstance(value, dict) and len(json.dumps(value, ensure_ascii=False)) <= 700:
+            capability_repair[key] = deepcopy(value)
+    if body.get('error_code') == 'prerequisite_unavailable':
+        for key in ('outcome', 'delivery', 'scope', 'retry_when', 'indicator', 'indicator_type'):
+            if isinstance(body.get(key), str) and len(body[key]) <= 240:
+                capability_repair[key] = body[key]
+        if body.get('automatic_retry') is False:
+            capability_repair['automatic_retry'] = False
+    view.update(capability_repair)
     if body.get('schema') == 'forsic.triage.v1':
         view['triage'] = {
             'profile': body.get('profile'),
@@ -184,10 +302,24 @@ def summarize(tool, args, content):
     error = body.get('error')
     question_repair = (body.get('error_code') in ('invalid_question_fields', 'invalid_review_response', 'invalid_citation_selection') and
                        isinstance(body.get('invalid_fields'),list) and isinstance(body.get('recovery'),dict))
-    mutation_repair = (body.get('error_code') == 'mutation_payload_conflict'
+    bounded_repair = (body.get('error_code') in ('mutation_payload_conflict', 'report_authoring_reference_invalid', 'report_authoring_input_invalid')
                        and isinstance(body.get('recovery'), dict)
                        and len(json.dumps(body['recovery'], ensure_ascii=False)) <= 1000)
+    authoring_repair = (bounded_repair and body.get('error_code') == 'report_authoring_input_invalid'
+                        and isinstance(body.get('input_problems'), list))
     source_repair = source_recovery(body) if error else {}
+    argument_repair = {}
+    recovery = body.get('argument_recovery')
+    if error and body.get('error_code') == 'invalid_arguments' and isinstance(recovery, dict):
+        call = recovery.get('schema_call', {})
+        params = call.get('arguments') if isinstance(call, dict) else None
+        names = params.get('names') if isinstance(params, dict) else None
+        if (isinstance(call, dict) and call.get('tool') == 'tool_describe'
+                and isinstance(names, list) and len(names) == 1
+                and isinstance(names[0], str) and names[0].startswith('forsic_')
+                and recovery.get('automatic_retry') is False
+                and len(json.dumps(recovery, ensure_ascii=False)) <= 700):
+            argument_repair['argument_recovery'] = deepcopy(recovery)
     if error:
         # Even pre-execution/binding failures without a source ID must survive.
         # Do not infer rollback or successful storage from submitted arguments.
@@ -197,15 +329,19 @@ def summarize(tool, args, content):
         view['error_truncated'] = len(message) > 600
         if type(body.get('write_applied')) is bool:
             view['write_applied'] = body['write_applied']
-        if mutation_repair:
+        if bounded_repair:
             view['recovery'] = deepcopy(body['recovery'])
+        if authoring_repair:
+            view['input_problems'] = deepcopy(body['input_problems'])
+            count = body.get('omitted_problem_count', 0)
+            view['omitted_problem_count'] = count if type(count) is int and count >= 0 else 0
         if question_repair:
             view['invalid_fields']=deepcopy(body['invalid_fields'])
             view['recovery']=deepcopy(body['recovery'])
             for key in ('invalid_field_count', 'omitted_invalid_fields'):
                 if type(body.get(key)) is int and body[key] >= 0:
                     view[key] = body[key]
-        for key in ('error_type', 'error_code', 'failure_stage', 'execution_status'):
+        for key in ('error_type', 'error_code', 'error_subtype', 'failure_stage', 'execution_status'):
             if isinstance(body.get(key), str) and len(body[key]) <= 120:
                 view[key] = body[key]
         from .sensitive_policy import REMEDIES
@@ -213,6 +349,7 @@ def summarize(tool, args, content):
         if isinstance(admission, str) and 'sensitive_' + admission in REMEDIES:
             view.update(admission_failure_code=admission, next_step=REMEDIES['sensitive_' + admission])
         view.update(source_repair)
+        view.update(argument_repair)
     else:
         # Only returned records acknowledge a write. Requested outcome/answer is intent.
         fields = ('id', 'question_id', 'note_id', 'version', 'revision', 'definition_version',
@@ -230,7 +367,7 @@ def summarize(tool, args, content):
         for key in ('reused', 'semantic_approval', 'execution_authorized'):
             if type(body.get(key)) is bool:
                 view[key] = body[key]
-    if 'lookup' not in view and not error and not view.get('returned_records') and 'execution_lookup' not in view and 'independent_review' not in view:
+    if 'lookup' not in view and not error and not view.get('returned_records') and 'execution_lookup' not in view and 'independent_review' not in view and not navigation:
         return None
     # Inputs and actual returned scope are separate. Omitted paths/fields are not guessed.
     requested = ('action', 'path', 'file_path', 'volume_offset', 'member_index',
@@ -305,7 +442,7 @@ def summarize(tool, args, content):
         view['inventory']['entries'].pop(); view['inventory']['omitted_entries'] += 1
         encoded = json.dumps(view, ensure_ascii=False, separators=(',', ':'))
     if len(encoded) > 2000:
-        if not source_repair:
+        if not source_repair and not navigation:
             view.pop('next_call', None)
             view['continuation_call_omitted'] = bool(body.get('next_call'))
         view.pop('requested_scope', None)
@@ -343,7 +480,7 @@ def summarize(tool, args, content):
         view['retained_export_targets'].pop()
         view['omitted_retained_export_target_count'] += 1
         encoded = json.dumps(view, ensure_ascii=False, separators=(',', ':'))
-    if source_repair:
+    if source_repair or argument_repair or capability_repair:
         # Recovery inputs outrank previews and repeated identity. Preserve the
         # failed version and requested pointer separately from the retry call.
         for field in ('lookup', 'retained_result_id', 'text_fields_present_in_original_message',
@@ -355,7 +492,15 @@ def summarize(tool, args, content):
         if len(encoded) > 2000:
             view = {key: view[key] for key in ('tool', 'pruned', 'body_omitted', 'error_present', 'error_code')}
             view.update(source_repair)
+            view.update(argument_repair)
+            view.update(capability_repair)
             encoded = json.dumps(view, ensure_ascii=False, separators=(',', ':'))
+    if navigation and not error and len(encoded) > 2000:
+        # These are exact navigation inputs, not adopted evidence. Keep both the
+        # current field and continuation instead of falling back to root lookup.
+        view = {key: view[key] for key in ('tool', 'pruned', 'body_omitted')}
+        view.update(navigation)
+        encoded = json.dumps(view, ensure_ascii=False, separators=(',', ':'))
     if question_repair and len(encoded)>2000:
         # Exact selections are indivisible. Omit complete choices/problems with
         # counts instead of cutting IDs, gap text, or recovery JSON mid-string.
@@ -369,4 +514,9 @@ def summarize(tool, args, content):
             view['invalid_fields'].pop()
             view['omitted_invalid_fields']=view.get('omitted_invalid_fields',0)+1
             encoded=json.dumps(view,ensure_ascii=False,separators=(',',':'))
+    if authoring_repair:
+        while len(encoded) > 2000 and view['input_problems']:
+            view['input_problems'].pop()
+            view['omitted_problem_count'] += 1
+            encoded = json.dumps(view, ensure_ascii=False, separators=(',', ':'))
     return encoded if len(encoded) <= 2000 else None

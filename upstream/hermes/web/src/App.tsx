@@ -109,11 +109,15 @@ function WorkspaceShell({ loading }: { loading: boolean }) {
   const status = useSidebarStatus();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [chatNavigation, setChatNavigation] = useState<HTMLDivElement | null>(null);
+  const [chatProgress, setChatProgress] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const sidebar = document.getElementById("app-sidebar");
     if (!sidebar) return;
-    const sync = () => setChatNavigation(sidebar.querySelector<HTMLDivElement>("#forsic-model-target"));
+    const sync = () => {
+      setChatNavigation(sidebar.querySelector<HTMLDivElement>("#forsic-model-target"));
+      setChatProgress(sidebar.querySelector<HTMLDivElement>("#forsic-progress-target"));
+    };
     sync();
     // The plugin owns its navigation DOM and registers after the shell mounts.
     const observer = new MutationObserver(sync);
@@ -155,7 +159,7 @@ function WorkspaceShell({ loading }: { loading: boolean }) {
         aria-label="메뉴 닫기" onClick={() => setMobileOpen(false)} />}
       <aside id="app-sidebar" className="forsic-app-sidebar" data-open={mobileOpen} aria-label="조사 탐색">
         <div className="forsic-brand-space" aria-hidden="true" />
-        <div className="forsic-tenant-header"><span>테넌트(조직)</span><strong>{tenant?.display_name}</strong><Link to="/tenants">조직 전환</Link></div>
+        <div className="forsic-tenant-header"><span>조직</span><strong>{tenant?.display_name}</strong><Link to="/tenants">조직 전환</Link></div>
         <div className="forsic-navigation-scroll">
           <PluginSlot name="sidebar" fallback={<NavigationFallback loading={loading} />} />
         </div>
@@ -187,7 +191,7 @@ function WorkspaceShell({ loading }: { loading: boolean }) {
             <div data-chat-active={isChat ? "true" : "false"} aria-hidden={!isChat}
               className={isChat ? "forsic-chat-host" : "hidden"}>
               <Suspense fallback={<Loading>대화를 연결하고 있어요.</Loading>}>
-                <ChatPage isActive={validChat} navigationTarget={chatNavigation} caseLabel={scope.label} conversationTitle={scope.title} />
+                <ChatPage isActive={validChat} navigationTarget={chatNavigation} progressTarget={chatProgress} caseLabel={scope.label} conversationTitle={scope.title} />
               </Suspense>
             </div>
           )}

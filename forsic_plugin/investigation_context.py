@@ -127,7 +127,119 @@ def resolve_context(session_id, *, intake_root, native_db=None):
     return {'case': case, 'goal': goal_state, 'goal_id': goal_identity(goal_state) if goal_state else '',
             'session_id': owner, 'requested_session_id': session_id,
             'conversation_id': conversation[-1]['id'],
-            'session_lineage': [entry['id'] for entry in conversation], 'case_id': case.config['case_id']}
+            'session_lineage': [entry['id'] for entry in conversation], 'case_id': case.config['case_id'],
+            'native_db': native}
+
+
+def report_source_goal_id(resolved):
+    """Native human handoff provenance, for editorial selection only.
+
+    Never adopted as the active investigation goal or a question write authority.
+    Branches/resets cannot inherit this: resolve_context already stops their lineage.
+    """
+    goal = resolved.get('goal')
+    previous = getattr(goal, 'runtime_followup_of', None)
+    row = getattr(goal, 'runtime_followup_user_row_id', None)
+    return previous if (isinstance(previous, str) and len(previous) == 64
+                        and all(c in '0123456789abcdef' for c in previous)
+                        and type(row) is int and row > 0) else ''
+
+
+def report_followup_selection(resolved, *, include_previous_goal=False):
+    """Exact previous report selection after an accepted native human handoff.
+
+    This grants read-only editorial selection, never the old question writer's
+    authority. A goal string or a forged source-goal argument is insufficient.
+    """
+    previous = report_source_goal_id(resolved)
+    native = resolved.get('native_db')
+    if not previous or native is None:
+        return None
+    from hermes_cli.goals_runtime import RUNTIME_HANDOFF_REASON, RUNTIME_BUDGET_REASON
+    goal = resolved['goal']
+    with closing(sqlite3.connect(Path(native).as_uri() + '?mode=ro', uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        db.execute('PRAGMA query_only=ON')
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").fetchone() is None:
+            return None
+        from hermes_state_identity import resolve_message_generation
+        generations = resolve_message_generation(db, goal.runtime_followup_user_row_id,
+                                                 resolved['session_lineage'])
+    if generations is None:
+        return None
+    origin, row = generations
+    if row['role'] != 'user' or row['display_kind']:
+        return None
+    metadata = json.loads(row['display_metadata'] or '{}')
+    receipt = metadata.get('runtime_handoff_followup') if isinstance(metadata, dict) else None
+    original_metadata = json.loads(origin['display_metadata'] or '{}')
+    if (not isinstance(original_metadata, dict)
+            or original_metadata.get('runtime_handoff_followup') != receipt):
+        return None
+    if (not isinstance(receipt, dict) or receipt.get('previous_goal_id') != previous
+            or receipt.get('goal_id') != resolved['goal_id']
+            or receipt.get('accepted_user_row_id') != goal.runtime_followup_user_row_id
+            or receipt.get('previous_status') != 'paused'
+            or receipt.get('previous_paused_reason') not in {RUNTIME_HANDOFF_REASON, RUNTIME_BUDGET_REASON}):
+        return None
+    if ('accepted_user_message_uid' in receipt
+            and (not receipt['accepted_user_message_uid']
+                 or receipt['accepted_user_message_uid'] != origin['message_uid'])):
+        return None
+    if 'previous_goal_state' in receipt:
+        from hermes_cli.goals import GoalState, goal_identity
+        saved = receipt['previous_goal_state']
+        if (not isinstance(saved, dict) or goal_identity(GoalState.from_json(json.dumps(saved))) != previous
+                or saved.get('status') != 'paused'
+                or saved.get('paused_reason') != receipt['previous_paused_reason']):
+            return None
+    with resolved['case'].connect() as db:
+        row = db.execute("SELECT id,length(cast(data AS BLOB)),substr(data,1,300001) FROM events "
+            "WHERE kind='report_narrative' AND session IN (" + ','.join('?' for _ in resolved['session_lineage']) +
+            ") AND json_extract(data,'$.goal_id')=? ORDER BY rowid DESC LIMIT 1",
+            (*resolved['session_lineage'], previous)).fetchone()
+    if row is None:
+        return None
+    if row[1] > 300000:
+        raise ValueError('Previous authored report selection exceeds its bounded read')
+    report = json.loads(row[2])
+    ids = report.get('question_ids')
+    if (not isinstance(ids, list) or not ids or len(ids) != len(set(ids))
+            or any(not isinstance(qid, str) or not qid.startswith('Q-') for qid in ids)):
+        raise ValueError('Previous authored report selection is invalid')
+    result = {'source_goal_id': previous, 'question_ids': sorted(ids), 'report_event_id': row[0],
+            'accepted_user_row_id': goal.runtime_followup_user_row_id,
+            'authority': 'read_only_report_selection_not_question_write_authority'}
+    if include_previous_goal:
+        result['_previous_goal_state'] = receipt.get('previous_goal_state')
+    return result
+
+
+def report_followup_contexts(resolved):
+    """Compose authenticated native handoffs, preserving only read-only history.
+
+    Every edge revalidates its own accepted user message (including compacted
+    generations), case and conversation. Legacy edges without a saved previous
+    goal can carry that one ancestor, but cannot invent a further ancestry.
+    """
+    from hermes_cli.goals import GoalState
+    contexts, seen, current = [], {resolved['goal_id']}, resolved
+    for _ in range(32):
+        selected = report_followup_selection(current, include_previous_goal=True)
+        if not selected:
+            return contexts
+        previous = selected['source_goal_id']
+        if previous in seen:
+            raise ValueError('Cyclic native report handoff lineage')
+        seen.add(previous)
+        saved = selected['_previous_goal_state']
+        current = {**current, 'goal_id': previous,
+            'goal': GoalState.from_json(json.dumps(saved)) if saved else None,
+            '_report_question_ids': selected['question_ids']}
+        contexts.append(current)
+        if not saved:
+            return contexts
+    raise ValueError('Native report handoff lineage exceeds its bounded read')
 
 
 def native_goal_binding(session_id, *, intake_root, native_db=None):
@@ -136,7 +248,10 @@ def native_goal_binding(session_id, *, intake_root, native_db=None):
         resolved = resolve_context(session_id, intake_root=intake_root, native_db=native_db)
         if resolved is None:
             return {'status': 'not_applicable'}
-        return {'status': 'ready', 'goal_status': resolved['goal'].status if resolved['goal'] else None, **{key: resolved[key] for key in
+        selected = report_followup_selection(resolved)
+        return {'status': 'ready', 'report_source_goal_id': report_source_goal_id(resolved),
+                'report_source_question_ids': selected['question_ids'] if selected else [],
+                'goal_status': resolved['goal'].status if resolved['goal'] else None, **{key: resolved[key] for key in
                 ('goal_id', 'session_id', 'requested_session_id', 'conversation_id', 'case_id', 'session_lineage')}}
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
         return {'status': 'unavailable', 'reason': _clip(str(exc), 300)}
@@ -160,15 +275,23 @@ def completion_state(resolved, state, *, review=None):
     No report-wide section, semantic/layout-review, all-open or severity-count gate is used.
     """
     questions, missions, tests, assessments = _owned_state(resolved, state)
+    from .report_followup_work import classify, selected_version
+    report_task = classify(resolved, state)
+    if report_task:
+        questions = [q for q in questions if q['id'] not in report_task['legacy_tracker_ids']]
     pending = []
     if review is None:
-        from .independent_review import review_state
-        review = review_state(resolved, state)
+        from .independent_review import review_state, native_report_review_scope
+        review = review_state(native_report_review_scope(resolved) if report_task else resolved, state)
     if review.get('requires_followup'):
         pending.extend('독립 검토 의견 처분 필요: '+f for f in review.get('pending_finding_ids', []))
         if not review.get('pending_finding_ids'):
             pending.append('독립 검토 기록의 상태를 확인하지 못했습니다.')
-    if not questions:
+    if report_task:
+        task_state = selected_version(resolved, state, report_task, review)
+        if task_state['pending']:
+            pending.append(task_state['pending'])
+    if not questions and not report_task:
         pending.append('No question is explicitly bound to this native goal; record its requested scope before declaring completion.')
     for question in questions:
         # Closure does not supply a missing priority judgment. Check it before
@@ -203,7 +326,28 @@ def completion_state(resolved, state, *, review=None):
 
 def _report_context(resolved, state, questions):
     """Inspect existing derived artifacts only; their existence is not investigation completion."""
-    question_ids = {q['id'] for q in questions}
+    selected = resolved.get('_report_question_ids')
+    question_ids = set(selected) if selected is not None else {q['id'] for q in questions}
+    editorial = {}
+    from .report_continuation import projection
+    continuation = projection(resolved, state, question_ids)
+    if continuation:
+        editorial['continuation'] = continuation
+    if selected is not None:
+        # A native human follow-up may edit a report based on previous-goal
+        # questions. Restore that saved selection for reading only; it must not
+        # enter answer_updates or acquire current-question write authority.
+        from .report_driven.narrative import status
+        authored = [row for row in state.get('report_narratives', [])
+                    if row.get('goal_id') == resolved['goal_id']
+                    and row.get('session_id') in resolved['session_lineage']]
+        progress = status({**state, 'report_narratives': authored}, selected)
+        editorial.update({'selection_role': 'saved_report_read_only_basis',
+            'question_ids': selected,
+            'authoring': {key: progress[key] for key in
+                ('draft_revision', 'ready', 'review_status', 'missing_groups', 'stale_fields')},
+            'read_call': {'tool': 'forsic_reporting', 'arguments': {
+                'action': 'compose', 'question_ids': selected}}})
     matches = []
     for directory in resolved['case'].output.glob('report-bundle-*'):
         if not directory.is_dir() or directory.is_symlink():
@@ -218,7 +362,8 @@ def _report_context(resolved, state, questions):
             continue
         matches.append((manifest_path.stat().st_mtime_ns, directory.name, directory, manifest))
     if not matches:
-        return {'status': 'none_for_this_scope', 'artifact_is_completion': False}
+        return {'status': 'draft_without_rendered_artifact' if editorial else 'none_for_this_scope',
+                'artifact_is_completion': False, **editorial}
     _, _, directory, manifest = max(matches, key=lambda row: row[:2])
     for item in manifest.get('files', []):
         if Path(item['name']).name != item['name']:
@@ -230,6 +375,11 @@ def _report_context(resolved, state, questions):
     saved_revision = saved['meta'].get('content_revision', '')
     if manifest.get('content_revision', saved_revision) != saved_revision:
         raise ValueError('Report manifest content revision disagrees with its immutable snapshot')
+    if selected is not None:
+        # Integrity was checked above. Keep its result and exact editorial
+        # lookup, rather than duplicate long hashes ahead of the current answer.
+        return {'status': 'derived_artifact_verified', 'bundle_id': manifest['bundle_id'],
+                'stale': stale, 'artifact_is_completion': False, **editorial}
     return {'status': 'derived_artifact_verified', 'bundle_id': manifest['bundle_id'],
             'snapshot_id': manifest['snapshot_id'], 'saved_content_revision': saved_revision,
             'current_content_revision': state['meta']['content_revision'], 'stale': stale,
@@ -237,7 +387,8 @@ def _report_context(resolved, state, questions):
             'current_questions_in_report':len(question_ids.intersection(manifest.get('question_ids',[]))),
             'current_questions_omitted':len(question_ids.difference(manifest.get('question_ids',[]))),
             'files_verified': len(manifest['files']), 'artifact_is_completion': False,
-            'note': 'File existence/integrity and snapshot freshness do not certify the requested investigation.'}
+            'note': 'File existence/integrity and snapshot freshness do not certify the requested investigation.',
+            **editorial}
 
 
 def work_inventory(questions, missions, tests):
@@ -260,23 +411,35 @@ def recent_observed_scope(resolved, state):
     # descendants or another conversation in the same case.
     sessions=list(dict.fromkeys(resolved.get('session_lineage') or [resolved['conversation_id']]))
     with resolved['case'].connect() as db:
-        ids = [row[0] for row in db.execute(
-            "SELECT id FROM events WHERE session IN ("+','.join('?' for _ in sessions)+") AND kind='tool_result' ORDER BY rowid DESC LIMIT 64",
-            sessions)]
+        # Read scalar failure/selection metadata only; receipt bodies stay in the ledger.
+        rows = list(db.execute(
+            "SELECT id,json_extract(data,'$.error_code'),json_extract(data,'$.error_type'),"
+            "json_extract(data,'$.filesystem_view'),json_extract(data,'$.volume_offset'),"
+            "json_extract(data,'$.execution.state'),json_extract(data,'$.execution_rejected') "
+            "FROM events WHERE session IN ("+','.join('?' for _ in sessions)+") AND kind='tool_result' ORDER BY rowid DESC LIMIT 64",
+            sessions))
     sources = {s['id']: s for s in state['sources']}
     facts = []
-    for eid in ids:
+    for row in rows:
+        eid = row[0]
         if eid not in sources:
             continue
         data = json.loads(sources[eid]['coverage'])
-        if not any(k in data for k in ('coverage_complete', 'complete_file', 'complete_member', 'line_start', 'byte_start', 'listing_complete')):
+        data.update({key: value for key, value in zip(
+            ('error_code','error_type','filesystem_view','volume_offset','execution_state','execution_rejected'), row[1:])
+            if value is not None})
+        if not any(k in data for k in ('coverage_complete', 'complete_file', 'complete_member', 'line_start', 'byte_start', 'listing_complete', 'outcome', 'error', 'error_code')):
             continue
+        data['error_present'] = bool(data.get('error'))
         from .report_driven.measurement import scope_view
-        shown = scope_view(data,('file_path','path','has_next_cursor','returned_entries_count'),text_limit=180)
-        facts.append({'source_id': eid, 'observed': shown,
+        shown = scope_view(data,('file_path','path','has_next_cursor','returned_entries_count',
+            'outcome','error_present','error_code','error_type','execution_state','execution_rejected',
+            'filesystem_view','volume_offset'),text_limit=180)
+        facts.append({'source_id': eid, 'source_version': sources[eid]['version'], 'observed': shown,
                       'omitted_fields': shown.pop('omitted_fields',[])})
-    return sorted(facts, key=lambda f: not (f['observed'].get('has_next_cursor') or
-        any(f['observed'].get(k) is False for k in ('coverage_complete','complete_file','complete_member','listing_complete'))))
+    return sorted(facts, key=lambda f: (not f['observed'].get('error_present', False),
+        not (f['observed'].get('has_next_cursor') or any(f['observed'].get(k) is False
+            for k in ('coverage_complete','complete_file','complete_member','listing_complete')))))
 
 
 def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
@@ -285,16 +448,34 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
     if budget < 1400:
         raise ValueError('Projection budget is too small to preserve scope and omission metadata')
     questions, missions, tests, assessments = _owned_state(resolved, state)
+    from .report_followup_work import classify, selected_version
+    report_task = classify(resolved, state)
+    if report_task:
+        questions = [q for q in questions if q['id'] not in report_task['legacy_tracker_ids']]
     rank = {'decision_critical': 0, 'material': 1, 'unassessed': 2, 'contextual': 3}
     questions = sorted(questions, key=lambda q: (rank[q['priority']], q['id']))
-    from .independent_review import review_state
-    review = review_state(resolved, state)
+    from .independent_review import review_state, native_report_review_scope
+    # Reuse the authored selection already validated at the native final-review
+    # boundary. Current writable questions remain strictly _owned_state above.
+    report_scope = native_report_review_scope(resolved)
+    review = review_state(report_scope, state)
     pending = completion_state(resolved, state, review=review)
     from .observation_scope import observed_scope
     inventory = observed_scope(resolved, max_targets=12, max_chars=4000)
     review_binding = {k: review.get(k) for k in ('status','review_id','pending_finding_ids',
         'dispositions','stale_review_ids','latest_final_review_id','final_review_current')}
-    reports = _report_context(resolved, state, questions)
+    reports = _report_context(report_scope, state, questions)
+    if report_task:
+        reports['followup_task'] = {**report_task, **selected_version(resolved, state, report_task, review)}
+        phase = reports['followup_task']['stage']
+        if phase in ('review_current_version', 'select_current_version', 'deliver_selected_version'):
+            # The existing authenticated selection gate outranks old compose
+            # navigation. A selected current version never restarts authoring.
+            reports['continuation'] = {'stage': phase, 'next_call': None,
+                **{key: reports['followup_task'][key] for key in ('bundle_id', 'selection_receipt')
+                   if key in reports['followup_task']}}
+            reports.pop('authoring', None)
+            reports.pop('read_call', None)
     revision = _hash({'case_id': resolved['case_id'], 'goal_id': resolved['goal_id'],
                       'scope_version': state['scope']['version'], 'content_revision': state['meta']['content_revision'],
                       'reports': reports, 'independent_review': review_binding})
@@ -325,7 +506,7 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
                 'pending_scope': 'material',
                 'lookup': {'tool': 'forsic_reporting', 'arguments': {'action': 'review_inbox'}},
                 'response_tool': 'forsic_review_response'},
-            'observed_scope_note': 'Latest 64; partial first; window-local omissions. Metadata only. Search: exact term/target.',
+            'observed_scope_note': 'Latest 64; failures/partial first; window-local omissions. Absence is scoped, not deletion or a verdict.',
             'reports': reports,
             'omitted': {'active_questions': 0, 'active_missions': 0, 'unassessed_results': 0, 'closed_index': 0,
                         'other_goal_or_unbound_questions': len(state['questions']) - len(questions)},
@@ -334,10 +515,66 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
     entries = {'active_questions': [], 'closed_index': [], 'active_missions': [], 'unassessed_results': [],
                'observed_scope': recent_observed_scope(resolved, state),
                'observed_targets': inventory['targets']}
+    derived = inventory['derived_observations']
+    if derived['counts']['candidate_receipts']:
+        body['derived_observations'] = []
+        body['derived_scope_inventory'] = {key: derived[key] for key in ('counts', 'omitted')}
+        if budget < MAX_CONTEXT_BYTES:
+            body['derived_scope_inventory'] = {
+                'candidate_receipts': derived['counts']['candidate_receipts'],
+                'unprojected_receipts': derived['omitted']['receipts']}
+            for key in ('work_decision', 'observed_scope_note'):
+                body.pop(key)
+            body['omitted']['guidance_fields'] = 2
+        navigation = []
+        for item in derived['items']:
+            if item['kind'] == 'triage':
+                compact = {key: item[key] for key in ('kind', 'profile', 'coverage', 'summary', 'read_call')}
+                compact['read_call'] = {'tool': 'forsic_reporting', 'arguments': {
+                    'action': 'source', 'source_id': item['source_ref']['id'],
+                    'source_version': item['source_ref']['version'], 'pointer': '/coverage'}}
+                inputs = item['selected_inputs'][:1]
+                compact['selected_inputs'] = [{key: value[key] for key in (
+                    'input_id', 'state', 'candidate_count', 'counts_complete', 'reason_codes',
+                    'source_ref') if key in value} for value in inputs]
+                compact['omitted_selected_inputs'] = item['omitted_selected_inputs'] + len(item['selected_inputs'])-len(inputs)
+                compact['input_details_omitted'] = True
+            else:
+                compact = {key: item[key] for key in ('kind', 'selector_count')}
+                compact['selectors'] = item['selectors'][:1]
+                compact['omitted_selectors'] = item['selector_count']-len(compact['selectors'])
+            navigation.append(compact)
+        # Preserve unresolved derived-input navigation before generic historical
+        # details. These are lookup hints, never an alternative judgment ledger.
+        entries = {'active_questions': [], 'closed_index': [], 'derived_observations': navigation,
+                   **entries}
+    # The inventory already binds these IDs to the resolved session lineage.
+    # Supply exact immutable versions from this case's existing source index;
+    # tool-start references stay metadata and are never made into source calls.
+    retained_sources = {source['id']: source for source in state['sources']}
+    for target in entries['observed_targets']:
+        for reference in target['source_refs']:
+            source = retained_sources.get(reference['source_id'])
+            if source:
+                reference.update(action='source', source_version=source['version'])
     from .report_driven.current_judgment import navigation_view
     for q in questions:
         item=navigation_view(state,q)
         item.update(priority=q['priority'],work_state=q['work_state'])
+        # Restore existing obligations, including gaps hidden inside a broad
+        # question. This is navigation, not a classifier of human-answerable
+        # inputs or a decision to ask, defer, or declare an event.
+        gaps = [g for g in state['gaps'] if g['question_ref']['id'] == q['id']
+                and g['disposition'] not in ('resolved', 'not_applicable')]
+        if gaps and q['priority'] in ('decision_critical', 'material'):
+            item['remaining_gap_examples'] = [{'id': g['id'],
+                # The original obligation names historical work. A later
+                # successful acquisition can leave a narrower current limit.
+                'text': _clip(g.get('reason') or g['original_obligation'], 160),
+                'disposition': g['disposition'],
+                'read_call': {'tool': 'forsic_reporting',
+                    'arguments': {'action': 'gaps', 'question_id': q['id']}}}
+                for g in gaps[:1]]
         if q['work_state']=='scoped_closed':
             item['reason']=_clip(q.get('closure_rationale'),180)
             entries['closed_index'].append(item)
@@ -365,51 +602,185 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
             represented.add(key)
     for section, values in entries.items():
         body['omitted'][section] = len(values)
+    def compact_current(item, *, include_judgments=True):
+        # Omit the duplicate pointer and retrievable definition hash, preserving
+        # substantive judgment; details_call pins their exact state snapshot.
+        keys = ('id', 'revision', 'priority', 'work_state',
+                'assessment', 'review_required', 'answer_is_model_assessment',
+                # The smaller handoff may omit gap previews; its canonical
+                # state lookup returns the exact obligations when needed.
+                'next_checks', 'reopen', 'remaining_gap_count', 'reason', 'deferred_reason',
+                'details_call')
+        compact = {key: item[key] for key in keys if key in item}
+        if budget == MAX_CONTEXT_BYTES and item.get('priority') in ('decision_critical', 'material') and 'remaining_gap_examples' in item:
+            compact['remaining_gap_examples'] = item['remaining_gap_examples']
+        if include_judgments:
+            compact['judgments'] = [
+                {key: judgment[key] for key in (
+                    'id', 'assertion_kind', 'inference_strength',
+                    'reasoning_summary', 'assumptions', 'limitations',
+                    'declaration_status', 'undeclared_analysis_fields')
+                 if key in judgment} for judgment in item.get('judgments', [])]
+        else:
+            compact['answer_qualifications_omitted'] = True
+        compact['omitted_fields'] = [key for key in item if key not in compact]
+        return compact
+
+    def minimum_observation(item):
+        observed = item['observed']
+        if not observed.get('error_present'):
+            return item
+        fields = ('error_code', 'outcome', 'path', 'file_path',
+                  'filesystem_view', 'volume_offset', 'execution_rejected')
+        if 'error_code' not in observed:
+            fields += ('error_type', 'error_present')
+        return {'source_id':item['source_id'], 'source_version':item['source_version'],
+            'observed':{key:observed[key] for key in fields if key in observed},
+            'details_omitted':True}
+
+    # Under pressure retain section navigation before optional detail. Actual
+    # encoded record sizes determine the reservation; there is no record quota.
+    navigation_sections = ('derived_observations', 'observed_scope', 'observed_targets')
+    pressured = len(_encoded(body)) + sum(len(_encoded(item)) + 2
+        for values in entries.values() for item in values) > budget
+    if pressured:
+        removed_guidance = sum(body.pop(key, None) is not None
+            for key in ('work_decision', 'observed_scope_note'))
+        body['omitted']['guidance_fields'] = body['omitted'].get('guidance_fields', 0) + removed_guidance
+        body['notice'] = 'MODEL-MAINTAINED; NOT original evidence. Retrieve originals; … marks clipping.'
+        body['work_inventory']['meaning'] = 'Declared states including omissions; not feasibility or a verdict.'
+        for key in ('question_states', 'important_question_states'):
+            body['work_inventory'][key] = {name:count for name,count in body['work_inventory'][key].items() if count}
+        body['work_inventory']['state_count_default'] = 0
+        body['scope_inventory']['meaning'] = 'Observed history, not analytical completion.'
+        body['preserved_history']['meaning'] = 'Retained; note(get, include_history=true).'
+        body['completion']['examples'] = []
+        body['completion']['examples_omitted'] = len(pending)
+        if len(body['requested_scope'].encode('utf-8')) > 160:
+            body['requested_scope'] = _clip(body['requested_scope'], 160)
+            body['omitted']['clipped_fields'] = ['requested_scope']
+        report_omissions = [key for key in ('saved_content_revision', 'current_content_revision', 'note')
+            if key in body['reports']]
+        if report_omissions:
+            body['reports'] = {key:value for key,value in body['reports'].items() if key not in report_omissions}
+            body['reports']['omitted_fields'] = report_omissions
+            body['reports']['details'] = 'Report viewer: bundle_id/snapshot_id.'
+        body['retrieval'] = {'tool':'forsic_reporting', 'action':'source',
+            'arguments_from_record':['source_id','source_version'],
+            'targets_use':'source_refs', 'scope_absence_is_not':'deletion or benignness'}
+        for target in entries['observed_targets']:
+            target['identity'] = {key:value for key,value in target['identity'].items() if value is not None}
+            if len(target['source_refs']) == len(target['observed_states']) > 1:
+                refs = [reference for observed_state, reference in zip(target['observed_states'], target['source_refs'])
+                    if observed_state == target['state']]
+                target['omitted_source_refs'] = len(target['source_refs']) - len(refs)
+                target['source_refs'] = refs
+            for reference in target['source_refs']:
+                reference.pop('action', None)
+        for fact in entries['observed_scope']:
+            if not fact.get('omitted_fields'):
+                fact.pop('omitted_fields', None)
+        # A target should add history navigation rather than duplicate the
+        # leading recent receipt that is already reserved below.
+        initial_sources = {entries['observed_scope'][0]['source_id']} if entries['observed_scope'] else set()
+        entries['observed_targets'].sort(key=lambda target: all(ref['source_id'] in initial_sources
+            for ref in target['source_refs']))
+
+    current_sections = ('active_questions', 'closed_index')
+    current_minimum = {(section, index): min(len(_encoded(item)), len(_encoded(
+        compact_current(item, include_judgments=budget == MAX_CONTEXT_BYTES)))) + 4
+        for section in current_sections for index, item in enumerate(entries[section])}
+    if (body['reports'].get('continuation') and
+            len(_encoded(body)) + sum(current_minimum.values()) + 100 > budget):
+        # Prefer the exact current phase/call over receipt history and node IDs.
+        continuation = body['reports']['continuation']
+        core = {key: continuation[key] for key in ('stage', 'snapshot_id', 'draft_revision',
+            'review_status', 'next_call', 'bundle_id', 'selection_receipt') if key in continuation}
+        delivery = continuation.get('delivered_content', {})
+        counts = {key: delivery[key] for key in ('role', 'delivered_node_count',
+            'current_node_count', 'window_partial') if key in delivery}
+        body['reports']['continuation'] = {**core, **({'delivered_content': counts} if counts else {})}
+        if len(_encoded(body)) + sum(current_minimum.values()) + 100 > budget:
+            body['reports']['continuation'] = core
+        if len(_encoded(body)) + sum(current_minimum.values()) + 100 > budget:
+            # Current question ownership still takes priority over navigation.
+            body['reports'].pop('continuation')
+            body['reports']['continuation_omitted'] = True
+    review_navigation_floor = len(_encoded(
+        {'pending_items':[], 'omitted_pending_items':len(review.get('pending_findings', []))}))
+    if len(_encoded(body)) + sum(current_minimum.values()) + review_navigation_floor > budget:
+        current_minimum = {(section, index): min(len(_encoded(item)), len(_encoded(
+            compact_current(item, include_judgments=False)))) + 4
+            for section in current_sections for index, item in enumerate(entries[section])}
+    navigation_reserve = 0
+    if pressured and budget == MAX_CONTEXT_BYTES:
+        for section in navigation_sections:
+            if not entries.get(section):
+                continue
+            first = entries[section][0]
+            cost = min(len(_encoded(first)), len(_encoded(minimum_observation(first)))) + 4 if section == 'observed_scope' else len(_encoded(first)) + 4
+            if len(_encoded(body)) + sum(current_minimum.values()) + review_navigation_floor + navigation_reserve + cost <= budget:
+                navigation_reserve += cost
     # Restore concrete unanswered questions before historical observation detail.
     # This read-only view never chooses a disposition or writes a provisional answer.
     from .review_navigation import pending_items
-    review_items = pending_items(review, max_bytes=min(1000, max(0, budget-len(_encoded(body)))))
+    # Optional reviewer excerpts must not displace the current task's qualified
+    # answer/navigation. Pending counts and the inbox lookup are already kept.
+    review_items = pending_items(review, max_bytes=min(1000, max(0,
+        budget-len(_encoded(body))-sum(current_minimum.values())-navigation_reserve)))
     body['independent_review'].update(review_items)
     if len(_encoded(body)) > budget:
         body['independent_review'].pop('pending_items')
         body['independent_review'].pop('omitted_pending_items')
+    # Keep the measured history navigation allocation through current-answer
+    # enrichment. Unreachable history must not displace current navigation.
+    detail_reserve = navigation_reserve if pressured else min(
+        [len(_encoded(item)) + 25 for item in entries.get('derived_observations', [])] or [0])
+    if budget < MAX_CONTEXT_BYTES or len(questions) > 1:
+        detail_reserve = 0
     # Current judgments and their retrieval handles precede historical observation detail.
     # A full navigation record can exceed the remaining budget even for one question;
     # retain its current answer/status and exact lookup rather than silently losing it.
-    for index in range(max([len(values) for values in entries.values()] or [0])):
-        for section, values in entries.items():
-            if index >= len(values):
-                continue
-            body[section].append(values[index]); body['omitted'][section] -= 1
-            if len(_encoded(body)) > budget:
-                body[section].pop(); body['omitted'][section] += 1
-                if section in ('active_questions', 'closed_index'):
-                    keys = ('id', 'revision', 'definition_version', 'priority', 'work_state',
-                            'assessment', 'review_required', 'answer_is_model_assessment',
-                            'next_checks', 'remaining_gap_count', 'reason', 'deferred_reason',
-                            'detail_pointer', 'details_call')
-                    compact = {key: values[index][key] for key in keys if key in values[index]}
-                    # Preserve the qualification of an answer before historical
-                    # assessment details. An unqualified answer plus a lookup
-                    # is not an equivalent compaction of a bounded judgment.
-                    compact['judgments'] = [
-                        {key: judgment[key] for key in (
-                            'id', 'assertion_kind', 'inference_strength',
-                            'reasoning_summary', 'assumptions', 'limitations',
-                            'declaration_status', 'undeclared_analysis_fields')
-                         if key in judgment}
-                        for judgment in values[index].get('judgments', [])
-                    ]
-                    compact['omitted_fields'] = [key for key in values[index] if key not in compact]
-                    body[section].append(compact); body['omitted'][section] -= 1
-                    if len(_encoded(body)) > budget:
-                        # At the smallest navigation budget, keep the exact
-                        # lookup and explicitly qualify the partial answer.
-                        compact.pop('judgments')
-                        compact['omitted_fields'].append('judgments')
-                        compact['answer_qualifications_omitted'] = True
-                    if len(_encoded(body)) > budget:
-                        body[section].pop(); body['omitted'][section] += 1
+    # Finish current navigation before adding derived or historical details.
+    # Round-robin history must not consume the second current question's space.
+    # Reserve every remaining current question's smallest exact navigation
+    # before enriching an earlier one. Random IDs within one priority must not
+    # decide whether a later current answer survives the bounded projection.
+    if len(_encoded(body)) + sum(current_minimum.values()) > budget-detail_reserve:
+        # If even minimum navigation cannot fit all questions, retain the
+        # established priority order and explicit omissions instead of reserving
+        # unreachable space for later, lower-priority questions.
+        current_minimum = {}
+    order = [(section, index)
+             for sections in (current_sections, tuple(key for key in entries if key not in current_sections))
+             for index in range(max([len(entries[key]) for key in sections] or [0]))
+             for section in sections if index < len(entries[section])]
+    for section, index in order:
+        values = entries[section]
+        body[section].append(values[index]); body['omitted'][section] -= 1
+        section_budget = budget-detail_reserve if section in ('active_questions', 'closed_index') else budget
+        if section in current_sections:
+            current_minimum.pop((section, index), None)
+            section_budget -= sum(current_minimum.values())
+        if len(_encoded(body)) > section_budget:
+            body[section].pop(); body['omitted'][section] += 1
+            if section == 'observed_scope':
+                body[section].append(minimum_observation(values[index])); body['omitted'][section] -= 1
+                if len(_encoded(body)) > section_budget:
+                    body[section].pop(); body['omitted'][section] += 1
+            if section in ('active_questions', 'closed_index'):
+                # Preserve the qualification of an answer before historical
+                # assessment details. An unqualified answer plus a lookup
+                # is not an equivalent compaction of a bounded judgment.
+                compact = compact_current(values[index])
+                body[section].append(compact); body['omitted'][section] -= 1
+                if len(_encoded(body)) > section_budget:
+                    # At the smallest navigation budget, keep the exact
+                    # lookup and explicitly qualify the partial answer.
+                    compact.clear()
+                    compact.update(compact_current(values[index], include_judgments=False))
+                if len(_encoded(body)) > section_budget:
+                    body[section].pop(); body['omitted'][section] += 1
     # Task detail supplements existing navigation only when it fits; never
     # displace the current qualified answer or exact lookup to show history.
     from .task_focus import project_tasks
@@ -420,6 +791,17 @@ def project_context(resolved, state, *, max_bytes=MAX_CONTEXT_BYTES):
             body['task_focus'] = focus
             if len(_encoded(body)) > budget:
                 body.pop('task_focus')
+    if body['reports'].get('continuation_omitted'):
+        phase = body['reports'].get('followup_task', {}).get('stage')
+        if phase in ('review_current_version', 'select_current_version', 'deliver_selected_version'):
+            # After actual packing, keep a tiny phase pointer if the conservative
+            # owner reservation omitted duplicated receipt IDs. Authority and
+            # exact selection remain in the existing followup_task above.
+            minimal = {'stage': phase, 'next_call': None, 'details': 'reports.followup_task'}
+            trial = {**body, 'reports': {**body['reports'], 'continuation': minimal}}
+            trial['reports'].pop('continuation_omitted')
+            if len(_encoded(trial)) <= budget:
+                body = trial
     context = _encoded(body).decode('utf-8')
     if len(context.encode('utf-8')) > budget:
         raise ValueError('Projection identity/omission metadata exceeds its budget')

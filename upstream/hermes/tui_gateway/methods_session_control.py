@@ -56,6 +56,11 @@ def _safe_goal_snapshot(state) -> dict | None:
         "pause_requested": state.pause_requested,
         "turns_used": state.turns_used,
         "max_turns": state.max_turns,
+        "runtime_budget_seconds": state.runtime_budget_seconds,
+        "runtime_elapsed_seconds": state.runtime_elapsed_seconds,
+        "runtime_started_at": state.runtime_started_at,
+        "runtime_accounting_known": state.runtime_accounting_known,
+        "runtime_checkpoints": list(state.runtime_checkpoints),
         "contract": state.contract.to_dict(),
         "subgoals": list(state.subgoals),
         "gates": [
@@ -69,6 +74,9 @@ def _safe_goal_snapshot(state) -> dict | None:
             for gate in state.gates
         ],
     }
+    from hermes_cli.goals_runtime import runtime_phase, runtime_checkpoint_due
+    snapshot["runtime_phase"] = runtime_phase(state)
+    snapshot["runtime_checkpoint_due_seconds"] = runtime_checkpoint_due(state)
     if state.created_at:
         snapshot["created_at"] = state.created_at
     if state.last_turn_at:

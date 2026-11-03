@@ -84,6 +84,50 @@ def test_new_goal_explicitly_gets_new_allowance(clock_store):
     assert runtime.runtime_remaining(manager.state) == 100
 
 
+def test_closing_phases_freeze_resume_and_compact_without_renewing(clock_store):
+    clock, db = clock_store
+    manager = goals.GoalManager("task")
+    manager.set("Keep this investigation clock")
+    clock.now += 89
+    assert runtime.runtime_phase(manager.state) == "investigation"
+    clock.now += 1
+    assert runtime.runtime_phase(manager.state) == "closing"
+    manager.pause()
+    clock.now += 500
+    assert runtime.runtime_phase(manager.state) is None
+    assert runtime.runtime_remaining(manager.state) == 10
+    manager.resume()
+    assert runtime.runtime_phase(manager.state) == "closing"
+    assert goals.migrate_goal_to_session("task", "compacted", reason="synthetic compression")
+    compacted = goals.load_goal("compacted")
+    clock.now += 5
+    assert runtime.runtime_phase(compacted) == "handoff"
+    clock.now += 5
+    assert runtime.runtime_phase(compacted) == "exhausted"
+    assert runtime.runtime_remaining(compacted) == 0
+
+
+def test_explicit_followup_origin_is_atomic_and_does_not_mutate_prior_allowance(clock_store):
+    clock, db = clock_store
+    manager = goals.GoalManager("task")
+    manager.set("Original investigation")
+    clock.now += 85
+    old_identity = runtime.runtime_identity(manager.state)
+    assert runtime.finish_runtime_handoff(db, "task", expected_goal_id=old_identity,
+                                         checkpoint_saved=True) == runtime.RUNTIME_HANDOFF_REASON
+    old = goals.load_goal("task")
+    assert old.last_verdict == "partial" and runtime.runtime_remaining(old) == 15
+    manager.resume()
+    assert runtime.runtime_remaining(manager.state) == 15
+    origin = goals.goal_identity(old)
+    manager.set("Fresh user-requested additional scope", runtime_followup_of=origin,
+                runtime_followup_user_row_id=42)
+    restored = goals.GoalState.from_json(manager.state.to_json())
+    assert restored.runtime_followup_of == origin and restored.runtime_followup_user_row_id == 42
+    assert runtime.runtime_remaining(restored) == 100
+    assert old.runtime_elapsed_seconds == 85 and old.paused_reason == runtime.RUNTIME_HANDOFF_REASON
+
+
 def test_wait_is_bounded_by_same_allowance(clock_store):
     clock, db = clock_store
     manager = goals.GoalManager("task")
@@ -159,7 +203,7 @@ def test_pending_review_does_not_extend_budget_or_gain_approval(clock_store, mon
     def advisory(**kwargs):
         calls.append(kwargs)
         clock.now += 50
-        return {"context": "Unresolved finding", "requires_followup": True}
+        return {"context": "Unresolved finding", "requires_followup": True, "followup_actions": ["respond"]}
     monkeypatch.setattr("hermes_cli.goals_advisory.goal_advisory_result", advisory)
     assert manager.evaluate_after_turn("Candidate")['should_continue']
     assert manager.evaluate_after_turn("Candidate")['status'] == "paused"
@@ -414,3 +458,142 @@ def test_runtime_pause_and_resume_copy_use_korean_catalog(clock_store, monkeypat
                                    render=lambda key, default, **kw: t(key, **kw))
     assert result.error and result.prompt is None
     assert "일시정지 상태를 유지" in result.output
+
+
+def test_milestones_share_clock_and_resume_receipts_across_restart_and_compaction(clock_store, monkeypatch):
+    clock, db = clock_store
+    monkeypatch.setattr(goals, "configured_runtime_budget", lambda: 86400.)
+    manager = goals.GoalManager("task")
+    manager.set("One durable investigation")
+    db.create_session("task", "test")
+    origin = runtime.runtime_identity(manager.state)
+    clock.now += 12.4 * 3600
+    assert runtime.runtime_phase(manager.state) == "checkpoint"
+    assert runtime.runtime_checkpoint_due(manager.state) == 43200
+
+    def persist_decision(threshold, decision="continue"):
+        metadata = {"runtime_milestone": {"goal_identity": list(origin), "threshold_seconds": threshold,
+                                         "decision": decision, "reason": "A useful discriminating test remains."}}
+        uid = f"native-checkpoint-{threshold}"
+        db.append_message("task", "assistant", f"Saved checkpoint {threshold}",
+                          message_uid=uid, display_metadata=metadata)
+        return db.get_messages("task")[-1]
+
+    # Crash after source insert, before goal CAS: recovery adopts the same row once.
+    first = persist_decision(43200)
+    runtime.recover_runtime_milestones(db, "task")
+    runtime.recover_runtime_milestones(db, "task")
+    restored = goals.GoalManager("task").state
+    assert len(restored.runtime_checkpoints) == 1
+    assert restored.runtime_checkpoints[0]["source_message_id"] == first["message_uid"]
+    assert runtime.runtime_remaining(restored) == 86400 - 12.4 * 3600
+    assert runtime.runtime_phase(restored) == "investigation"
+    clock.now = 1000 + 18 * 3600
+    assert runtime.runtime_checkpoint_due(restored) == 64800
+    second = persist_decision(64800)
+    assert runtime.commit_runtime_milestone(db, "task", expected_goal_id=origin, row=second) == "continue"
+    assert goals.migrate_goal_to_session("task", "compacted")
+    compacted = goals.load_goal("compacted")
+    assert len(compacted.runtime_checkpoints) == 2
+    assert runtime.runtime_checkpoint_due(compacted) is None
+    assert runtime.runtime_phase(compacted) == "investigation"
+    assert runtime.runtime_remaining(compacted) == 6 * 3600
+    clock.now = 1000 + 22.8 * 3600
+    assert runtime.runtime_phase(compacted) == "handoff"
+    clock.now = 1000 + 24 * 3600
+    assert runtime.runtime_phase(compacted) == "exhausted"
+    assert runtime.runtime_checkpoint_due(compacted) is None
+
+
+@pytest.mark.parametrize("control", ["pause", "replacement", "cap", "unpersisted"])
+def test_milestone_commit_cannot_override_native_priority(clock_store, monkeypatch, control):
+    clock, db = clock_store
+    monkeypatch.setattr(goals, "configured_runtime_budget", lambda: 86400.)
+    manager = goals.GoalManager("task")
+    manager.set("Original investigation")
+    db.create_session("task", "test")
+    identity = runtime.runtime_identity(manager.state)
+    clock.now += 43200
+    row = {"role": "assistant", "content": "Partial checkpoint", "message_uid": "bound-row",
+           "display_metadata": {"runtime_milestone": {"goal_identity": list(identity),
+               "threshold_seconds": 43200, "decision": "finish", "reason": "No useful next test."}}}
+    if control != "unpersisted":
+        db.append_message("task", "assistant", row["content"], message_uid=row["message_uid"],
+                          display_metadata=row["display_metadata"])
+    if control == "pause":
+        manager.pause()
+    elif control == "replacement":
+        manager.set("Human replacement scope")
+    elif control == "cap":
+        clock.now += 43200
+    result = runtime.commit_runtime_milestone(db, "task", expected_goal_id=identity, row=row)
+    state = goals.load_goal("task")
+    assert state.runtime_checkpoints == []
+    assert result == ("exhausted" if control == "cap" else "invalid" if control == "unpersisted" else None)
+    if control == "pause":
+        assert state.paused_reason == "user-paused"
+    elif control == "replacement":
+        assert state.goal == "Human replacement scope" and state.status == "active"
+    elif control == "cap":
+        assert state.paused_reason == runtime.RUNTIME_BUDGET_REASON and state.last_verdict != "done"
+    else:
+        assert state.status == "active"
+
+
+def test_checkpoints_at_or_after_smaller_caps_are_skipped(clock_store, monkeypatch):
+    clock, db = clock_store
+    monkeypatch.setattr(goals, "configured_runtime_budget", lambda: 43200.)
+    state = goals.GoalManager("task").set("Short investigation")
+    clock.now += 43200
+    assert runtime.runtime_checkpoint_due(state) is None
+    assert runtime.runtime_phase(state) == "exhausted"
+
+
+def test_native_control_projection_keeps_clock_semantics_and_checkpoint_schema(clock_store, monkeypatch):
+    from tui_gateway.methods_session_control import _safe_goal_snapshot
+    from tui_gateway.contracts.config_free_tier_control import GoalSnapshot
+    clock, db = clock_store
+    monkeypatch.setattr(goals, "configured_runtime_budget", lambda: 86400.)
+    state = goals.GoalManager("task").set("Projected investigation")
+    clock.now += 12.4 * 3600
+    before = db.get_meta("goal:task")
+    snapshot = _safe_goal_snapshot(state)
+    assert GoalSnapshot.model_validate(snapshot).runtime_checkpoint_due_seconds == 43200
+    assert snapshot["runtime_phase"] == "checkpoint"
+    assert snapshot["runtime_elapsed_seconds"] == 0 and snapshot["runtime_started_at"] == 1000.
+    assert snapshot["runtime_accounting_known"] is True
+    assert snapshot["runtime_checkpoints"] == []
+    assert db.get_meta("goal:task") == before  # projection is read-only
+
+
+def test_finish_intent_closes_on_same_clock_across_pause_restart_and_compaction(clock_store, monkeypatch):
+    clock, db = clock_store
+    monkeypatch.setattr(goals, "configured_runtime_budget", lambda: 86400.)
+    manager = goals.GoalManager("task")
+    state = manager.set("Save and verify a useful report")
+    db.create_session("task", "test")
+    identity = runtime.runtime_identity(state)
+    clock.now += 43200
+    metadata = {"runtime_milestone": {"goal_identity": list(identity), "threshold_seconds": 43200,
+                                     "decision": "finish", "reason": "Evidence is sufficient for a bounded partial report."}}
+    db.append_message("task", "assistant", "Closing intent; report not yet saved or validated.",
+                      message_uid="finish-source", display_metadata=metadata)
+    runtime.recover_runtime_milestones(db, "task")
+    restored = goals.GoalManager("task")
+    assert restored.state.status == "active" and restored.state.last_verdict == "closing"
+    assert runtime.runtime_phase(restored.state) == "closing"
+    assert runtime.runtime_remaining(restored.state) == 43200
+    restored.pause()
+    clock.now += 1000
+    assert runtime.runtime_phase(restored.state) is None
+    assert runtime.runtime_remaining(restored.state) == 43200
+    restored.resume(reset_budget=False)
+    assert runtime.runtime_phase(restored.state) == "closing"
+    assert goals.migrate_goal_to_session("task", "compacted")
+    compacted = goals.GoalManager("compacted")
+    clock.now += 6 * 3600
+    assert runtime.runtime_checkpoint_due(compacted.state) is None  # 12h finish suppresses 18h
+    assert runtime.runtime_phase(compacted.state) == "closing"
+    assert compacted.state.runtime_checkpoints[0]["source_message_id"] == "finish-source"
+    assert runtime.runtime_identity(compacted.state) == identity
+    assert runtime.runtime_remaining(compacted.state) == 21600

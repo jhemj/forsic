@@ -8,7 +8,7 @@ def goal_turn_result(result):
         return None
     return {key: result[key] for key in (
         "completed", "failed", "interrupted", "turn_exit_reason", "final_response",
-        "guardrail",
+        "guardrail", "runtime_checkpoint_source_message_id",
     ) if key in result}
 
 

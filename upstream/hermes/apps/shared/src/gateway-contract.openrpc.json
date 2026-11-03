@@ -14215,6 +14215,71 @@
             "title": "Max Turns",
             "type": "integer"
           },
+          "runtime_budget_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Budget Seconds"
+          },
+          "runtime_elapsed_seconds": {
+            "default": 0,
+            "title": "Runtime Elapsed Seconds",
+            "type": "number"
+          },
+          "runtime_started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Started At"
+          },
+          "runtime_accounting_known": {
+            "default": false,
+            "title": "Runtime Accounting Known",
+            "type": "boolean"
+          },
+          "runtime_checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeCheckpointSnapshot"
+            },
+            "title": "Runtime Checkpoints",
+            "type": "array"
+          },
+          "runtime_phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Phase"
+          },
+          "runtime_checkpoint_due_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Checkpoint Due Seconds"
+          },
           "contract": {
             "$ref": "#/components/schemas/GoalContractSnapshot"
           },
@@ -28121,6 +28186,49 @@
           "idempotent"
         ],
         "title": "RoomTombstone",
+        "type": "object"
+      },
+      "RuntimeCheckpointSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "threshold_seconds": {
+            "title": "Threshold Seconds",
+            "type": "integer"
+          },
+          "decision": {
+            "enum": [
+              "continue",
+              "finish"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "decided_at": {
+            "title": "Decided At",
+            "type": "number"
+          },
+          "elapsed_seconds": {
+            "title": "Elapsed Seconds",
+            "type": "number"
+          },
+          "source_message_id": {
+            "title": "Source Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "threshold_seconds",
+          "decision",
+          "reason",
+          "decided_at",
+          "elapsed_seconds",
+          "source_message_id"
+        ],
+        "title": "RuntimeCheckpointSnapshot",
         "type": "object"
       },
       "SecretRequestParams": {

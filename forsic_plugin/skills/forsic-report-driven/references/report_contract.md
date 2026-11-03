@@ -7,19 +7,49 @@ projection. Reuse the verified cached Word document on subsequent downloads. Do 
 content, conclusions, or versions. Practitioner details belong in the same report's appendix. Without
 question_ids, use questions owned by the current conversation and goal.
 
-Use the native `forsic_reporting` compose workflow before normal rendering. Read its bounded writing packet,
-write the summary, findings, and limits sections in connected natural language, and save each section using
-the returned basis, revision, operation ID, and basis_keys. The program supplies exact evidence references.
-Compose across the current judgments and shared question explanations rather than pasting question answers
-or tool logs. Represent every selected question and important material gap. These coverage and reference
-checks do not certify the prose's truth or semantic quality. Correct changed judgments through
-`forsic_question`, then refresh the writing packet and revise stale prose.
+Use native `forsic_reporting(action=compose)` to write the fixed v2 template groups. The packet
+provides stable node IDs, cell counts, selected evidence keys, exact write reference and required
+unavailable explanations. Write detailed groups before summary; all template positions must be
+represented, while unknown facts remain unknown. Save short native-agent prose through the returned
+edit_ref and operation_id. Do not copy long snapshot/revision/source values or use the old
+summary/findings/limits completion path. All records stay in the existing report_narrative ledger.
 
-Normal render returns an authoring handoff until the saved sections match the selected current basis.
-Rendering itself never calls a model. An explicitly requested `allow_partial:true` creates a clearly marked
-technical snapshot for evidence, review, and integrity work without authored reader prose. The manifest and
-returned listing distinguish `authored_current` from `technical_partial`, retain the writing basis/revision,
-and keep semantic_approval false. Neither state grants delivery approval or waives existing scope and review checks.
+The three body pages preserve metadata, overall judgment, five findings and event overview;
+information presence/exposure/transfer, decisive evidence and strongest/alternative explanations;
+time-ordered records, undated important matters and one-sentence scope. Qualifications belong beside
+the relevant statement, not hidden only in appendices. Detailed readable explanations and exact source
+excerpts remain shared with the workbench and appendices A–G.
+
+Read compose(section=review) after content completion and record a whole-document review bound to
+that draft and current basis. Native-agent review records all nodes, evidence support, scope, alternatives,
+consistency, duplication and reading order. Existing Ren final review receives a separately labeled
+report draft; its advice is never source evidence. Changes invalidate review and only demonstrably
+unchanged field dependencies may be reused. Semantic approval is not certified by schema validation.
+
+The review packet is a complete compact node index, identified by `snapshot_id` derived from the
+draft hash and selected evidence basis. `saved_fields[].read_call` retrieves one exact group;
+`review_index_call` and `material_read_call` page its index and selected judgments. Follow child calls
+when a record is omitted and next_call for collection or UTF-8 scalar continuations. Each exact page
+uses the existing reporting page budget; no text or limitation is silently shortened. Evidence links
+select retained source IDs, versions and observation pointers through the existing source action.
+A changed draft/basis rejects old page calls rather than substituting current text. A review save leaves
+draft pages reusable; prior-review pages additionally bind their editorial revision. Old rendered bundles
+remain immutable, while old editorial reviews without explicit comparisons require a current review.
+
+Inspect all nodes, then choose the assertions that merit explicit semantic comparison. Save at least
+one concise `comparisons` record with `node_ids`, actual selected `basis_keys`, `statement`,
+`source_support`, `limits`, and `assessment`. One comparison may address related nodes. Explain
+the precise claim the observation supports and any stronger clause it does not establish, including
+conclusion-changing counterevidence/uncertainty. An unavailable fact can have empty basis_keys and
+explicitly missing support. This is an accountable analytical review, not a quota of source proofs or
+an automatic truth decision. All seven existing checks and the complete reviewed_node_ids are retained.
+After edits, use the save receipt's fresh edit_refs and the next contract call; earlier edit references
+are stale after any write. Read changed fields with the new identity without repeating unchanged source
+lookups or starting another model/review loop.
+
+Normal render hands off unfinished, stale or unreviewed content to composition. allow_partial:true
+explicitly creates a labeled technical snapshot rather than claiming a finished report. Immutable HTML
+and lazy Word use the same saved view, template version and evidence basis; rendering never calls a model.
 
 Optional report_slots retain seven assessment dimensions: compromise_time, entry_route, attacker_actions,
 personal_data_presence, external_disclosure, decisive_evidence, and incident_timeline. They remain bound
@@ -33,8 +63,7 @@ If answers change, correct them through forsic_question before rendering a new s
 
 Aim for about 3 body pages describing the current most likely explanation, confirmed impact, important
 counterarguments, and sequence. If complex causality requires 4 pages, retain core uncertainty. Keep
-uncertainty that prevents misunderstanding beside the relevant assessment. Use the limits section for
-material uncertainty and useful reopening conditions without repeating the findings. Put shared readable
+uncertainty that prevents misunderstanding beside the relevant assessment. Keep material uncertainty beside its finding, with the one-sentence scope at the end of the body. Do not add a separate limits chapter or repeat the findings. Put shared readable
 question explanations and, when different, the exact canonical answers,
 competing hypotheses, limitations, source coordinates, full timeline, execution arguments, receipts, hashes,
 permissions, and corrections in the appendix. Use program-returned numbers, times, references, and receipts;
@@ -89,8 +118,7 @@ for any reputation claims. After those saves, refresh compose and render, then v
 summary, limitations and source/evidence links in the same snapshot's IOC appendix. No raw_response or
 GTI-only field is automatically appended merely because a tool was called. If a row/reference is absent,
 correct selection/saved content and regenerate; do not claim inclusion based on export(json/csv) alone.
-When no IOCs were identified, state the selected examined scope and limits in the report's authored limits
-section; an empty local register does not prove absence across unexamined evidence.
+When no IOCs were identified, state the selected examined scope and limits in the report's relevant authored scope/impact fields; an empty local register does not prove absence across unexamined evidence.
 
 Only existing MD5/SHA1/SHA256 file reports and separately permitted public IP/domain reports are supported.
 The reporting requirement leaves public-network opt-in unchanged. Keep private/sensitive indicators, paths,

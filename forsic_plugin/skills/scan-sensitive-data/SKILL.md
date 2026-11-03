@@ -7,6 +7,8 @@ description: Find credential and Korean personal-data candidates in selected ret
 Use when a current question needs credential traces or personal-data content/scale. Inspect existing results first.
 Select question-relevant files or retained text scalars from actual returned source handles; never invent a source,
 version, pointer, path, or output directory. A report gap alone does not justify a whole-disk scan.
+If no candidate location has been selected yet, use bounded inventory/configuration reads within the existing
+authorized image to discover it. Target selection is investigator work, not automatically missing user permission.
 
 Call forsic_shell with action=sensitive_scan, targets=[{source_id,source_version,pointer,kind?,encoding?,format?}],
 profiles=["secrets","pii_kr"], and mode="triage" or "scope_count". Use only profiles needed for the question.
@@ -21,6 +23,9 @@ encoding is auto/utf-8/utf-16/cp949 where supported.
 Use resume_ref only to replay the exact retained scan with the same targets/profiles/mode; it is not a new scan
 or automatic continuation over unread files.
 The host validates identity, scope, decoding, capabilities and bounds. Read actual status/limitations, not only exit codes.
+For selection_recovery, follow its source_call and copy an actual returned pointer with the indicated input kind.
+A rejected selection is not an external constraint or evidence of no personal data. Correct the selection once;
+if no useful candidate is selected, return to bounded inventory rather than repeating the same rejected request.
 
 - triage locates candidates and small bounded examples; scope_count requests occurrence/value-group counts in the
   supported selected scope. Neither mode establishes people, valid credentials, complete holdings or exfiltration.

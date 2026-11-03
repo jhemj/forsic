@@ -50,7 +50,10 @@ important questions per round. The main agent must not impersonate this reader t
 The reader has no authority to execute tools, adopt evidence, or close the investigation; questions are not new facts or evidence.
 
 Read all questions, source lookups, and current question_id/revision in forsic_reporting(action=review_inbox).
-After investigating, call forsic_review_response with top-level review_id/finding_id, operation_id,
+Reuse retained results within the current native goal before considering new checks. Mandatory 3×5 review does not expand
+a report-only request: answer from preserved evidence and disclose any consequential unperformed test as scope_limited
+with its scope, effect on the answer, and reopening condition. A limitation is a substantive answer, not a skipped question.
+Call forsic_review_response with top-level review_id/finding_id, operation_id,
 question_id/current expected_revision, disposition, reason, and citation_refs containing actual C1/C2 selections.
 Use no action/payload wrapper for this tool; scope_limited also requires limitation. Only if forsic_review_response
 is absent from the session's pinned tool menu, follow review_inbox's response_contract.legacy_input to send the same
@@ -64,6 +67,11 @@ Do not turn an unsupported capability into a claim that separate approval is req
 identify the actual user scope or permission restriction. If recovery could change the answer, compare the target,
 original location or format, required result, and cost. Do not require carving every image to resolve a question
 or assume recovery is possible.
+
+Follow the returned phase. With no pending responses and next_review_round, decide whether a useful authorized
+check still remains; otherwise present the current answer at the native final boundary to obtain the next round.
+Do not invent a new pending finding or repeat a sweep just because more review rounds remain. compose_report
+requests the current report, while final_report_review requests its native final review; neither is completion approval.
 
 Open the next round only after all 5 preceding responses are validly linked to current notes. Give the independent
 reader all 5 prior questions and Forsic responses, the latest report, and source references to select remaining questions.

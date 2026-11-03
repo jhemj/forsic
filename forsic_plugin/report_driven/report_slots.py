@@ -32,6 +32,29 @@ def schema():
             'required': ['slot', 'state', 'brief'], 'additionalProperties': False}}
 
 
+def updates_schema():
+    result = schema()
+    result['minItems'] = 1
+    result['description'] = ('Existing v2 question only. Replace/upsert only the named report slots; '
+        'omit unchanged rows. Untouched bound declarations retain their exact references and judgment basis. '
+        'Do not combine with report_slots. claim_indices select current or replacement judgment claims.')
+    return result
+
+
+def update_bound(state, question, rows):
+    """Bind only submitted rows, preserving all other frozen declarations exactly."""
+    from .investigation_state import input_problems
+    problems = input_problems(rows, updates_schema(), 'report_slot_updates')
+    if problems:
+        raise ValueError('Invalid report_slot_updates: ' + str(problems))
+    changed = {row['slot']: row for row in bind(state, question, rows)}
+    merged = []
+    for row in question.get('report_slots', []):
+        merged.append(changed.pop(row['slot'], deepcopy(row)))
+    merged.extend(changed.values())
+    return merged
+
+
 def _value(question, key, default=None):
     return question.get('investigation', {}).get(key, question.get(key, default))
 

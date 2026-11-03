@@ -118,7 +118,11 @@ def save_note_locked(case, db, args, *, question_update=None):
         raise ValueError('v2 question writes are disabled on this adapter; historical records remain readable')
     if not old and contract_version == 'v2':
         value.update(question_contract_version='v2', declared_gaps_only=True)
-    if 'report_slots' in args and contract_version != 'v2':
+    if 'report_slots' in args and '_report_slot_updates' in args:
+        raise ValueError('Use report_slots OR report_slot_updates, not both')
+    if '_report_slot_updates' in args and not old:
+        raise ValueError('report_slot_updates requires an existing question; new questions use report_slots')
+    if ('report_slots' in args or '_report_slot_updates' in args) and contract_version != 'v2':
         raise ValueError('report_slots declarations require the v2 question contract')
     value.update({k: deepcopy(args[k]) for k in NOTE_FIELDS if k in args})
     if 'timeline' in args:
@@ -149,6 +153,11 @@ def save_note_locked(case, db, args, *, question_update=None):
                                   'reopen_conditions': [], 'priority': old.get('investigation', {}).get('priority', 'unassessed')}
     changed = old and any(old.get(k) != value.get(k) for k in
                           ('answer', 'evidence_ids', 'alternatives'))
+    retained_claim_records = {}
+    if '_judgment' in args:
+        from .grounded_judgment import retained_claims
+        from .host import current
+        retained_claim_records = retained_claims(case, current(case), old, value, args['_judgment'], contract_version)
     claim_action = args.get('_claim_action')
     if claim_action == 'retract' and 'answer' not in args:
         # The previous answer remains in the prior note event, not as today's answer.
@@ -162,7 +171,7 @@ def save_note_locked(case, db, args, *, question_update=None):
         previous = current(case)
         selected = {x['id'] for x in old.get('investigation', {}).get('claim_refs', [])}
         retired = [{**c, 'status': 'retracted' if claim_action == 'retract' else 'superseded'}
-                   for c in previous['claims'] if c['id'] in selected]
+                   for c in previous['claims'] if c['id'] in selected and c['id'] not in retained_claim_records]
         if retired:
             change = {'question_ref': {'kind':'question','id':'Q-'+note_id,'version':str(old['revision'])},
                       'definition_versions': {'Q-'+note_id: definition_version(old,default_scope)},
@@ -182,8 +191,9 @@ def save_note_locked(case, db, args, *, question_update=None):
         from .host import current
         value.setdefault('investigation', {})['review_responses'] = validate_and_merge(
             case, current(case), value, args['_review_responses'],
-            lineage=args.get('_session_lineage') or [args.get('_session_id', '')])
-    if not args.get('_judgment') and 'report_slots' not in args and old and all(old.get(k) == value.get(k) for k in value if k not in ('correction_reason', 'updated_at', 'revision')):
+            lineage=args.get('_session_lineage') or [args.get('_session_id', '')],
+            native_options=args.get('_independent_review_options'))
+    if not args.get('_judgment') and 'report_slots' not in args and '_report_slot_updates' not in args and old and all(old.get(k) == value.get(k) for k in value if k not in ('correction_reason', 'updated_at', 'revision')):
         return {'note': old, 'reused': True}
     value['revision'] = old['revision'] + 1 if old else 1
     value['updated_at'] = time.time()
@@ -193,7 +203,7 @@ def save_note_locked(case, db, args, *, question_update=None):
         from .host import current, ref
         # No inferred mission/test: the same note transaction stores exact
         # observations and the analyst's explicitly authored claim selections.
-        analytical, selected_sources = records(case,current(case),value,args['_judgment'],contract_version)
+        analytical, selected_sources = records(case,current(case),value,args['_judgment'],contract_version,retained=retained_claim_records)
         claim=analytical['claims'][0]
         value['evidence_ids']=selected_sources
         value.setdefault('investigation',{}).update(claim_refs=[ref('claim',c) for c in analytical['claims']],judgment_review_required=False)
@@ -208,7 +218,7 @@ def save_note_locked(case, db, args, *, question_update=None):
                 'semantic_approval':False}}
         db.execute('INSERT INTO events VALUES (?,?,?,?,?)',
             (uuid.uuid4().hex,time.time(),'report_change','',json.dumps(change,ensure_ascii=False)))
-    if 'forensic' in args or 'report_slots' in args or 'reader_explanation' in args:
+    if 'forensic' in args or 'report_slots' in args or '_report_slot_updates' in args or 'reader_explanation' in args:
         from .host import current, content_version
         # New judgment records belong to this same uncommitted transaction.
         # Project just those records in memory; never commit a second note to
@@ -239,6 +249,9 @@ def save_note_locked(case, db, args, *, question_update=None):
         if 'report_slots' in args:
             from .report_slots import bind as bind_report_slots
             value['report_slots'] = bind_report_slots(provisional, value, args['report_slots'])
+        if '_report_slot_updates' in args:
+            from .report_slots import update_bound
+            value['report_slots'] = update_bound(provisional, value, args['_report_slot_updates'])
         if 'forensic' in args:
             from .forensic_workbench import validate as validate_forensic
             value['forensic'] = validate_forensic(case, provisional, value, args['forensic'])
@@ -298,8 +311,9 @@ def compact_input_schemas(contract_version='v2'):
     from .reader_explanation import schema as reader_explanation_schema
     question['reader_explanation'] = reader_explanation_schema()
     if contract_version == 'v2':
-        from .report_slots import schema as report_slots_schema
+        from .report_slots import schema as report_slots_schema, updates_schema
         question['report_slots'] = report_slots_schema()
+        question['report_slot_updates'] = updates_schema()
         question['closure'] = {'type':'object', 'properties':{
             'basis_snapshot':nonblank, 'reason':nonblank,
             'retain_unresolved':{'type':'boolean','enum':[True]},
@@ -307,7 +321,8 @@ def compact_input_schemas(contract_version='v2'):
             'required':['basis_snapshot','reason','retain_unresolved','reopen_conditions'],
             'additionalProperties':False,
             'description':"Existing question, unchanged definition/gaps. Use closure OR top-level work_state/reopen_conditions; reason belongs here. Keep this snapshot's unresolved limits, reassess next_checks and dispose each material/planned work item. Limits remain unresolved."}
-    question['claim_action'] = {'type':'string','enum':['retain','replace','retract']}
+    question['claim_action'] = {'type':'string','enum':['retain','replace','retract'],
+        'description':'retain/retract cannot accompany judgment. A new judgment uses replace or omits claim_action; select the intended action explicitly.'}
     mission = {**common, **{k: string for k in ('gap_id', 'why_it_matters', 'tool_name', 'support_rule', 'refute_rule', 'inconclusive_rule', 'target_proposition')},
                'tool_arguments': {'type': 'object'},
                'required_view': {'type': 'string', 'enum': ['metadata', 'exact_excerpt', 'full_field']},
@@ -425,7 +440,7 @@ def validate_native_plan(payload, schemas):
 class QuestionInputError(ValueError):
     """A rejected question draft, with repair data and no inferred correction."""
     def __init__(self, problems, recovery, *, include_recovery=False):
-        self.details = {'error_code':'invalid_question_fields', 'invalid_fields':problems,
+        self.details = {'error_code':'invalid_question_fields', 'write_applied':False, 'invalid_fields':problems,
                         'recovery':recovery}
         def message():
             shown=self.details['invalid_fields'];repair=self.details['recovery']
@@ -441,14 +456,14 @@ class QuestionInputError(ValueError):
         # Only the rejected response is projected; validation and atomic writing
         # continue to use the full draft/projection and every selected disposition.
         budget=8192
-        if recovery and recovery.get('scope')=='update' and size({'error':message(),**self.details})>budget:
+        if size({'error':message(),**self.details})>budget:
             self.details=deepcopy(self.details)
             self.details['invalid_field_count']=len(problems)
             self.details['repair_presentation']={'byte_budget':budget,
-                'meaning':'Whole exact items only. Omitted committed gaps remain available through recovery.read_call; omitted proposed gaps use the unchanged original draft text.'}
+                'meaning':'Whole exact items only. Omitted diagnostics still reject this draft. Repair the shown fields and resubmit to check the remainder; retained state remains available through recovery.read_call and proposed values remain in the unchanged original draft.'}
             lists=[(self.details,'invalid_fields')]
             lists += [(self.details['recovery'],key) for key in ('committed_gaps','proposed_gaps','gap_choices')
-                      if isinstance(self.details['recovery'].get(key),list)]
+                      if isinstance((self.details['recovery'] or {}).get(key),list)]
             for problem in self.details['invalid_fields'][:16]:
                 lists += [(problem,key) for key,value in problem.items() if isinstance(value,list)]
             # Cap candidate cardinality before repeated byte accounting. No exact
@@ -621,7 +636,7 @@ def question_gap_problems(payload, state, question, projection):
     return problems
 
 
-def validate_input(action, payload, *, compact=True, contract_version='v2', state=None, host_args=None, gap_projection=None):
+def validate_input(action, payload, *, compact=True, contract_version='v2', state=None, host_args=None, gap_projection=None, case=None):
     schema = deepcopy(compact_input_schemas(contract_version)[action])
     if not compact:
         for key in ('operation_id','expected_revision'):
@@ -629,9 +644,54 @@ def validate_input(action, payload, *, compact=True, contract_version='v2', stat
         schema['required'] = ['mission_id','mission_version','result_id','result_version','outcome']
     problems=input_problems(payload,schema)
     recovery=None
+    reference_errors=[]
     # Collect independent shape and available state errors before any write;
     # repairing a shape must not hide a stale or foreign closure identity.
     if action == 'question' and isinstance(payload, dict):
+        if 'report_slot_updates' in payload:
+            if 'report_slots' in payload:
+                problems.append({'path': 'payload.report_slot_updates', 'error': 'Use report_slots OR report_slot_updates, not both'})
+            if not payload.get('question_id') or payload.get('question_id') == 'Q-intake':
+                problems.append({'path': 'payload.report_slot_updates', 'error': 'Requires an existing question; new questions use report_slots'})
+        judgment = payload.get('judgment')
+        if isinstance(judgment, dict):
+            if payload.get('claim_action') in ('retain', 'retract'):
+                problems.append({'path': 'payload.claim_action',
+                    'error': 'retain/retract cannot be combined with judgment. Explicitly choose replace (or omit claim_action) for a new judgment, or remove judgment to retain/retract the current claim.'})
+            selections = []
+            if 'claims' not in judgment:
+                selections = [('payload.judgment', judgment)]
+            elif isinstance(judgment['claims'], list):
+                selections = [(f'payload.judgment.claims[{index}]', claim)
+                              for index, claim in enumerate(judgment['claims'])]
+            for path, claim in selections:
+                if (isinstance(claim, dict) and claim.get('assertion_kind') == 'fact'
+                        and isinstance(claim.get('inference_strength'), str)
+                        and claim['inference_strength'] in ('favored', 'plausible')):
+                    problems.append({'path': path + '.inference_strength',
+                        'error': 'Inference strength describes interpretations, not observed facts. A fact uses inference_strength=unrated; explicitly repair the intended assertion_kind or inference_strength.'})
+        # Evidence result IDs and retained citation selections are distinct
+        # contracts. Diagnose the mistake before sources() sees an opaque ID;
+        # never extract/adopt an event from a citation on the analyst's behalf.
+        for index, value in enumerate(payload.get('evidence_ids', []) if isinstance(payload.get('evidence_ids'), list) else []):
+            if isinstance(value, str) and value.startswith(('C1:', 'C2:')):
+                problem = {'path': f'payload.evidence_ids[{index}]',
+                    'error': 'evidence_ids requires retained source event IDs; C1/C2 selections belong in judgment.citation_refs or review_responses[].citation_refs.',
+                    'repair': 'Explicitly repair the original draft; no source or citation was substituted.'}
+                from .grounded_judgment import DIRECT
+                match = DIRECT.fullmatch(value)
+                source = next((s for s in (state or {}).get('sources', []) if match and s['id'] == match[1]), None)
+                if source:
+                    problem['source_read_call'] = {'tool': 'forsic_reporting', 'arguments': {
+                        'action': 'source', 'source_id': source['id'], 'source_version': source['version']}}
+                problems.append(problem)
+        if case is not None and state is not None:
+            from .grounded_judgment import reference_problems
+            reference_errors=reference_problems(case,state,payload)
+            problems += reference_errors
+        if 'reasoning_note' in payload:
+            problems.append({'path': 'payload.reasoning_note',
+                'error': 'Unsupported field. Author the correction/disposition reason in reason and claim reasoning in judgment.reasoning_summary (or each judgment.claims item). Preserve the intended claims; no text was moved or discarded.'})
         closure = payload.get('closure')
         if isinstance(closure, dict):
             incompatible = sorted(set(payload) & {'question','target_proposition','scope','gaps',
@@ -649,10 +709,19 @@ def validate_input(action, payload, *, compact=True, contract_version='v2', stat
         if state is not None:
             state_problems,recovery=question_state_problems(payload,state,host_args or {})
             problems += state_problems
+            if (problems and payload.get('review_responses') and recovery.get('editable_in_current_conversation')):
+                recovery['review_response'] = {
+                    'when': 'Only when the existing answer remains unchanged; otherwise repair the original combined draft.',
+                    'tool': 'forsic_review_response', 'input_location': 'top_level',
+                    'read_call': {'tool': 'forsic_reporting', 'arguments': {
+                        'action': 'review_inbox', 'question_id': recovery['question_id']}},
+                    'meaning': 'Save one authored finding at a time with returned IDs/revision and sufficient retained C1/C2 citation_refs. This draft was not saved.'}
             if gap_projection is not None:
                 old=next(q for q in state['questions'] if q['id']==payload['question_id'])
                 problems += question_gap_problems(payload,state,old,gap_projection)
-                recovery.update(gap_projection['recovery'])
+                if (any(k in payload for k in ('closure', 'gaps', 'critical_gaps', 'gap_dispositions'))
+                        or payload.get('work_state') == 'scoped_closed'):
+                    recovery.update(gap_projection['recovery'])
         if not payload.get('question_id'):
             draft_problems,gap_choices=new_question_problems(payload)
             problems += draft_problems
@@ -660,6 +729,17 @@ def validate_input(action, payload, *, compact=True, contract_version='v2', stat
                 recovery['gap_choices']=gap_choices
     if problems:
         if action == 'question':
+            # Keep the established single-citation response contract. Combined
+            # drafts use the bounded aggregate diagnostic instead of first-raise.
+            if (len(problems)==1 and problems==reference_errors
+                    and problems[0]['path'].startswith('payload.judgment.')):
+                from .grounded_judgment import CitationSelectionError, _failed_output_recovery
+                path=problems[0]['path'].removeprefix('payload.')
+                judgment=payload['judgment']
+                match=re.fullmatch(r'judgment(?:\.claims\[(\d+)\])?\.(citation_refs|counter_citation_refs)\[(\d+)\]',path)
+                claim=judgment['claims'][int(match[1])] if match[1] is not None else judgment
+                value=claim[match[2]][int(match[3])]
+                raise CitationSelectionError(path,problems[0]['error'],_failed_output_recovery(case,value))
             raise QuestionInputError(problems,recovery,include_recovery=isinstance(payload,dict) and 'closure' in payload)
         prefix = 'Invalid '+action+' fields'
         if action=='assess':
@@ -886,7 +966,7 @@ def update_question(case, state, payload, host_args):
             note=latest_note(db,old['id'].removeprefix('Q-')) or {'revision':old['revision']}
         projection=question_gap_projection(state,old,payload,note)
     validate_input('question',payload,contract_version=contract_version,state=state,host_args=host_args,
-                   gap_projection=projection)
+                   gap_projection=projection,case=case)
     payload = deepcopy(payload)
     question_id=payload.get('question_id')
     if not question_id and 'expected_revision' in payload:
@@ -907,10 +987,12 @@ def update_question(case, state, payload, host_args):
             raise ValueError('Explicitly reassess next_checks before closure; keep valuable checks active or set next_checks=[] with the closure rationale')
         payload.update(work_state='scoped_closed',reason=closure['reason'],reopen_conditions=closure['reopen_conditions'])
     args={k:deepcopy(v) for k,v in payload.items() if k in NOTE_FIELDS}
+    if 'report_slot_updates' in payload:
+        args['_report_slot_updates'] = deepcopy(payload['report_slot_updates'])
     args['_question_contract'] = contract_version
     if closure:
         args['_closure_basis_snapshot'] = closure['basis_snapshot']
-    args.update({k:host_args[k] for k in ('_goal_id','_session_id','_session_lineage') if k in host_args})
+    args.update({k:host_args[k] for k in ('_goal_id','_session_id','_session_lineage','_independent_review_options') if k in host_args})
     if 'review_responses' in payload:
         args['_review_responses'] = deepcopy(payload['review_responses'])
     if old and question_id!='Q-intake':

@@ -24,6 +24,35 @@ FILE_SIZE_LIMIT = 256 * 1024 * 1024
 MAX_EVIDENCE_ENTRIES = 250000
 MAX_EVIDENCE_DEPTH = 128
 MAX_EVIDENCE_SCAN_SECONDS = 10
+MAX_RUNTIME_SECONDS = 300
+# Retained rc125 can inspect (15s), reap client (15s), remove (15s), then commit.
+NATIVE_RETURN_RESERVE_SECONDS = 50
+
+
+def _native_timeout():
+    """Same resolver as native execution; no active absolute deadline is exposed."""
+    try:
+        from agent.deadline import resolve_timeout
+        concurrent = resolve_timeout("tools.concurrent_batch", default=420.0,
+                                     env_var="HERMES_CONCURRENT_TOOL_TIMEOUT_S")
+        return resolve_timeout("tools.sequential_call", default=concurrent)
+    except (ImportError, AttributeError):
+        return 420.0
+
+
+def _timeout_ceiling():
+    native = _native_timeout()
+    return min(MAX_RUNTIME_SECONDS, max(0, int(native - NATIVE_RETURN_RESERVE_SECONDS))) if native is not None else MAX_RUNTIME_SECONDS
+
+
+def _launch_timeout(requested, started, native_timeout):
+    available = (native_timeout - NATIVE_RETURN_RESERVE_SECONDS - (time.monotonic()-started)
+                 if native_timeout is not None else requested)
+    if available < 1:
+        raise ExecutionFailure("Native call budget exhausted during admission; no container launched.",
+            error_code="native_budget_exhausted", failure_stage="admission",
+            execution={"state":"not_started", "backend":"docker", "termination_confirmed":True})
+    return min(requested, available)
 
 # Cwd containment is resolved in the actual container, after mounts exist. An
 # arbitrary script can read /evidence, but cannot redirect its cwd through a
@@ -40,6 +69,7 @@ os.execv('/bin/bash',['/bin/bash','-e','-o','pipefail','-c',sys.argv[2]])
 def schema():
     from .sensitive_policy import properties
     from .triage_policy import properties as triage_properties
+    from .static_scan import properties as static_properties
     triage = triage_properties()
     shared = properties()
     # The shared target envelope serves both actions. Preserve sensitive-scan
@@ -50,19 +80,32 @@ def schema():
     shared['targets']['items']['properties']['kind']['description']=('Required for triage: evidence_file or workspace_export. '
         'For sensitive_scan only, omitted kind defaults to retained_text.')
     shared['targets']['description'] += ' Each target needs source_handle or source_id plus source_version, with an exact retained pointer. For triage, kind is required (evidence_file or workspace_export); format=text and encoding=auto retain binary bytes. linux_persistence requires triage_format; linux_login_parser requires login_format.'
+    static = static_properties()
+    # A flat tool schema shares mode; action validators retain their precise enum.
+    static['mode'] = {'type':'string',
+        'enum': [*shared['mode']['enum'], *static['mode']['enum']],
+        'description':'sensitive_scan: triage or scope_count; static_scan: strings or literal.'}
     return {'type':'object', 'properties':{
-        **triage, **shared,
-        'action':{'type':'string','enum':['run','capabilities','sensitive_scan','triage','triage_query'],'default':'run',
-                  'description':'triage runs a bounded selected-file profile and returns candidates only. run requires command. capabilities checks installed tools. sensitive_scan runs selected local secrets/pii_kr detectors on retained targets; no command, network or online validation. Read scan-sensitive-data for selection/coverage.'},
+        **triage, **shared, **static,
+        'action':{'type':'string','enum':['run','capabilities','sensitive_scan','triage','triage_query','static_scan'],'default':'run',
+                  'description':'Use static_scan for selected workspace byte/string scans: structured no-match, per-file errors and bounds; no pipelines. triage runs a bounded selected-file profile and returns candidates only. run requires command. capabilities checks installed tools. sensitive_scan runs selected local secrets/pii_kr detectors on retained targets; no command, network or online validation. Read scan-sensitive-data for selection/coverage.'},
         'command':{'type':'string','minLength':1,'maxLength':MAX_COMMAND_BYTES,
                    'description':'Bash -e -o pipefail; at most 64 KiB UTF-8. Handle expected failures with if/||. A Python here-doc consumes stdin: pass data via a quoted file argument, not a pipe into the here-doc. Retain producer stderr and status; a later command succeeding does not repair a failed producer.'},
         'cwd':{'type':'string','default':'/work',
                'description':'Absolute directory under /work; it must already exist. Symlink resolution must stay under /work.'},
-        'timeout_seconds':{'type':'integer','minimum':1,'maximum':1800,'default':300}},
+        'timeout_seconds':{'type':'integer','minimum':1,'maximum':max(1,_timeout_ceiling()),'default':max(1,min(300,_timeout_ceiling()))}},
         'required':[], 'additionalProperties':False}
 
 
 def validate(args):
+    if isinstance(args,dict) and args.get('action')=='static_scan':
+        from .static_scan import validate as validate_static
+        selected=validate_static(args)
+        ceiling=_timeout_ceiling()
+        timeout=args.get('timeout_seconds',min(300,ceiling))
+        if type(timeout) is not int or not 1<=timeout<=ceiling:
+            raise ValueError(f'timeout_seconds must be an integer from 1 to {ceiling}')
+        return {**selected,'action':'static_scan','timeout_seconds':timeout}
     if isinstance(args,dict) and args.get('action')=='triage_query':
         from .triage_policy import validate_query
         return validate_query(args)
@@ -95,25 +138,49 @@ def validate(args):
             not cwd.startswith('/') or '..' in PurePosixPath(cwd).parts or
             PurePosixPath(cwd).parts[:2]!=('/','work')):
         raise ValueError('cwd must be an absolute directory under /work without parent traversal')
-    timeout=args.get('timeout_seconds',300)
-    if type(timeout) is not int or not 1<=timeout<=1800:
-        raise ValueError('timeout_seconds must be an integer from 1 to 1800')
+    ceiling=_timeout_ceiling()
+    timeout=args.get('timeout_seconds',min(300,ceiling))
+    if type(timeout) is not int or not 1<=timeout<=ceiling:
+        raise ValueError(f'timeout_seconds must be an integer from 1 to {ceiling}')
     return {'command':command,'cwd':str(PurePosixPath(cwd)),'timeout_seconds':timeout}
 
 
 
 # Metadata/help only: no evidence paths, recovery, or host-runtime inspection.
-_RECOVERY_DISCOVERY = """import hashlib,json,shutil,subprocess
+_RECOVERY_DISCOVERY = """import hashlib,importlib.util,json,shutil,subprocess,stat
 from pathlib import Path
 commands={
     'photorec':[['/version']], 'testdisk':[['/version']],
     'gitleaks':[['version']],
-    'tsk_recover':[['-V']], 'ewfexport':[['-V']],
+    'strings':[['--version']],
+    'tsk_recover':[['-V']], 'ewfexport':[['-V'],['-h']],
+    'ewfmount':[], 'img_cat':[], 'lvm':[], 'pvs':[],
     'fsstat':[['-f','list']], 'img_stat':[['-i','list']],
     'fls':[], 'istat':[], 'icat':[], 'mmls':[]}
-result={'runtime_verified':True,'verification_scope':'executable metadata/help and mounted helper hashes only',
+result={'runtime_verified':True,'verification_scope':'executable metadata/help, Python module discovery, device presence and mounted helper hashes only',
         'target_format_support':'not_checked','recovery_execution':'not_attempted',
-        'authorization':'not_assessed','executables':{},'helpers':{}}
+        'authorization':'not_assessed','executables':{},'helpers':{},'python_modules':{},'devices':{}}
+for name in ('pyewf','libewf','dissect.target'):
+    try:
+        spec=importlib.util.find_spec(name)
+        item={'state':'available' if spec is not None else 'missing_module',
+              'observation':'module_spec_only','import_execution':'not_attempted',
+              'target_format_support':'not_checked'}
+    except ModuleNotFoundError as exc:
+        item={'state':'missing_module' if exc.name and (name==exc.name or name.startswith(exc.name+'.')) else 'detection_failed',
+              'error_type':type(exc).__name__}
+    except Exception as exc:
+        item={'state':'detection_failed','error_type':type(exc).__name__}
+    result['python_modules'][name]=item
+try:
+    info=Path('/dev/fuse').stat()
+    result['devices']['/dev/fuse']={'state':'present','character_device':stat.S_ISCHR(info.st_mode),
+                                    'mount_permission':'not_checked'}
+except FileNotFoundError:
+    result['devices']['/dev/fuse']={'state':'absent','mount_permission':'not_checked'}
+except OSError as exc:
+    result['devices']['/dev/fuse']={'state':'detection_failed','error_type':type(exc).__name__,
+                                    'mount_permission':'not_checked'}
 for name in ('image_reader.py','image_access.py','literal_search.py','login_records.py','structured_query.py'):
     path=Path('/opt/forsic')/name
     try:
@@ -176,6 +243,11 @@ def workspace_info():
                     'gitleaks':'8.30.1',
                     'libreoffice':'26.2.6.3','pdftotext':'26.01.0','pdftoppm':'26.01.0',
                     'photorec':'7.2','testdisk':'7.2','tsk_recover':'4.12.1','ewfexport':'20140816'},
+                'binary_inspection':{'package':'binutils', 'executable':'strings',
+                    'runtime_verified':False,
+                    'bounded_command':'head -c 1048576 -- /work/selected-binary | strings -a -n 8 -t x',
+                    'input_limit_bytes':1048576,
+                    'meaning':'Read only the first 1 MiB of the explicitly selected file and show printable strings of at least 8 characters with hexadecimal byte offsets. Substitute the approved exact path; offsets refer to that bounded input. Strings are leads, not proof of execution, benignness or maliciousness; absence does not establish whole-file coverage. Check capabilities for actual executable presence before use.'},
                 'deleted_recovery':{'skill':'source-triage','reference':'references/deleted-recovery.md',
                     'carving':'PhotoRec signature recovery from raw images or explicit exported ranges',
                     'filesystem':'Sleuth Kit metadata recovery on supported filesystems; XFS is not supported by this build',
@@ -346,7 +418,11 @@ def _command(args,image,mounts,container):
         spec=bind_mount(mount['source'],mount['destination'],mount['readonly'],
                         recursive_readonly=mount['readonly'])
         command.extend(['--mount',spec])
-    command.extend([image,'python','-B','-c',_CWD_EXEC,args['cwd'],args['command']])
+    if args.get('action')=='static_scan':
+        request={k:v for k,v in args.items() if k not in ('action','timeout_seconds','command','cwd')}
+        command.extend([image,'python','-B','/opt/forsic/static_scan.py',json.dumps(request)])
+    else:
+        command.extend([image,'python','-B','-c',_CWD_EXEC,args['cwd'],args['command']])
     return command
 
 
@@ -455,6 +531,8 @@ def _present(value,raw):
 
 
 def invoke(case,args,session_id,native_execution=None, *, _pack_root=None, _extension=None, max_output_bytes=MAX_OUTPUT_BYTES):
+    started=time.monotonic()
+    native_timeout=_native_timeout()
     args=validate(args)
     if args.get('action')=='sensitive_scan':
         from .sensitive_policy import invoke as scan
@@ -465,6 +543,9 @@ def invoke(case,args,session_id,native_execution=None, *, _pack_root=None, _exte
     if args.get('action')=='triage':
         from .triage_policy import invoke as triage
         return triage(case,args,session_id,native_execution)
+    static=args.get('action')=='static_scan'
+    if static:
+        args={**args,'command':'python /opt/forsic/static_scan.py','cwd':'/work'}
     discovery=args.get('action')=='capabilities'
     if discovery:
         args={'command':'python -c '+shlex.quote(_RECOVERY_DISCOVERY),'cwd':'/work','timeout_seconds':30}
@@ -488,13 +569,20 @@ def invoke(case,args,session_id,native_execution=None, *, _pack_root=None, _exte
             raise ExecutionFailure('Native cancellation was requested before command admission.',
                 error_code='cancelled_before_start',failure_stage='admission',
                 execution={'state':'not_started','backend':'docker','termination_confirmed':True})
-        mounts=_evidence_mounts(case)
+        mounts=[] if static else _evidence_mounts(case)
         snapshot=_execution_snapshot(case)
+        if static and 'static_scan.py' not in snapshot['helpers']:
+            raise ExecutionFailure('The pinned environment does not contain static_scan.py.',
+                error_code='static_scan_unavailable',failure_stage='admission',
+                execution={'state':'not_started','backend':'docker','termination_confirmed':True})
         image=snapshot['images']['analysis']['image_id']
         workspace=_workspace(case,session_id)
         mounts.append(_mount(workspace,'/work',False))
         for filename in ('image_reader.py','literal_search.py','image_access.py','structured_query.py','login_records.py'):
             mounts.append(_mount(Path(snapshot['helpers'][filename]['path']),'/opt/forsic/'+filename,True))
+        for filename in ('static_scan.py','ewf_reader.py'):
+            if filename in snapshot['helpers']:
+                mounts.append(_mount(Path(snapshot['helpers'][filename]['path']),'/opt/forsic/'+filename,True))
         if _pack_root is not None:
             mounts.append(_mount(Path(_pack_root).resolve(strict=True),'/extension',True))
         value['execution_policy']['environment']=snapshot
@@ -506,8 +594,13 @@ def invoke(case,args,session_id,native_execution=None, *, _pack_root=None, _exte
         command=_command(args,image,mounts,container)
         from .environments import EnvironmentManager
         with _workspace_lock(workspace), EnvironmentManager().execution(case,expected_snapshot=snapshot):
+            effective_timeout=_launch_timeout(args['timeout_seconds'],started,native_timeout)
+            value['execution_policy'].update(timeout_seconds=effective_timeout,
+                requested_timeout_seconds=args['timeout_seconds'],native_timeout_seconds=native_timeout,
+                native_return_reserve_seconds=NATIVE_RETURN_RESERVE_SECONDS,
+                timeout_scope='container runtime; native budget estimate starts at handler entry, not native call start')
             result=run_container(command,container,native_execution,
-                timeout_seconds=args['timeout_seconds'],max_output_bytes=max_output_bytes,
+                timeout_seconds=effective_timeout,max_output_bytes=max_output_bytes,
                 cleanup_on_return=True,retained_container=True)
         value['execution']=result['execution']
         raw=_raw_output(result['stdout'],result['stderr'],complete=True,limit=max_output_bytes)
@@ -518,6 +611,18 @@ def invoke(case,args,session_id,native_execution=None, *, _pack_root=None, _exte
                 _command_outcome(value,result['stdout'])['status'] not in ('no_matches','partial')):
             value.update(success=False,error=f"Command exited with status {value['execution']['exit_code']}.",
                          error_code='command_exit_nonzero',failure_stage='execution')
+        if static and value['execution'].get('state')=='returned':
+            value['action']='static_scan'
+            try:
+                report=json.loads(result['stdout'])
+                if (not isinstance(report,dict) or report.get('schema')!='forsic.static-scan.v1'
+                        or type(report.get('success')) is not bool):
+                    raise ValueError('Invalid static scan schema')
+                value['static_scan']=report
+                value['success']=report['success'] and value['execution'].get('exit_code') == 0
+            except (ValueError,KeyError,TypeError):
+                value.update(success=False,error='Static scan returned invalid metadata.',
+                    error_code='static_scan_invalid',failure_stage='execution')
         elif discovery and value['execution'].get('exit_code')==0:
             try:
                 observed=json.loads(result['stdout'])

@@ -114,12 +114,20 @@ def _refund_api_call(agent: Any, api_call_count: int) -> int:
 
 
 def _reanchor(agent: Any, messages: List[Any], user_message: Any) -> int:
-    """Compaction rebuilt ``messages``: re-anchor this turn's user index so the
-    api_content stamp, injection site and persist-override row hit the same dict."""
+    """Recover the request boundary without applying the turn override to a fallback user."""
+    from agent.context_compressor import user_originated_turn_view
     from agent.turn_context import reanchor_current_turn_user_idx
 
     idx = reanchor_current_turn_user_idx(messages, user_message)
-    agent._persist_user_message_idx = idx
+    msg = messages[idx] if idx >= 0 else None
+    view = user_originated_turn_view(msg)
+    # A steer or historical ask may anchor the request after the original turn was
+    # compacted away. It does not own that turn's clean-content/timestamp override.
+    exact_turn = idx >= 0 and (
+        msg.get("content") == user_message
+        or (view is not None and view.get("content") == user_message)
+    )
+    agent._persist_user_message_idx = idx if exact_turn else None
     return idx
 
 

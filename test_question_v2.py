@@ -27,6 +27,68 @@ class QuestionV2Tests(unittest.TestCase):
             side_effect=lambda session_id, **kwargs: self.resolved if session_id == 'synthetic-session' else None)
         resolver.start();self.addCleanup(resolver.stop)
 
+    def test_judgment_crossfield_errors_are_collected_before_mutation_and_repair(self):
+        judgment = self.judgment(assertion_kind='fact', inference_strength='favored')
+        q = self.save('crossfield-initial', judgment=self.judgment(), reason='Preserve selected record')
+        for action in ('retain', 'retract'):
+            for array in (False, True):
+                with self.subTest(action=action, claims=array):
+                    proposed = deepcopy(judgment)
+                    paths = {'payload.claim_action', 'payload.judgment.inference_strength'}
+                    if array:
+                        proposed = {'claims': [dict(judgment, statement='A request is recorded.'),
+                            dict(judgment, statement='Completion is unconfirmed.', inference_strength='plausible')]}
+                        paths = {'payload.claim_action', 'payload.judgment.claims[0].inference_strength',
+                                 'payload.judgment.claims[1].inference_strength'}
+                    payload = dict(operation_id='crossfield-'+action+str(array), question_id=q['id'],
+                        expected_revision=q['revision'], answer=q['answer'], reason='Compare retained source',
+                        claim_action=action, judgment=proposed)
+                    original = deepcopy(payload)
+                    before = host.current(self.case)
+                    with self.case.connect() as db:
+                        events = db.execute("SELECT id FROM events WHERE kind IN ('note','report_change','mutation_receipt') ORDER BY rowid").fetchall()
+                    rejected = self.call('forsic_question', payload)
+                    self.assertEqual(rejected.get('error_code'), 'invalid_question_fields', rejected)
+                    self.assertFalse(rejected['write_applied'])
+                    self.assertEqual({field['path'] for field in rejected['invalid_fields']}, paths)
+                    self.assertIn('Correct these fields in forsic_question', rejected['error'])
+                    self.assertEqual(payload, original)
+                    after = host.current(self.case)
+                    for key in ('questions', 'claims', 'observations'):
+                        self.assertEqual(after[key], before[key])
+                    with self.case.connect() as db:
+                        self.assertEqual(db.execute("SELECT id FROM events WHERE kind IN ('note','report_change','mutation_receipt') ORDER BY rowid").fetchall(), events)
+                    # The analyst explicitly repairs both choices; no conversion
+                    # or selection is performed by admission or the writer.
+                    payload['claim_action'] = 'replace'
+                    for claim in (proposed['claims'] if array else [proposed]):
+                        claim['inference_strength'] = 'unrated'
+                    saved = self.call('forsic_question', payload)
+                    self.assertNotIn('error', saved, saved)
+                    q = host.find(host.current(self.case), 'questions', q['id'])
+
+    def test_valid_claim_actions_and_omitted_fact_strength_remain_compatible(self):
+        judgment = self.judgment(assertion_kind='fact')
+        q = self.save('fact-default', judgment=judgment, reason='Record the retained request')
+        state = host.current(self.case)
+        self.assertEqual(host.find(state, 'claims', q['claim_refs'][0]['id'])['inference_strength'], 'unrated')
+        q = self.revise(q, 'retain-without-judgment', claim_action='retain', answer=q['answer'],
+                        reason='The answer and its meaning are unchanged')
+        q = self.revise(q, 'retract-without-judgment', claim_action='retract', reason='Withdraw current judgment')
+        self.assertEqual(q['claim_refs'], [])
+        q = self.revise(q, 'replace-with-judgment', claim_action='replace',
+                        answer='A retained request is recorded.', reason='Adopt the explicit retained observation',
+                        judgment={'claims': [dict(judgment, statement='A retained request is recorded.')]})
+        self.assertTrue(q['claim_refs'])
+        host.checked(host.current(self.case))
+        for index, malformed in enumerate(([], {'claims': 'not an array'}, {'claims': [3]},
+                dict(judgment, inference_strength=['favored']))):
+            result = self.call('forsic_question', dict(operation_id='malformed-judgment-'+str(index),
+                question_id=q['id'], expected_revision=q['revision'], answer=q['answer'],
+                reason='Preserve current claim', judgment=malformed))
+            self.assertEqual(result.get('error_code'), 'invalid_question_fields', result)
+            self.assertEqual(host.find(host.current(self.case), 'questions', q['id']), q)
+
     def test_disposition_reports_independent_shape_errors_in_one_rejection_then_repairs(self):
         q = self.save(gaps=['Unobserved completion'])
         before = host.current(self.case)

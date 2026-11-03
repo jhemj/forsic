@@ -580,6 +580,11 @@ _PER_TURN_RESET_STATE: Tuple[Tuple[str, Any], ...] = (
     ("_harness_metrics_turn", None),
     ("_iteration_budget_warning_injected", False),
     ("_run_budget_wrapup_injected", False), ("_verification_stop_nudges", 0),
+    ("_run_budget_wrapup_identity", None), ("_run_budget_wrapup_phase", None),
+    ("_runtime_handoff_identity", None), ("_runtime_checkpoint_generated", False),
+    ("_runtime_checkpoint_row", None), ("_runtime_checkpoint_saved", False),
+    ("_runtime_milestone_threshold", None), ("_runtime_milestone_decision", None),
+    ("_runtime_checkpoint_cancelled", False),
     ("_pre_verify_nudges", 0),
 )
 
@@ -820,9 +825,18 @@ def _merge_gateway_notes(
     ephemeral system prompt stays byte-stable: the gateway's staged notes, then the
     surface-switch correction. Multimodal (list) content can't take the string sidecar —
     append a durable text part instead."""
+    from agent.conversation_loop import _run_budget_wrapup_note
+    budget_note = _run_budget_wrapup_note(agent)
+    if budget_note and 0 <= current_turn_user_idx < len(messages):
+        identity = getattr(agent, "_run_budget_wrapup_identity", None)
+        message = messages[current_turn_user_idx]
+        message["display_metadata"] = {**(message.get("display_metadata") or {}),
+                                       "runtime_wrapup_goal": list(identity) if identity else None,
+                                       "runtime_wrapup_phase": agent._run_budget_wrapup_phase}
     _turn_notes = "\n\n".join(
         part for part in (consume_gateway_turn_context_notes(agent),
-                          consume_surface_switch_note(agent)) if part
+                          consume_surface_switch_note(agent),
+                          budget_note) if part
     )
     if not _turn_notes:
         return plugin_user_context

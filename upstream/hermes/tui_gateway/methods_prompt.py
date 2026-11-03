@@ -581,6 +581,80 @@ def _persist_session_row_for_submit(rid, session, text=None, display_kind=None):
     return error
 
 
+def _start_runtime_handoff_followup(session: dict, text, *, fresh_human: bool = False):
+    """A fresh human objective after a runtime stop gets its own native allowance.
+
+    Only the idle, visible prompt.submit path calls this. Automatic turn admission,
+    reconnect, queued input and native clarification results never create a goal.
+    """
+    if (not fresh_human or not isinstance(text, str) or not text.strip()
+            or session.get('source') not in ('cli', 'tui', 'desktop', 'web')):
+        return None
+    from hermes_cli import goals
+    from hermes_cli.goals_runtime import RUNTIME_HANDOFF_REASON, RUNTIME_BUDGET_REASON
+    import json
+
+    with session['history_lock'], _session_profile_runtime_scope(session), _session_db(session) as db:
+        if (db is None or session.get('_closing') or session.get('_finalized')
+                or session.get('_turn_cancel_requested')):
+            return None
+        key = str(getattr(session.get('agent'), 'session_id', None) or session.get('session_key') or '')
+        raw = db.get_meta(goals._meta_key(key)) if key else None
+        previous = goals.GoalState.from_json(raw) if raw else None
+        if (previous is None or previous.status != 'paused'
+                or previous.paused_reason not in {RUNTIME_HANDOFF_REASON, RUNTIME_BUDGET_REASON}):
+            return None
+        staged = session.get('_submit_user_row') or {}
+        row_id = staged.get('_row_id')
+        if (type(row_id) is not int or staged.get('content') != text
+                or staged.get('display_kind') or _submit_row_owner_key(staged, session) != key):
+            raise goals._StaleGoalEvaluation('fresh accepted user row is unavailable at the current session tip')
+        manager = goals.GoalManager(key, default_max_turns=int(
+            (_load_cfg().get('goals') or {}).get('max_turns', 20) or 20))
+        if manager._runtime_budget is None:
+            raise ValueError('A bounded runtime allowance is required for a new follow-up')
+        previous_id = goals.goal_identity(previous)
+        receipt = {}
+
+        class FollowupWrite:
+            def compare_and_swap_meta(self, goal_key, expected, value):
+                current = goals.GoalState.from_json(value)
+                def save(conn):
+                    row = conn.execute('SELECT role,content,display_kind,display_metadata,active,message_uid FROM messages '
+                                       'WHERE id=? AND session_id=?', (row_id, key)).fetchone()
+                    if (row is None or row['role'] != 'user' or row['content'] != text
+                            or row['display_kind'] or not row['active']):
+                        return False
+                    metadata = json.loads(row['display_metadata']) if row['display_metadata'] else {}
+                    if not isinstance(metadata, dict) or metadata.get('runtime_handoff_followup'):
+                        return False  # this physical accepted row cannot grant another allowance
+                    changed = conn.execute('UPDATE state_meta SET value=? WHERE key=? AND value=?',
+                                           (value, goal_key, expected)).rowcount
+                    if changed != 1:
+                        return False  # a concurrent pause/replacement wins without retry
+                    receipt.update(previous_goal_id=previous_id, previous_goal=previous.goal,
+                        previous_goal_state=json.loads(raw),
+                        previous_status=previous.status, previous_paused_reason=previous.paused_reason,
+                        previous_last_verdict=previous.last_verdict, previous_last_reason=previous.last_reason,
+                        previous_runtime_budget_seconds=previous.runtime_budget_seconds,
+                        previous_runtime_elapsed_seconds=previous.runtime_elapsed_seconds,
+                        goal_id=goals.goal_identity(current), accepted_user_row_id=row_id,
+                        accepted_user_message_uid=row['message_uid'],
+                        runtime_budget_seconds=current.runtime_budget_seconds)
+                    metadata['runtime_handoff_followup'] = receipt
+                    conn.execute('UPDATE messages SET display_metadata=? WHERE id=? AND session_id=?',
+                                 (json.dumps(metadata, ensure_ascii=False), row_id, key))
+                    return True
+                return db._execute_write(save, patience_s=0.5)
+
+        # Use the native goal constructor and save path, fenced to this exact
+        # prior goal and accepted message in the owning SessionDB transaction.
+        manager._evaluation_db, manager._evaluation_expected = FollowupWrite(), raw
+        manager.set(text, runtime_followup_of=previous_id, runtime_followup_user_row_id=row_id)
+        staged.setdefault('display_metadata', {})['runtime_handoff_followup'] = dict(receipt)
+        return receipt
+
+
 def _run_after_agent_ready(
     rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author=None
 ):
@@ -779,6 +853,30 @@ def _(rid, params: dict) -> dict:
             isolated_response["error"].get("message", "unknown error"))
     if (err := _persist_session_row_for_submit(rid, session, text, display_kind)) is not None:
         return err
+    try:
+        followup = _start_runtime_handoff_followup(session, text, fresh_human=(
+            display_kind is None and turn_author is None and not internal_hosted_submit
+            and not has_truncation and not params.get('queued')))
+    except Exception as exc:
+        logger.warning('runtime handoff follow-up admission failed: %s', type(exc).__name__)
+        with session['history_lock']:
+            session['running'] = False
+            session.pop('_submit_user_row', None)
+            _clear_inflight_turn(session)
+            _release_active_session_slot(session)
+        with _session_profile_runtime_scope(session):
+            from agent.i18n import t
+            return _err(rid, 4098, t('display.notice.runtime_handoff_followup_not_started'))
+    if followup:
+        display_metadata = {**(display_metadata or {}), 'runtime_handoff_followup': followup}
+        # The transition is already committed. A disconnected status consumer
+        # must not turn a successful admission into an uncertain RPC failure.
+        from contextlib import suppress
+        with suppress(Exception), _session_profile_runtime_scope(session):
+            from agent.i18n import t
+            _emit('status.update', sid, {'kind': 'goal', 'text': t(
+                'display.notice.runtime_handoff_followup_started',
+                seconds=f"{followup['runtime_budget_seconds']:g}")})
     # Capture before starting the worker: it consumes the staging dict and may finish before the RPC returns.
     staged_user = session.get("_submit_user_row") or {}
     if isinstance(staged_user.get("_row_id"), int):

@@ -42,7 +42,22 @@ Maintained integration areas
   pause freezes active time; existing lease timers and hard interruption enforce
   the deadline during main and auxiliary work. Controls use exact-value CAS and
   expiry callbacks revalidate owning goals so stale writes do not undo a pause.
-  Budget exhaustion preserves partial work and never certifies completion.
+  At 12 and 18 cumulative active hours, the main model summarizes findings,
+  gaps and next-investigation value, then chooses finish or continue with a
+  reason. The existing goal persists that decision with the actual saved
+  assistant row; pending/unknown remains awaiting review, not continuation or
+  checkpoint completion. Earlier completion is allowed; manual pause, guardrails,
+  goal replacement and the hard cap win. Native closing/handoff/hard-cap reserves
+  remain 90%/95%/100% of the final allowance (normally 24 hours). Neither a review
+  nor exhaustion certifies completion or resets time. UI milestones show start,
+  12h, 18h and the current actual cap, with native elapsed time frozen on pause;
+  threshold-only reviews stay awaiting. Current-work tooltips use existing events
+  without another model call. This whole-goal allowance is separate from the
+  per-turn iteration limit; no second loop, timer or DB is introduced.
+  A saved finish decision sets runtime_phase=closing (receipt: “마무리 선택”) and
+  leaves the goal active for existing question-save and compose/review/render
+  tools, rather than immediately pausing on a tool-less summary. A 12h finish
+  suppresses the 18h decision; normal closing and 95% handoff keep existing gates.
 - Terminal turn errors persist a pause on the same native goal before an idle
   runtime can be discarded. The goal identity captured at turn preparation and
   native exact-value CAS preserve user pauses and replacement goals. Only the
@@ -269,3 +284,50 @@ through the same projection as live events. Single calls expose the inner tool
 and its recorded public purpose while preserving the parent ID, original request
 and raw result. Invalid multi-call requests remain one parent event; the UI does
 not manufacture child executions or promote missing results to success.
+Native context recovery maintenance (2026-10-22)
+The existing turn response check now accounts returned physical attempts before recovery
+and emits the existing post-api receipt for length failures. Provider-confirmed full-context
+tool responses reuse turn_overflow's bounded compression primitive; normal output-cap retry
+and cancellation remain native. Safe pause discards incomplete tool arguments before settling.
+No new execution/goal/compression loop is introduced. Regressions:
+tests/agent/test_context_full_tool_recovery.py and tests/agent/test_goal_safe_pause.py.
+See docs/agentic-recovery.md for storage/reporting boundary changes and acceptance criteria.
+
+Maintained tool-result context recovery:
+Compression resolves a single deferred tool bridge only when its original
+selection agrees with the native result identity and unambiguous call pairing.
+Transcript envelopes, pairing IDs, profile boundaries and execution remain
+unchanged. Registered summaries preserve exact source/outcome/recovery metadata
+and native warning/halt text through pruning and API-message construction.
+Ambiguous bridges and unrecognized trailing content remain intact rather than
+being assigned to another tool. No extra agent loop, model call, execution or
+forensic judgment is added. Regression: test_native_context_transport.py.
+
+Maintained advisory phase handoff:
+The existing goal checkpoint and final-response gate preserve bounded provider
+follow-up actions. Pending findings, next review round, report composition and
+final review receive their own instructions and continuation reason. Missing
+actions retain legacy response handling; unknown actions remain incomplete.
+Goal scope, judge ordering, native budgets and final-opportunity fences remain
+unchanged. No additional reviewer, executor or completion verdict is introduced.
+Regressions: test_goal_advisory.py and test_reference_recovery_contract.py.
+
+Maintained closing-phase review continuation:
+A durable finish milestone ends discovery while preserving native required
+review/report work. Only the reserved handoff phase, with its own goal/phase
+notice receipt, may reuse text as a partial checkpoint. A request crossing the
+handoff threshold without that notice uses the existing single checkpoint
+request. Hard budget, user interruption, CAS and durable checkpoint controls
+remain intact. No parallel scheduler or completion judge is introduced.
+Regressions: tests/agent/test_run_budget_wrapup.py and
+tests/hermes_cli/test_goal_runtime_budget.py.
+
+Maintained bounded executive packet and attempt diagnostics:
+Required previous question/answer history, current judgments, authored report
+and selected grounding precede optional navigation and sampled source fields.
+Omissions are explicit and absent fields cannot receive usable review handles.
+Irreducible mandatory input fails without increasing the review bound.
+Predispatch diagnostics remain bound to scope, material and review progress;
+finalize/inbox expose them without replacing canonical receipts or preventing
+a fresh explicit dispatch after repair.
+Regressions: test_executive_packet_composition.py, test_review_attempt_diagnostics.py.

@@ -36,6 +36,10 @@ function reportingAttention(result: Data): string {
   return text || '사용자 확인이 필요한 반환 사항이 있습니다.'
 }
 
+export function requiresToolAttention(call: InspectorToolCall): boolean {
+  return Boolean(reportingAttention(parse(call.result)))
+}
+
 /** Fold routine internal reads only; errors and explicit attention requests stay visible. */
 export function isRoutineReportingLookup(call: InspectorToolCall): boolean {
   return call.name === 'forsic_reporting' && ['source', 'state', 'execution', 'gaps', 'review_inbox'].includes(value(parse(call.arguments).action))

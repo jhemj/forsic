@@ -20,9 +20,9 @@ def schema():
         'description': 'Handle exact independent review findings in this current answer. investigated/refuted require actual C1/C2 retained citations from the current conversation; scope_limited requires an explicit limitation. A review_ref selects advice only and is not a C1/C2 evidence citation.'}
 
 
-def _citations(case,state,references,*,lineage,saved=None):
+def _citations(case,state,references,*,lineage,saved=None,location='review_responses'):
     from .assessment_basis import _citation
-    from .grounded_judgment import selection
+    from .grounded_judgment import selection, CitationSelectionError
     from .host import source_record
     if not isinstance(references,list) or len(references)>16 or any(not isinstance(ref,str) for ref in references):
         raise ValueError('Review dispositions require actual C1/C2 evidence selections, not source dictionaries.')
@@ -41,11 +41,14 @@ def _citations(case,state,references,*,lineage,saved=None):
         state={'sources':list(sources.values())}
     citations=[]
     for index,reference in enumerate(references):
-        selected=selection(case,state,reference)
-        source,span=_citation(case,state,selected)
-        event=case.event(source['id'])
-        if event['session'] not in lineage:
-            raise ValueError('Review followup evidence belongs to another conversation.')
+        try:
+            selected=selection(case,state,reference)
+            source,span=_citation(case,state,selected)
+            event=case.event(source['id'])
+            if event['session'] not in lineage:
+                raise ValueError('Review followup evidence belongs to another conversation.')
+        except ValueError as exc:
+            raise CitationSelectionError(f'{location}.citation_refs[{index}]', str(exc)) from exc
         citation={**selected,'byte_end':span['byte_end'],
                   'source_ref':{'kind':'source','id':source['id'],'version':source['version']}}
         if saved is not None and saved[index]!=citation:
@@ -100,10 +103,13 @@ def validate_saved(case,state,response,*,lineage,question=None):
     if not limited and not response.get('citation_refs'):
         raise ValueError('Investigation/refutation requires retained C1/C2 citations.')
     citations=_citations(case,state,response.get('citation_refs'),lineage=lineage,saved=response.get('citations',[]))
-    return {**deepcopy(response),'citations':citations,'semantic_approval':False}
+    # Match the typed read projection without rewriting the retained answer.
+    # Missing optional defaults are not a change to review applicability.
+    return {'question_definition_version':'','limitation':'',
+            **deepcopy(response),'citations':citations,'semantic_approval':False}
 
 
-def validate_and_merge(case, state, note, submitted, *, lineage):
+def validate_and_merge(case, state, note, submitted, *, lineage, native_options=None):
     """Validate references, not the semantic correctness of the analyst's decision."""
     from ..independent_review import review_state
     owner = note.get('session_id')
@@ -114,6 +120,21 @@ def validate_and_merge(case, state, note, submitted, *, lineage):
     # Receipt projection needs a read-only case, including during this writer's transaction.
     from ..evidence import Case
     resolved['case'] = Case(case.manifest, read_only=True)
+    if native_options is not None:
+        # The trusted host forwards only its native binding. Re-resolve inside
+        # the existing writer transaction: a report selection grants access to
+        # advice, while this note retains its own current-goal write ownership.
+        from ..investigation_context import resolve_context
+        if (not isinstance(native_options, dict) or not native_options.get('session_id')
+                or not native_options.get('intake_root')):
+            raise ValueError('Review response requires a valid native binding.')
+        native = resolve_context(native_options.get('session_id'),
+            intake_root=native_options.get('intake_root'), native_db=native_options.get('native_db'))
+        if (native is None or native['case'].manifest != case.manifest
+                or native['goal_id'] != note['goal_id'] or native['conversation_id'] != owner
+                or native['session_lineage'] != list(lineage)):
+            raise ValueError('Review response native case, conversation or goal ownership changed.')
+        resolved = native
     projected = review_state(resolved, state)
     if projected['status'] == 'unavailable':
         raise ValueError('독립 검토 기록을 확인하지 못해 처분을 저장하지 않았습니다.')
@@ -121,7 +142,7 @@ def validate_and_merge(case, state, note, submitted, *, lineage):
     merged = {(r['review_id'], r['finding_id']): deepcopy(r)
               for r in note.get('investigation', {}).get('review_responses', [])}
     seen = set()
-    for item in submitted:
+    for index,item in enumerate(submitted):
         key = (item['review_id'], item['finding_id'])
         if key in seen:
             raise ValueError('같은 반론을 한 요청에서 두 번 처분할 수 없습니다.')
@@ -136,7 +157,8 @@ def validate_and_merge(case, state, note, submitted, *, lineage):
             raise ValueError('scope_limited에는 답변과 보고서에 남길 limitation이 필요합니다.')
         if not limited and not item['citation_refs']:
             raise ValueError('조사 또는 기각 처분에는 실제 C1/C2 원문 인용이 필요합니다.')
-        citations = _citations(case,state,item['citation_refs'],lineage=lineage)
+        citations = _citations(case,state,item['citation_refs'],lineage=lineage,
+                               location=f'review_responses[{index}]')
         merged[key] = {**deepcopy(item), 'citations': citations,
                        'question_definition_version': note['definition_version'], 'semantic_approval': False}
     return list(merged.values())

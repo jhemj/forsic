@@ -253,26 +253,12 @@ def _report_created_at(value):
 
 
 def _report_current_basis(case):
-    """Match the native report projection only when its full input fits a cap.
-
-    Metadata-only event bodies are omitted by the same contract as current().
-    Large histories remain unknown, rather than turning a bounded sidebar read
-    into a full evidence-ledger read or declaring a partial projection current.
-    """
-    ignored=('pre_api_request','post_api_request','pre_auxiliary_call','post_auxiliary_call',
-             'api_request_error','turn_start','turn_complete','intake','goal_started',
-             'mutation_receipt','report_finalized')
-    projected='CASE WHEN kind IN ('+','.join('?' for _ in ignored)+") AND json_valid(data) AND json_type(data)='object' THEN '{}' ELSE data END"
-    from .report_driven.host import current
-    with closing(sqlite3.connect(case.db.as_uri()+'?mode=ro',uri=True)) as db:
-        db.row_factory=sqlite3.Row;db.execute('PRAGMA query_only=ON');db.execute('BEGIN')
-        if db.execute('SELECT count(*) FROM events').fetchone()[0]>20000:return None
-        size=db.execute('SELECT coalesce(sum(length(cast(('+projected+') AS BLOB))),0) FROM events',ignored).fetchone()[0]
-        if size>4*1024*1024:return None
-        events=[]
-        for row in db.execute('SELECT rowid,id,time,kind,session,'+projected+' AS data FROM events ORDER BY rowid',ignored):
-            event=dict(row);event['data']=json.loads(event['data']);events.append(event)
-        return current(case,events=events)
+    """Bound selected report dependencies, not all accumulated case history."""
+    from .report_workspace import selected_basis
+    try:
+        return selected_basis(case)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, sqlite3.Error):
+        return None
 
 
 def _report_changes(saved, now, manifest):
@@ -308,8 +294,13 @@ def _report_changes(saved, now, manifest):
     return changes[:MAX_QUESTIONS],max(0,len(changes)-MAX_QUESTIONS)
 
 
-def _reports(case, case_id, result, counts, *, current_basis=None):
+_UNREAD_REPORT_BASIS = object()
+
+
+def _reports(case, case_id, result, counts, *, current_basis=_UNREAD_REPORT_BASIS, draft=None):
     """Bound metadata reads; build local case-bound URLs without trusting saved URLs."""
+    from .report_workspace import clean_basis, describe_report, final_selections, saved_summary
+    selections = final_selections(case, case_id)
     candidates = []
     counts['reports'] = 0
     for path in case.output.iterdir():
@@ -326,13 +317,22 @@ def _reports(case, case_id, result, counts, *, current_basis=None):
             heapq.heappush(candidates,candidate)
             if len(candidates)>MAX_REPORTS:
                 heapq.heappop(candidates)
+    if selections:
+        final_name = 'report-bundle-' + str(selections[0]['bundle_id'])
+        final_path = case.output / final_name
+        if (re.fullmatch(r'report-bundle-[a-f0-9]{64}', final_name) and final_path.is_dir()
+                and not final_path.is_symlink() and not any(name == final_name for _, name, _ in candidates)):
+            if len(candidates) >= MAX_REPORTS:
+                heapq.heappop(candidates)
+            heapq.heappush(candidates, (final_path.stat().st_mtime_ns, final_name, True))
     query = '?'+urlencode({'case_id':case_id})
-    current_basis=[] if current_basis is None else [current_basis]
+    current_basis=[] if current_basis is _UNREAD_REPORT_BASIS else [current_basis]
     def basis():
         if not current_basis:
             try:current_basis.append(_report_current_basis(case))
             except (OSError,ValueError,KeyError,TypeError,AttributeError,sqlite3.Error):current_basis.append(None)
         return current_basis[0]
+    identities = {}
     allowed = {'integrated.html','integrated.docx','executive.html','executive.docx','practitioner.html','practitioner.docx','selected-evidence.zip'}
     for _,name,bundle in sorted(candidates,reverse=True):
         path = case.output/name
@@ -380,24 +380,30 @@ def _reports(case, case_id, result, counts, *, current_basis=None):
             if created_at is not None:
                 item['created_at'] = created_at
             item['comparison_status']='unavailable'
+            saved = None
+            verified_saved = None
             snapshot_id=manifest.get('snapshot_id')
             if isinstance(snapshot_id,str) and re.fullmatch('[a-f0-9]{64}',snapshot_id):
                 item['snapshot_id']=snapshot_id
-                saved_path=case.output/('report-state-'+snapshot_id+'.json')
                 try:
-                    if saved_path.is_symlink() or saved_path.stat().st_size>4*1024*1024:raise ValueError('Unbounded report snapshot')
-                    raw=saved_path.read_bytes()
-                    if hashlib.sha256(raw).hexdigest()!=manifest.get('state_sha256'):raise ValueError('Unverified report snapshot')
-                    saved=json.loads(raw)
-                    if saved['meta']['case_id']!=case_id or saved['meta']['snapshot_id']!=snapshot_id:raise ValueError('Foreign report snapshot')
+                    verified_saved, saved_identity = saved_summary(case, manifest)
+                    saved = verified_saved
                     now=basis()
-                    if now is not None:
-                        from .report_driven.views import bundle_stale
-                        stale=bundle_stale(case,manifest,now)
+                    # A selected projection must never certify a case-wide legacy
+                    # snapshot whose unselected evidence was deliberately omitted.
+                    comparable = now is not None and (not now.get('_report_selection_only') or manifest.get('selection_mode') == 'selected_questions')
+                    if comparable:
+                        now = clean_basis(now)
+                        from .report_driven.views import selected_report_identity, report_material
+                        ids = tuple(sorted(manifest['question_ids'])) if manifest.get('selection_mode') == 'selected_questions' else None
+                        if ids not in identities:
+                            identities[ids] = selected_report_identity(now, list(ids)) if ids is not None else report_material(now)
+                        stale = identities[ids] != saved_identity
                         changes,omitted=_report_changes(saved,now,manifest)
                         item.update(current=not stale,comparison_status='changed' if stale else 'current',
                                     changes=changes,omitted_changes=omitted)
                 except (OSError,ValueError,KeyError,TypeError):pass
+            describe_report(item, manifest, verified_saved, draft, selections)
         else:
             route = 'reports' if path.suffix=='.md' else 'download'
             item = dict(id=name,name=name,title=name,scope='case',files=[dict(name=name,
@@ -528,6 +534,17 @@ def _review_questions(resolved, notes, result, counts):
         current_goal_questions=sum(item['current_goal'] for item in result['review_questions']),
         historical_goal_questions=sum(not item['current_goal'] for item in result['review_questions']),
         count_basis='validated advice questions in bounded retained receipts; separate from main questions')
+
+
+def _report_authoring(basis):
+    """Use the shared bounded snapshot; unknown reads never become empty drafts."""
+    from .report_driven.narrative import progress_view
+    if basis is not None:
+        try:
+            return progress_view(basis)
+        except (ValueError, KeyError, TypeError):
+            pass
+    return progress_view(None)
 
 
 def project_view(resolved, *, profile=''):
@@ -684,10 +701,16 @@ def project_view(resolved, *, profile=''):
             counts['observations'] += len(added); counts['timeline'] += len(times)
         for observation in result['observations']:
             observation.update(observation_display(observation,sources.get(observation.get('source_ref',{}).get('id'))))
-        _review_questions(resolved,notes,result,counts)
         _sessions(db,result,counts)
+    # Validation reads retained citations through its own short-lived connections.
+    # Never hold the UI SQL snapshot across those nested reads.
+    _review_questions(resolved,notes,result,counts)
     from .task_focus import retained_task_state
     basis = retained_task_state(case)
+    # Selected task dependencies cannot certify an entire report's freshness.
+    report_basis = None if basis and basis.get('_task_focus_only') else basis
+    from .report_workspace import authoring, workspace
+    result['report_authoring'], draft = authoring(case, report_basis)
     if basis is None:
         result['task_focus'] = {'status':'unavailable','tasks':[], 'omitted_tasks':None}
     else:
@@ -696,12 +719,13 @@ def project_view(resolved, *, profile=''):
         matching = [q for q in basis['questions'] if (q['id'],str(q['revision'])) in versions]
         result['task_focus'] = project_tasks(basis,matching)
         result['task_focus']['omitted_tasks'] += max(0, counts['questions']-len(matching))
-    _reports(case,resolved['case_id'],result,counts,current_basis=basis)
+    _reports(case,resolved['case_id'],result,counts,current_basis=report_basis,draft=draft)
+    result['report_workspace'] = workspace(result['report_authoring'], result['reports'])
     kept = {key: [] for key in counts}
-    budget = len(json.dumps(result['task_focus'],ensure_ascii=False).encode())
-    for key, limit in [('questions',MAX_QUESTIONS),('sources',MAX_SOURCES),
+    budget = len(json.dumps([result['task_focus'],result['report_authoring'],result['report_workspace']],ensure_ascii=False).encode())
+    for key, limit in [('reports',MAX_REPORTS),('questions',MAX_QUESTIONS),('sources',MAX_SOURCES),
                        ('observations',MAX_OBSERVATIONS),('timeline',MAX_TIMES),
-                       ('reports',MAX_REPORTS),('sessions',MAX_SESSIONS),
+                       ('sessions',MAX_SESSIONS),
                        ('review_questions',MAX_REVIEW_QUESTIONS)]:
         for row in result[key][:limit]:
             size = len(json.dumps(row,ensure_ascii=False).encode())

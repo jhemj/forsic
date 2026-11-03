@@ -167,7 +167,7 @@ class ReaderProjectionTests(unittest.TestCase):
                 if len(table.rows)==1:continue  # Template callout boxes have no header row.
                 self.assertIsNotNone(table.rows[0]._tr.find(qn('w:trPr')).find(qn('w:tblHeader')))
                 header=table.cell(0,0).paragraphs[0].runs[0]
-                self.assertEqual(header.font.size.pt,8)
+                self.assertEqual(header.font.size.pt,json.loads(profile.read_text())['table']['header_pt'])
                 self.assertEqual(str(header.font.color.rgb),'FFFFFF')
             with ZipFile(output) as archive:
                 foot=archive.read('word/footer1.xml').decode()

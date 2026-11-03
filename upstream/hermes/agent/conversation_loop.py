@@ -70,11 +70,26 @@ _STALE_MARKER_RE = re.compile(r"^\[[A-Za-z_][A-Za-z0-9_.-]*\]$")
 _INTERRUPT_SCAFFOLD_MARKER = "[This response was interrupted by a user correction.]"
 
 
-# One-time wrap-up notice appended when a wall-clock run budget (--run-budget) crosses 80%.
+# Closing advisory on the same durable clock, after the investigation milestones.
 RUN_BUDGET_WRAPUP_NOTICE = (
-    "[SYSTEM NOTICE — run time budget nearly exhausted] Run time budget nearly exhausted. "
-    "Stop new discovery/verification work now. Produce the required final deliverable "
-    "(answer/JSON/summary) from the state you already have, completing only mandatory writes."
+    "[Native runtime notice: closing phase] Stop starting new discovery. "
+    "Use the remaining time for necessary bounded verification, saving findings, "
+    "preparing the answer/report, and required review/render checks. "
+    "Closing ends exploration; it does not pause the goal or approve completion. "
+    "Continue through the existing native goal and completion checks. "
+    "If the remaining allowance becomes insufficient, preserve supported findings, "
+    "saved report locations, unresolved gaps and limitations as a partial checkpoint; "
+    "do not claim unfinished scope or an unreviewed draft is complete."
+)
+RUN_BUDGET_CHECKPOINT_REQUEST = (
+    "[Native runtime notice: handoff phase] Prepare the native runtime handoff now "
+    "using only the existing evidence and saved results. "
+    "Give a useful natural-language partial checkpoint with supported findings and evidence, "
+    "report locations actually saved, unresolved gaps and limitations, and specific further "
+    "investigation the user could request. Clearly label this partial and explain that "
+    "automatic work pauses after this checkpoint and needs an explicit user request to resume; "
+    "do not claim full completion or invent a report file. "
+    "No further discovery or tool calls are available in this handoff response."
 )
 
 
@@ -119,39 +134,113 @@ def _review_input_budget_exhausted(agent: Any) -> bool:
     return isinstance(used, int) and not isinstance(used, bool) and used >= budget
 
 
-def _maybe_inject_run_budget_wrapup(agent: Any, messages: List[Dict[str, Any]]) -> bool:
-    """Inject the one-time wall-clock wrap-up notice when past 80% of budget.
+def _run_budget_state(agent: Any):
+    """Read the owning native goal; an inactive goal never borrows a fresh turn clock."""
+    from hermes_cli.goals import GoalState
+    db = getattr(agent, "_session_db", None)
+    session_id = getattr(agent, "session_id", None)
+    if db is not None and isinstance(session_id, str) and session_id:
+        raw = db.get_meta("goal:" + session_id)
+        if isinstance(raw, str) and raw:
+            return GoalState.from_json(raw)
+    return None
 
-    Appends to the NEWEST ``role:"tool"`` message (cache-safe, like /steer); latches
-    ``_run_budget_wrapup_injected`` only on a successful append."""
+
+def _run_budget_phase(agent: Any):
+    from hermes_cli.goals_runtime import runtime_phase
+    state = _run_budget_state(agent)
+    if state is not None:
+        return runtime_phase(state)
     budget = getattr(agent, "run_budget_seconds", None)
     started = getattr(agent, "_run_budget_started_at", None)
-    if not budget or not started or getattr(agent, "_run_budget_wrapup_injected", False) or (
-        (time.time() - started) < 0.8 * float(budget)
-    ):
-        return False
-    from agent.context_compressor import _DB_PERSISTED_MARKER
-    for msg in reversed(messages):
-        if isinstance(msg, dict) and msg.get("role") == "tool":
-            # Only the current tool-result tail is mutable; an older turn may already be
-            # cached (same contract as _maybe_inject_iteration_budget_warning).
-            if msg.get(_DB_PERSISTED_MARKER):
-                return False
-            existing = msg.get("content", "")
-            if isinstance(existing, str):
-                msg["content"] = existing + f"\n\n{RUN_BUDGET_WRAPUP_NOTICE}"
-            else:  # multimodal content blocks — append a text block
-                try:
-                    msg["content"] = [*(existing or []), {"type": "text", "text": RUN_BUDGET_WRAPUP_NOTICE}]
-                except Exception:
-                    return False
-            agent._run_budget_wrapup_injected = True
-            logger.info(
-                "Run budget wrap-up notice injected (budget=%.0fs, elapsed=%.0fs)",
-                float(budget), time.time() - started,
-            )
+    if (isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0
+            and isinstance(started, (int, float)) and time.time() - started >= 0.8 * float(budget)):
+        return "closing"  # legacy standalone turns retain their advisory warning
+    return None
+
+
+def _run_budget_wrapup_note(agent: Any) -> str:
+    """The fresh-turn context channel does not require a preceding tool result."""
+    phase = _run_budget_phase(agent)
+    if phase not in {"closing", "handoff"}:
+        return ""
+    from hermes_cli.goals_runtime import runtime_identity, runtime_remaining
+    state = _run_budget_state(agent)
+    agent._run_budget_wrapup_identity = runtime_identity(state) if state is not None else None
+    agent._run_budget_wrapup_injected = True
+    agent._run_budget_wrapup_phase = phase
+    notice = RUN_BUDGET_CHECKPOINT_REQUEST if phase == "handoff" else RUN_BUDGET_WRAPUP_NOTICE
+    if state is not None:
+        return (notice + f"\nNative allowance remaining: {runtime_remaining(state) / 60:.1f} "
+                f"minutes of {state.runtime_budget_seconds / 60:.1f} minutes total.")
+    return notice
+
+
+def _run_budget_notice_present(agent, messages) -> bool:
+    """Only native metadata for this goal and phase proves delivery of its notice."""
+    from hermes_cli.goals_runtime import runtime_identity
+    state = _run_budget_state(agent)
+    identity = list(runtime_identity(state)) if state is not None else None
+    phase = _run_budget_phase(agent)
+    for message in messages:
+        metadata = message.get("display_metadata") or {}
+        if (isinstance(metadata, dict) and "runtime_wrapup_goal" in metadata
+                and metadata["runtime_wrapup_goal"] == identity
+                and metadata.get("runtime_wrapup_phase") == phase):
             return True
     return False
+
+
+def _run_budget_checkpoint_due(agent: Any) -> bool:
+    from hermes_cli.goals_runtime import runtime_identity, runtime_phase, runtime_checkpoint_due, recover_runtime_milestones
+    state = _run_budget_state(agent)
+    if runtime_checkpoint_due(state) is not None:
+        recover_runtime_milestones(agent._session_db, agent.session_id)
+        recovered = _run_budget_state(agent)
+        if (recovered is None or recovered.status != "active" or recovered.pause_requested
+                or runtime_identity(recovered) != runtime_identity(state)):
+            agent._runtime_checkpoint_cancelled = True
+            agent._runtime_handoff_identity = runtime_identity(state)
+            return True
+        state = recovered
+    phase = runtime_phase(state)
+    if phase not in {"checkpoint", "handoff", "exhausted"}:
+        return False
+    agent._runtime_handoff_identity = runtime_identity(state)
+    agent._runtime_milestone_threshold = runtime_checkpoint_due(state) if phase == "checkpoint" else None
+    return True
+
+
+def _run_budget_closing_answer(agent: Any, messages) -> bool:
+    """Only the reserved handoff phase can convert a noticed candidate to a partial stop."""
+    from hermes_cli.goals_runtime import runtime_identity, runtime_phase
+    state = _run_budget_state(agent)
+    if (runtime_phase(state) != "handoff"
+            or not getattr(agent, "_run_budget_wrapup_injected", False)
+            or runtime_identity(state) != getattr(agent, "_run_budget_wrapup_identity", None)
+            or not _run_budget_notice_present(agent, messages)):
+        return False
+    agent._runtime_handoff_identity = runtime_identity(state)
+    return True
+
+
+def _maybe_inject_run_budget_wrapup(agent: Any, messages: List[Dict[str, Any]]) -> bool:
+    """Append a source-labelled native control after a result, preserving every source row."""
+    if _run_budget_phase(agent) not in {"closing", "handoff"} or not messages:
+        return False
+    # A resumed turn's api_content carries the prologue note. If compaction dropped
+    # the note, re-deliver it at the next native boundary instead of trusting a latch.
+    if _run_budget_notice_present(agent, messages):
+        return False
+    if messages[-1].get("role") not in {"tool", "assistant"}:
+        return False  # fresh user turns receive the note through _merge_gateway_notes
+    from agent.message_metadata import append_message
+    note = _run_budget_wrapup_note(agent)
+    identity = getattr(agent, "_run_budget_wrapup_identity", None)
+    append_message(messages, {"role": "user", "content": note, "display_kind": "runtime_notice",
+                              "display_metadata": {"runtime_wrapup_goal": list(identity) if identity else None,
+                                                   "runtime_wrapup_phase": agent._run_budget_wrapup_phase}})
+    return True
 
 
 def _restore_user_after_reference_handoff(
@@ -1473,8 +1562,11 @@ _CTX_FIELDS = frozenset({
 # Keyword names each phase helper takes (minus ``agent``), cached per function object.
 _PHASE_PARAMS: Dict[Any, tuple] = {}
 # Verdict fields the loop latches (only ever sets True) instead of copying back:
-# ``handle_api_error`` reports overflow recovery per call and must not clear an earlier arm.
-_LATCHED_VERDICT_FIELDS = {"handle_api_error": frozenset({"_provider_overflow_recovery_pending"})}
+# Error and returned-response recovery must not clear an earlier overflow arm.
+_LATCHED_VERDICT_FIELDS = {
+    name: frozenset({"_provider_overflow_recovery_pending"})
+    for name in ("handle_api_error", "check_api_response")
+}
 
 
 def _run_phase(fn, agent, state: _LoopState, **extra):

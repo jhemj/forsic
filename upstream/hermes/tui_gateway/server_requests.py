@@ -48,10 +48,11 @@ logger = logging.getLogger(__name__)
 
 class ServerRequest:
     __slots__ = ("id", "sid", "method", "params", "event", "result", "answered", "created_at",
-                 "qids", "locked", "on_result", "declined")
+                 "qids", "locked", "on_result", "declined", "timer", "background")
 
     def __init__(self, sid: str, method: str, params: dict, *, qids: list[str] | None = None,
-                 on_result: Callable[[dict | None], None] | None = None) -> None:
+                 on_result: Callable[[dict | None], None] | None = None,
+                 background: bool = False) -> None:
         self.id = f"srq-{uuid.uuid4().hex[:12]}"
         self.sid = sid
         self.method = method
@@ -64,6 +65,8 @@ class ServerRequest:
         self.qids = list(qids) if qids else None
         self.locked: dict[str, str | None] = {}
         self.on_result = on_result
+        self.timer: threading.Timer | None = None
+        self.background = background and method == "clarify"
         # Client transports that answered NOT_SHOWN_CODE (no window there shows this session).
         self.declined: set = set()
 
@@ -199,22 +202,58 @@ def send(method: str, sid: str, params: dict, *, timeout: float | None,
     return None
 
 
-def send_async(method: str, sid: str, params: dict, on_result: Callable[[dict | None], None]) -> Callable[[str], None]:
+def send_async(method: str, sid: str, params: dict, on_result: Callable[[dict | None], None], *,
+               qids: list[str] | None = None, timeout: float | None = None,
+               background: bool = False) -> Callable[[str], None]:
     """Send one request whose wait is owned elsewhere (the approval queue's own timeout). ``on_result``
-    runs on the dispatching thread when the response lands. Returns ``settle(reason)``: call it when
-    the underlying wait ends; if the request is still open it is withdrawn with ``request.cancel``."""
+    runs on the dispatching thread when the response lands. Returns ``settle(reason)`` with a
+    ``request_id`` attribute (None when undeliverable). Call it when the underlying wait ends;
+    an open request is withdrawn with ``request.cancel``. Optional batch questions retain locked
+    answers on timeout/cancel and invoke ``on_result`` on every settlement. Background requests
+    stay replayable without marking their session as blocked on human input.
+    """
     if _unanswerable(method, sid):
         on_result(None)
-        return lambda reason: None
-    req = ServerRequest(sid, method, params, on_result=on_result)
-    _register(req)
+        settle = lambda reason: None
+        settle.request_id = None
+        return settle
+    req = ServerRequest(sid, method, params, qids=qids, on_result=on_result, background=background)
+    if req.background:
+        req.on_result = lambda result: on_result(
+            {**result, "server_request_id": req.id} if result is not None and "outcome" in result else
+            {"answers": dict(req.locked), "outcome": "undelivered", "server_request_id": req.id})
 
     def settle(reason: str) -> None:
         with _lock:
-            still_open = _open.pop(req.id, None) is not None
+            still_open = _open.pop(req.id, None) is req
+            if still_open and req.qids is not None:
+                req.result = {"answers": dict(req.locked),
+                              "outcome": "timed_out" if reason == "timeout" else "cancelled"}
         if still_open:
+            if req.timer is not None:
+                req.timer.cancel()
             _emit_cancel(req, reason)
+            if req.qids is not None:
+                req.on_result(req.result)
 
+    settle.request_id = req.id
+    if timeout is not None:
+        req.timer = threading.Timer(max(0, timeout), settle, args=("timeout",))
+        req.timer.daemon = True
+    try:
+        _register(req)
+    except BaseException:
+        # A failed frame write must not leave an unsent request replayable forever.
+        with _lock:
+            still_open = _open.pop(req.id, None) is req
+        if req.timer is not None:
+            req.timer.cancel()
+        if still_open:
+            _emit_cancel(req, "undelivered")
+        raise
+    if req.timer is not None:
+        # A synchronous transport response during registration may already have cancelled it.
+        req.timer.start()
     return settle
 
 
@@ -245,6 +284,8 @@ def _decline(rid: str, transport: Any) -> bool:
         req.result = {"value": json.dumps({"success": False, "error": NOT_SHOWN_MESSAGE})}
         req.answered = True
     if req.on_result is not None:
+        if req.timer is not None:
+            req.timer.cancel()
         req.on_result(req.result)
     req.event.set()
     return True
@@ -288,6 +329,8 @@ def resolve_response(frame: dict, transport: Any = None) -> bool:
                 req.result = {"answers": dict(req.locked), "outcome": "cancelled"}
             req.answered = True
     if req.on_result is not None:
+        if req.timer is not None:
+            req.timer.cancel()
         req.on_result(req.result)
     req.event.set()
     return True
@@ -309,6 +352,10 @@ def lock_answer(request_id: str, question_id: str, answer: str | None) -> list[s
             req.result, req.answered = {"answers": dict(req.locked), "outcome": "submitted"}, True
             _open.pop(request_id, None)
     if not remaining:
+        if req.timer is not None:
+            req.timer.cancel()
+        if req.on_result is not None:
+            req.on_result(req.result)
         req.event.set()
     return remaining
 
@@ -327,8 +374,10 @@ def cancel(sid: str | None = None, reason: str = "interrupted") -> int:
             else:
                 req.result, req.answered = None, False
     for req in targets:
+        if req.timer is not None:
+            req.timer.cancel()
         if req.on_result is not None:
-            req.on_result(None)
+            req.on_result(req.result if req.qids is not None else None)
         req.event.set()
         _emit_cancel(req, reason)
     return len(targets)
@@ -351,7 +400,7 @@ def open_request_count() -> int:
 def pending_kind(sid: str) -> str:
     """Method of the oldest open request for *sid* ("" when none) — the session is waiting on a human."""
     with _lock:
-        reqs = [req for req in _open.values() if req.sid == sid]
+        reqs = [req for req in _open.values() if req.sid == sid and not req.background]
     return min(reqs, key=lambda r: r.created_at).method if reqs else ""
 
 
@@ -362,5 +411,8 @@ def is_response_frame(obj: Any) -> bool:
 
 def reset_for_tests() -> None:
     with _lock:
+        for req in _open.values():
+            if req.timer is not None:
+                req.timer.cancel()
         _open.clear()
         _answering_clients.clear()

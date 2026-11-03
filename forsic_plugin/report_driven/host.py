@@ -160,7 +160,12 @@ def execution_state(events):
     return 'unknown','이 스냅샷에 연결된 native goal 상태가 없어 실행 상태를 확인하지 못함'
 
 
-def current(case, *, events=None):
+def current(case, *, events=None, _source_records=None):
+    # Private read-only UI replay: exact source_record() results computed from
+    # individual full receipts, whose bulk bodies need not remain in memory.
+    # Native tools use the default full-ledger path; no authored input can set it.
+    if _source_records is not None and events is None:
+        raise ValueError('Source metadata requires an explicit read-only event projection')
     # These bodies do not participate in report state or its revision. Keep every
     # row's metadata and all other bodies, including unknown future event kinds.
     events = ledger(case, metadata_only_kinds=frozenset({
@@ -177,7 +182,8 @@ def current(case, *, events=None):
             result.update(chunk.encode())
         return result.hexdigest()
     source_events = {e['id']: e for e in events if e['kind']=='tool_result' and e['data'].get('tool') in EVIDENCE_TOOLS}
-    sources = [source_record(e) for e in source_events.values()]
+    sources = [deepcopy(_source_records[e['id']]) if _source_records is not None and e['id'] in _source_records
+               else source_record(e) for e in source_events.values()]
     source_map = {s['id']:s for s in sources}
     notes = {}
     for e in events:
@@ -245,9 +251,17 @@ def current(case, *, events=None):
             if eid not in source_events or field not in ('mtime','ctime','atime'):
                 state['status']['explicit_limitations'].append('기존 시각 노트 원문 결속 미확인: '+str(tm.get('raw_time',tm.get('time','')))+' / '+str(tm.get('description','')))
                 continue
+            time_data = source_events[eid]['data']
+            if _source_records is not None and eid in _source_records:
+                # Legacy file-time pointers still address the exact source body,
+                # just like log/temporal and citation paths. Never use a UI stub.
+                original = case.event(eid)
+                if not original or source_record(original) != source_map[eid]:
+                    raise ValueError('Selected source changed during read-only projection')
+                time_data = original['data']
             try:
-                _, time_pointer = file_time(source_events[eid]['data'], origin)
-                raw = pointer(source_events[eid]['data'], time_pointer)
+                _, time_pointer = file_time(time_data, origin)
+                raw = pointer(time_data, time_pointer)
             except (ValueError, KeyError, TypeError):
                 state['status']['explicit_limitations'].append('기존 시각 노트의 정확한 파일·시각 필드 연결 필요: '+str(tm.get('description','')))
                 continue
@@ -331,11 +345,13 @@ def current(case, *, events=None):
             q=next(q for q in state['questions'] if q['id']==qref['id'])
             q.update(deepcopy(d['answer']))
     claim_ids={r['id'] for r in state['claims']}
-    gap_ids={r['id'] for r in state['gaps']}
+    from .current_judgment import question_gaps
     for q in state['questions']:
         old_refs=q['claim_refs']
         q['claim_refs']=[r for r in old_refs if r['id'] in claim_ids and find(state,'claims',r['id'])['status'] not in ('retracted','superseded')]
-        q['remaining_gap_ids']=[key for key in q['remaining_gap_ids'] if key in gap_ids]
+        # Replay may resolve an old note's gap without changing its historical
+        # gap strings. All current views use the same effective dispositions.
+        q['remaining_gap_ids']=[gap['id'] for gap in question_gaps(state,q)]
         if len(old_refs)!=len(q['claim_refs']):
             q.update(assessment='undetermined',work_state='open',closure_rationale=None)
             state['status']['explicit_limitations'].append('질문 '+q['id']+'의 이전 평가 참조가 변경되어 현재 후보 답의 재평가 필요')
@@ -346,7 +362,7 @@ def current(case, *, events=None):
     if state['questions'] and all(q['work_state']=='scoped_closed' and not q.get('judgment_review_required') for q in state['questions']):
         state['status']['investigation']='supported_scope_closed'
     if stale: state['status']['explicit_limitations'].append(f'질문 정정으로 과거 미션·평가 {len(stale)}건을 현재 판단에서 제외; 이전 원장 보존')
-    state['status']['explicit_limitations'].extend(g['reason'] for g in state['gaps'] if g['impact'] in ('material','decision_critical') and g['disposition']!='resolved')
+    state['status']['explicit_limitations'].extend(g['reason'] for g in state['gaps'] if g['impact'] in ('material','decision_critical') and g['disposition'] not in ('resolved','not_applicable'))
     project_execution(state, events)
     # References are refreshed separately from content versions. Unrelated turns
     # and answer wording do not change a mission's immutable execution contract.
@@ -589,6 +605,8 @@ def _invoke(case,args):
     action=args['action']
     if action != 'source' and ('query' in args or 'locator_cursor' in args):
         raise ValueError('query and locator_cursor are only for retained source lookup')
+    if action != 'source' and 'representation' in args:
+        raise ValueError('representation is only for retained source lookup')
     # Immutable record lookups do not depend on any current judgment. Replaying
     # and hashing the entire case here grows cost with unrelated control traffic.
     if action=='execution':
@@ -652,33 +670,37 @@ def _invoke(case,args):
         from .delivery import report_scope_inventory
         from .independent_gate import context as independent_context
         from .report_reference import scope_from_args
-        selected = args.get('question_ids')
+        from .narrative import selection as narrative_selection
         scope=scope_from_args(args)
-        if selected is None and args.get('_goal_id') and args.get('_session_id'):
-            selected = [q['id'] for q in s['questions'] if q.get('goal_id')==args['_goal_id'] and q.get('session_id')==args['_session_id']]
-        if any(scope.values()):
-            _,ids=selected_question_records(s,selected)
-            if any(any(q.get(key,'')!=value for key,value in scope.items()) for q in s['questions'] if q['id'] in ids):
-                raise ValueError('Render only questions from the current conversation and goal')
+        selected = (narrative_selection(s, args) if any(scope.values())
+                    or args.get('question_ids') is not None else None)
         observed_scope = report_scope_inventory(case, args)
         from .narrative import selection as narrative_selection, status as narrative_status, prepare
         prose = narrative_status(s, narrative_selection(s, args))
         if prose['judgment_review_questions'] and not args.get('allow_partial'):
-            result = prepare(s, args)
+            result = prepare(s, args, case)
             result.update(rendered=False,
                 partial_snapshot_option={'action':'render','question_ids':prose['question_ids'],'allow_partial':True})
             return result
         if not prose['ready'] and not args.get('allow_partial'):
             # The native agent consumes the writing packet and authors sections
             # in its ordinary next turn. Rendering itself never calls a model.
-            result = prepare(s, args)
+            result = prepare(s, args, case)
             result.update(rendered=False, next_call={'tool':'forsic_reporting',
                 'arguments':{'action':'compose','question_ids':prose['question_ids']}},
                 message='보고서 본문을 독자용 자연어로 작성한 뒤 생성하세요. 현재 판단과 근거는 보존되어 있습니다.',
                 partial_snapshot_option={'action':'render','question_ids':prose['question_ids'],'allow_partial':True})
             return result
         result = bundle(case,s,args.get('redact',[]),review_id=args.get('review_id'),question_ids=selected,
-                        review_context=independent_context(case,s,args),scope_inventory=observed_scope,report_scope=scope)
+                        review_context=independent_context(case,s,args,question_ids=prose['question_ids']),scope_inventory=observed_scope,report_scope=scope)
+        if prose['ready'] and (args.get('_independent_review_options') or {}).get('enabled') is True:
+            result['final_reader_review'] = {
+                'route': 'existing_finalize_independent_review',
+                'instruction': 'Use the returned finalize action for the current rendered report. Ren reads the executive body '
+                    'alone in its separate context, then checks source support and offers one bounded copyedit pass. '
+                    'Apply useful edits once through current compose fields; retain citation bindings and review dispositions. '
+                    'Re-render changed content and complete its current-version check. Do not restart stylistic rounds.',
+                'copyedit_passes': 1, 'extra_review_budget_granted': False}
         # A small navigation handle, not another model call or automatic work.
         # The full review is paged on demand and respects conversation ownership.
         if not args.get('redact'):
@@ -693,8 +715,8 @@ def _invoke(case,args):
         from .independent_gate import context as independent_context
         # Refuse stale/mixed references before any optional review dispatch.
         scope=scope_from_args(args)
-        resolve_report(case,s,args.get('bundle_id'),snapshot_id=args.get('snapshot_id'),report_scope=scope)
-        review_context=independent_context(case,s,args,dispatch=True)
+        manifest, _, _ = resolve_report(case,s,args.get('bundle_id'),snapshot_id=args.get('snapshot_id'),report_scope=scope)
+        review_context=independent_context(case,s,args,dispatch=True,question_ids=manifest['question_ids'])
         return finalize(case,s,args.get('bundle_id'),review_context=review_context,
                         snapshot_id=args.get('snapshot_id'),report_scope=scope)
     if args.get('snapshot_id')!=s['meta']['snapshot_id']:raise ValueError('Read current snapshot_id first')

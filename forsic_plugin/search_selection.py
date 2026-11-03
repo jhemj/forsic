@@ -57,8 +57,8 @@ def resolve(case, tool, args, session, context):
     # An explicit, versioned page binds its original literal query. Only absent
     # or exactly empty text means omitted; whitespace remains a meaningful query.
     restore_text = 'text' not in args or args['text'] == ''
-    for key in ('path', 'action', 'file_path', 'text', 'recursive', 'volume_offset'):
-        default = False if key == 'recursive' else None
+    for key in ('path', 'action', 'file_path', 'text', 'recursive', 'volume_offset', 'filesystem_view'):
+        default = False if key == 'recursive' else 'physical' if key == 'filesystem_view' else None
         if key == 'text' and restore_text:
             continue
         if args.get(key, default) != original.get(key, default):
@@ -88,5 +88,7 @@ def result_view(result, case):
     if view['has_next_cursor']:
         args = {k: deepcopy(v) for k, v in start['data']['arguments'].items()
                 if k not in ('cursor', 'cursor_ref', 'offset', 'mission_id', 'mission_version') and not k.startswith('_')}
+        if start['data']['tool'] == 'forsic_image_files':
+            args['filesystem_view'] = data.get('filesystem_view', args.get('filesystem_view', 'physical'))
         view['next_call'] = native_search_call(start['data']['tool'], {**args, 'cursor_ref': ref})
     return view

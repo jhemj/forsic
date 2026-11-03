@@ -37,6 +37,156 @@ class QuestionRecoveryTests(unittest.TestCase):
             self.receipt_count=db.execute("SELECT count(*) FROM events WHERE kind='mutation_receipt'").fetchone()[0]
         return host.current(self.case)
 
+
+    def test_all_independent_reference_and_state_errors_precede_atomic_repair(self):
+        valid=self.judgment();q=self.save('reference-base',judgment=valid,reason='Compare retained evidence')
+        ref=valid['citation_refs'][0]
+        bad=ref.rsplit(':',1)[0]+':99'
+        payload=dict(operation_id='reference-repair',question_id=q['id'],expected_revision=q['revision']+1,
+            answer=q['answer'],reason='Compare retained evidence',claim_action='retain',evidence_ids=['0'*32,'1'*32],
+            judgment={'claims':[dict(valid,statement='First observation',citation_refs=[bad],
+                counter_citation_refs=[bad],assertion_kind='fact',inference_strength='favored'),
+                dict(valid,statement='Second observation',citation_refs=['malformed'])]})
+        original=deepcopy(payload);before=self.checkpoint()
+        rejected=self.call('forsic_question',payload)
+        self.assertEqual(rejected['error_code'],'invalid_question_fields',rejected)
+        paths={p['path'] for p in rejected['invalid_fields']}
+        self.assertTrue({'payload.evidence_ids[0]','payload.evidence_ids[1]',
+            'payload.judgment.claims[0].citation_refs[0]',
+            'payload.judgment.claims[0].counter_citation_refs[0]',
+            'payload.judgment.claims[1].citation_refs[0]',
+            'payload.claim_action','payload.judgment.claims[0].inference_strength',
+            'payload.expected_revision'} <= paths, rejected)
+        self.assertEqual(payload,original);self.assert_no_write(before)
+        for problem in rejected['invalid_fields']:
+            if problem['path'].startswith('payload.judgment') and 'recovery' in problem:
+                call=problem['recovery']['read_call']
+                self.assertNotIn('error',self.call(call['tool'],call['arguments']))
+        payload.update(expected_revision=q['revision'],claim_action='replace',evidence_ids=[])
+        for claim in payload['judgment']['claims']:
+            claim.update(citation_refs=[ref],counter_citation_refs=[],inference_strength='unrated')
+        saved=self.call('forsic_question',payload)
+        self.assertNotIn('error',saved,saved)
+        self.assertEqual(self.call('forsic_question',payload)['question'],saved['question'])
+
+    def test_reference_preflight_is_read_only_and_final_writer_still_rejects(self):
+        from unittest.mock import patch
+        from forsic_plugin.report_driven.investigation_state import validate_input, QuestionInputError
+        from forsic_plugin.report_driven.grounded_judgment import records, CitationSelectionError
+        valid=self.judgment();bad=valid['citation_refs'][0].rsplit(':',1)[0]+':99'
+        payload=dict(operation_id='read-only-preflight',question='A question',scope='Synthetic records',
+            answer='A bounded answer',reason='Compare sources',evidence_ids=['0'*32],
+            judgment=dict(valid,citation_refs=[bad]))
+        state=host.current(self.case);before=self.case.db.read_bytes()
+        with patch.object(self.case,'record',side_effect=AssertionError('Preflight must not record')):
+            with self.assertRaises(QuestionInputError):
+                validate_input('question',payload,state=state,case=self.case)
+        self.assertEqual(before,self.case.db.read_bytes())
+        # Bypassing preflight does not bypass the transaction's old final guard.
+        with self.assertRaises(CitationSelectionError):
+            records(self.case,state,{'note_id':'synthetic','revision':1,'answer':'A','scope':'S',
+                'target_proposition':'Q'},payload['judgment'],'v2')
+        self.assertEqual(before,self.case.db.read_bytes())
+
+    def test_wrong_case_modified_version_and_shape_errors_never_rebind(self):
+        from pathlib import Path
+        from test_report_driven import fixture
+        from forsic_plugin.report_driven.host import source_record
+        foreign,results,_=fixture(str(Path(self.temp.name)/'foreign'))
+        source=source_record(foreign.event(results[0]['evidence_id']))
+        foreign_ref=f"C2:{source['id']}:{source['version']}:0"
+        valid=self.judgment();ref=valid['citation_refs'][0]
+        parts=ref.split(':');parts[2]='0'*64;modified=':'.join(parts)
+        payload=dict(operation_id='independent-shapes',question='A question',scope='Synthetic records',
+            answer='A bounded answer',reason='Compare sources',evidence_ids=[{},'0'*32],
+            judgment={'claims':[None,dict(valid,statement='One observation',
+                citation_refs=[False,modified],counter_citation_refs=[foreign_ref,'malformed'])]})
+        original=deepcopy(payload);before=self.checkpoint()
+        rejected=self.call('forsic_question',payload)
+        self.assertEqual(rejected['error_code'],'invalid_question_fields',rejected)
+        problems={p['path']:p for p in rejected['invalid_fields']}
+        self.assertIn('payload.evidence_ids[1]',problems)
+        prefix='payload.judgment.claims[1].'
+        self.assertIn(prefix+'citation_refs[1]',problems)
+        known=problems[prefix+'citation_refs[1]']['recovery']['read_call']['arguments']
+        self.assertEqual(known['source_version'],ref.split(':')[2])
+        for name in ('counter_citation_refs[0]','counter_citation_refs[1]'):
+            self.assertEqual(problems[prefix+name]['recovery']['read_call']['arguments'],{'action':'state'})
+        self.assertEqual(payload,original);self.assert_no_write(before)
+
+    def test_large_new_and_update_reference_diagnostics_keep_budget_and_counts(self):
+        valid=self.judgment();q=self.save('many-reference-base',judgment=valid,reason='Compare sources')
+        for update in (False,True):
+            with self.subTest(update=update):
+                payload=dict(operation_id='many-refs-'+str(update),question='A question',scope='Synthetic records',
+                    answer='A bounded answer',reason='Compare sources',
+                    judgment=dict(valid,citation_refs=['invalid-reference-'+str(i) for i in range(200)]))
+                if update:payload.update(question_id=q['id'],expected_revision=q['revision'])
+                before=self.checkpoint();rejected=self.call('forsic_question',payload)
+                self.assertEqual(rejected['error_code'],'invalid_question_fields',rejected)
+                self.assertEqual(rejected['invalid_field_count'],200)
+                self.assertEqual(len(rejected['invalid_fields'])+rejected['omitted_invalid_fields'],200)
+                keys=('error','error_code','write_applied','invalid_fields','recovery','invalid_field_count',
+                    'repair_presentation','omitted_invalid_fields')
+                projected={key:rejected[key] for key in keys if key in rejected}
+                self.assertLessEqual(len(json.dumps(projected,ensure_ascii=False).encode()),8192)
+                self.assert_no_write(before)
+
+    def test_aggregate_c1_and_closed_scope_errors_recover_without_adoption(self):
+        valid=self.judgment()
+        source_id=valid['citation_refs'][0].split(':')[1]
+        page=self.call('forsic_reporting',{'action':'source','source_id':source_id,'query':'requested'})
+        bad=page['matches'][0]['citation_ref'].rsplit(':',1)[0]+':99'
+        payload=self.draft(operation_id='closed-reference-draft',evidence_ids=['0'*32],
+            judgment=dict(valid,citation_refs=[bad],counter_citation_refs=['C1:'+'f'*32+':0']))
+        before=self.checkpoint();rejected=self.call('forsic_question',payload)
+        self.assertEqual(rejected['error_code'],'invalid_question_fields',rejected)
+        problems={p['path']:p for p in rejected['invalid_fields']}
+        self.assertIn('payload.evidence_ids[0]',problems)
+        self.assertIn('payload.gap_dispositions',problems)
+        for role in ('citation_refs','counter_citation_refs'):
+            self.assertIn('payload.judgment.'+role+'[0]',problems)
+        read=problems['payload.judgment.citation_refs[0]']['recovery']['read_call']
+        self.assertEqual(read['arguments'],dict(action='source',source_id=source_id,
+            source_version=page['source_ref']['version']))
+        self.assertNotIn('error',self.call(read['tool'],read['arguments']))
+        self.assertEqual(problems['payload.judgment.counter_citation_refs[0]']['recovery']['read_call']['arguments'],{'action':'state'})
+        self.assert_no_write(before)
+
+    def test_combined_failure_keeps_exact_failed_output_recovery(self):
+        from test_grounded_judgment import GroundedJudgmentTests
+        from forsic_plugin.report_driven.host import source_record
+        failed=GroundedJudgmentTests.failed_shell(self)
+        source=source_record(self.case.event(failed['evidence_id']))
+        invented=f"C2:{source['id']}:{source['version']}:0"
+        payload=dict(operation_id='failed-output-combined',question='A question',scope='Synthetic output',
+            answer='Completion remains unknown',reason='Review returned partial output',evidence_ids=['0'*32],
+            judgment=dict(citation_refs=[invented],assertion_kind='interpretation',
+                reasoning_summary='Partial output does not establish completion'))
+        before=self.checkpoint();rejected=self.call('forsic_question',payload)
+        self.assertEqual(rejected['error_code'],'invalid_question_fields',rejected)
+        problem=next(p for p in rejected['invalid_fields'] if p['path']=='payload.judgment.citation_refs[0]')
+        self.assertEqual(problem['recovery']['read_call'],{'tool':'forsic_reporting','arguments':{
+            'action':'source','source_id':source['id'],'source_version':source['version'],
+            'pointer':'/stdout','offset':0}})
+        self.assertIn('not a replacement citation',problem['recovery']['meaning'])
+        self.assertNotIn('observed partial output',json.dumps(rejected))
+        self.assert_no_write(before)
+
+    def test_blank_strings_are_validated_unchanged_with_other_reference_errors(self):
+        payload=dict(operation_id='blank-reference-draft',question='A question',scope='Synthetic records',
+            answer='A bounded answer',reason='Compare sources',evidence_ids=['','   ','0'*32],
+            judgment=dict(citation_refs=['','   '],counter_citation_refs=['malformed'],
+                assertion_kind='interpretation',reasoning_summary='No selected span is yet valid'))
+        original=deepcopy(payload);before=self.checkpoint()
+        rejected=self.call('forsic_question',payload)
+        self.assertEqual(rejected['error_code'],'invalid_question_fields',rejected)
+        paths={p['path'] for p in rejected['invalid_fields']}
+        self.assertEqual(paths,{'payload.evidence_ids[0]','payload.evidence_ids[1]',
+            'payload.evidence_ids[2]','payload.judgment.citation_refs[0]',
+            'payload.judgment.citation_refs[1]','payload.judgment.counter_citation_refs[0]'})
+        self.assertEqual(payload,original);self.assert_no_write(before)
+
     def test_failed_new_draft_repairs_once_with_original_answer_and_exact_refs(self):
         p=self.draft();original=deepcopy(p);before=self.checkpoint()
         out=self.call('forsic_question',p)

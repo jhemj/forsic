@@ -137,6 +137,155 @@ def _has_active_native_goal(agent, logger) -> bool:
         return False
 
 
+def _resolve_runtime_milestone(agent, messages, api_call_count):
+    """Ask the configured main model once; validate syntax, never infer its judgment."""
+    import json
+    from agent.oneshot import _strip_code_fence
+    from agent.conversation_loop import _run_budget_state
+    from hermes_cli.goals_runtime import runtime_elapsed, runtime_remaining
+    threshold = agent._runtime_milestone_threshold
+    state = _run_budget_state(agent)
+    request = (
+        f"Native investigation checkpoint at {threshold // 3600} active hours. "
+        f"Actual active elapsed: {runtime_elapsed(state) / 3600:.2f} hours; "
+        f"remaining: {runtime_remaining(state) / 3600:.2f} hours of the pinned "
+        f"{state.runtime_budget_seconds / 3600:.2f}-hour cap. "
+        "Using only actual observations and saved results in this conversation, summarize supported findings, "
+        "important limitations, and useful next discriminating tests. Decide whether further investigation "
+        "has enough value to continue within the SAME remaining allowance, or finish discovery and enter "
+        "closing now: compose/save the answer or report and perform its required review/render checks. "
+        "A finish choice is closing intent, not a pause or a claim that report validation is complete. "
+        "There are no tools in this checkpoint. Do not invent evidence, tool outputs, or report files. "
+        "Return ONLY one JSON object with exactly these keys: decision ('continue' or 'finish'), "
+        "reason (nonempty Korean text), findings (nonempty Korean text), limitations (nonempty Korean text), "
+        "next_tests (nonempty Korean text). Keep each text field concise."
+    )
+    text = agent._handle_max_iterations(messages, api_call_count, summary_request=request, max_attempts=1)
+    if not getattr(agent, "_runtime_checkpoint_generated", False):
+        raise ValueError("checkpoint model response unavailable")
+    data = json.loads(_strip_code_fence(text.strip()))
+    if (not isinstance(data, dict) or set(data) != {"decision", "reason", "findings", "limitations", "next_tests"}
+            or data["decision"] not in {"continue", "finish"}
+            or any(not isinstance(data[key], str) or not data[key].strip() or len(data[key]) > 12000
+                   for key in ("reason", "findings", "limitations", "next_tests"))):
+        raise ValueError("invalid checkpoint decision schema")
+    readable = (f"{threshold // 3600}시간 조사 중간 점검\n\n확인한 내용: {data['findings']}\n\n"
+                f"한계와 미확인 범위: {data['limitations']}\n\n유용한 다음 검사: {data['next_tests']}\n\n"
+                f"모델 결정: {'계속 조사' if data['decision'] == 'continue' else '마무리 진행: 답변·보고서 저장과 필요한 검토'}\n"
+                f"이유: {data['reason']}")
+    row = messages[-1]
+    if row.get("role") != "assistant" or row.get("content") != text:
+        raise ValueError("checkpoint response row unavailable")
+    row["content"] = readable
+    row["display_metadata"] = {**(row.get("display_metadata") or {}), "runtime_milestone": {
+        "goal_identity": list(agent._runtime_handoff_identity), "threshold_seconds": threshold,
+        **data, "raw_response": text}}
+    agent._runtime_milestone_decision = data["decision"]
+    return readable
+
+
+def _resolve_runtime_checkpoint(agent, final_response, reason, interrupted, failed, messages, api_call_count):
+    """One native closing request; it is never a successful goal completion."""
+    from agent.conversation_loop import (
+        RUN_BUDGET_CHECKPOINT_REQUEST, _run_budget_closing_answer, _run_budget_phase)
+    if interrupted or failed:
+        return final_response, reason, interrupted
+    from agent.conversation_loop import _run_budget_checkpoint_due
+    if str(reason).startswith("text_response("):
+        _run_budget_checkpoint_due(agent)  # a long final API call may cross a milestone
+    if reason == "runtime_budget_handoff" and getattr(agent, "_interrupt_requested", False):
+        return final_response, interrupted_during_api_call_reason(agent), True
+    if getattr(agent, "_runtime_checkpoint_cancelled", False):
+        return "목표 제어 상태가 변경되어 중간 점검을 중단했습니다.", "runtime_budget_handoff_superseded", False
+    if getattr(agent, "_runtime_milestone_threshold", None) is not None:
+        from agent.conversation_loop import _run_budget_state
+        from hermes_cli.goals_runtime import runtime_identity
+        current = _run_budget_state(agent)
+        if (current is None or current.status != "active" or current.pause_requested
+                or runtime_identity(current) != agent._runtime_handoff_identity):
+            return "목표 제어 상태가 변경되어 중간 점검을 중단했습니다.", "runtime_budget_handoff_superseded", False
+        if getattr(agent, "_interrupt_requested", False):
+            return final_response, interrupted_during_api_call_reason(agent), True
+        if _run_budget_phase(agent) == "exhausted":
+            agent._runtime_milestone_threshold = None
+            return "전체 실행 시간 한도가 끝났습니다. 조사는 미완료 상태이며 기존 결과는 보존됩니다.", "runtime_budget_checkpoint_failed", False
+        try:
+            return _resolve_runtime_milestone(agent, messages, api_call_count), "runtime_budget_handoff", False
+        except InterruptedError:
+            return final_response, interrupted_during_api_call_reason(agent), True
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Runtime milestone failed (%s)", type(exc).__name__)
+            agent._runtime_checkpoint_generated = False
+            return "중간 점검 결정을 생성하거나 검증하지 못했습니다. 조사는 미완료 상태로 일시정지됩니다.", "runtime_budget_checkpoint_failed", False
+    if (final_response and str(reason).startswith("text_response(")
+            and _run_budget_phase(agent) in {"handoff", "exhausted"}):
+        if getattr(agent, "_interrupt_requested", False):
+            return final_response, interrupted_during_api_call_reason(agent), True
+        if _run_budget_closing_answer(agent, messages):
+            agent._runtime_checkpoint_generated = True  # the model saw the actual handoff notice
+            return final_response, "runtime_budget_handoff", False
+        # A long text request may cross 95% after seeing only the closing notice.
+        # Keep its row, but obtain an explicitly prompted partial checkpoint.
+        final_response, reason = None, "runtime_budget_handoff"
+    if reason != "runtime_budget_handoff":
+        return final_response, reason, interrupted
+    if getattr(agent, "_interrupt_requested", False):
+        return final_response, interrupted_during_api_call_reason(agent), True
+    if _run_budget_phase(agent) == "exhausted":
+        return ("The runtime allowance ended before a partial checkpoint could be prepared. "
+                "The investigation remains incomplete; existing evidence and saved results are retained.",
+                "runtime_budget_checkpoint_failed", False)
+    if final_response is None:
+        try:
+            final_response = agent._handle_max_iterations(
+                messages, api_call_count, summary_request=RUN_BUDGET_CHECKPOINT_REQUEST, max_attempts=1)
+        except InterruptedError:
+            return final_response, interrupted_during_api_call_reason(agent), True
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Runtime checkpoint request failed (%s)", type(exc).__name__)
+            agent._runtime_checkpoint_generated = False
+    if not final_response or not getattr(agent, "_runtime_checkpoint_generated", False):
+        reason = "runtime_budget_checkpoint_failed"
+        if not final_response:
+            final_response = ("The partial closing checkpoint could not be prepared. "
+                              "The investigation remains incomplete; no completed report is claimed.")
+    return final_response, reason, interrupted
+
+
+def _commit_runtime_checkpoint(agent, messages, final_response, reason, cleanup_errors):
+    """Commit partial handoff only after its actual closing row is durable."""
+    from agent.context_compressor import _DB_PERSISTED_MARKER
+    from hermes_cli.goals_runtime import finish_runtime_handoff
+    row = getattr(agent, "_runtime_checkpoint_row", None)
+    saved = bool(final_response and getattr(agent, "_runtime_checkpoint_generated", False)
+                 and not any(error.startswith("persist_session:") for error in cleanup_errors)
+                 and isinstance(row, dict) and any(message is row for message in messages)
+                 and row.get("role") == "assistant" and row.get(_DB_PERSISTED_MARKER) is True
+                 and (row.get("content") == final_response or row.get("api_content") == final_response))
+    db = getattr(agent, "_session_db", None)
+    identity = getattr(agent, "_runtime_handoff_identity", None)
+    if saved and getattr(agent, "_runtime_milestone_decision", None) is not None:
+        from hermes_cli.goals_runtime import commit_runtime_milestone
+        decision = commit_runtime_milestone(db, agent.session_id, expected_goal_id=identity, row=row)
+        if decision == "invalid":
+            committed = finish_runtime_handoff(db, agent.session_id, expected_goal_id=identity, checkpoint_saved=False)
+            return "runtime_budget_checkpoint_failed" if committed else "runtime_budget_handoff_superseded"
+        agent._runtime_checkpoint_saved = True
+        return {"continue": "runtime_checkpoint_decided", "finish": "runtime_checkpoint_decided",
+                "exhausted": "runtime_budget_exhausted"}.get(decision, "runtime_budget_handoff_superseded")
+    if db is not None and identity is not None:
+        committed = finish_runtime_handoff(db, agent.session_id, expected_goal_id=identity, checkpoint_saved=saved)
+        from hermes_cli.goals_runtime import RUNTIME_BUDGET_REASON, RUNTIME_HISTORY_REASON
+        if committed in {RUNTIME_BUDGET_REASON, RUNTIME_HISTORY_REASON}:
+            agent._runtime_checkpoint_saved = saved
+            return "runtime_budget_exhausted" if committed == RUNTIME_BUDGET_REASON else "runtime_budget_history_unavailable"
+        if committed is None:
+            agent._runtime_checkpoint_saved = saved
+            return "runtime_budget_handoff_superseded"
+    agent._runtime_checkpoint_saved = saved
+    return "runtime_budget_handoff" if saved else "runtime_budget_checkpoint_failed"
+
+
 def _resolve_budget_fallback(
     agent, *, final_response, api_call_count, interrupted, failed, messages, _turn_exit_reason,
     _pending_verification_response, _pending_verification_response_previewed, logger,
@@ -551,6 +700,9 @@ def finalize_turn(
         interrupted = True
         _turn_exit_reason = SAFE_PAUSE_REASON
 
+    final_response, _turn_exit_reason, interrupted = _resolve_runtime_checkpoint(
+        agent, final_response, _turn_exit_reason, interrupted, failed, messages, api_call_count)
+
     final_response, _turn_exit_reason, preserved_verification_fallback, interrupted = _resolve_budget_fallback(
         agent, final_response=final_response, api_call_count=api_call_count,
         interrupted=interrupted, failed=failed, messages=messages,
@@ -609,6 +761,8 @@ def finalize_turn(
         final_response is not None
         and not failed
         and not interrupted
+        and _turn_exit_reason not in {"runtime_budget_handoff", "runtime_budget_checkpoint_failed", "runtime_budget_handoff_superseded",
+                                      "goal_advisory_paused"}
         # Shared iteration budgets can run out before the local call limit. Required
         # advisory handoffs remain incomplete when their checkpoint is the fallback.
         and not (preserved_verification_fallback and any(
@@ -656,12 +810,34 @@ def finalize_turn(
         # user will see, never the raw model text (#44239).
         if final_response and not interrupted and not safe_pause_stopped:
             final_response, _, _ = apply_llm_output_transform(agent, final_response, turn_id=turn_id, logger=logger)
+        if (getattr(agent, "_runtime_milestone_decision", None) is not None and messages
+                and not messages[-1].get(_DB_PERSISTED_MARKER)
+                and (messages[-1].get("display_metadata") or {}).get("runtime_milestone")):
+            # This new row has never been persisted or replayed. Bind the durable
+            # decision to the output-transform result while retaining raw JSON.
+            messages[-1]["content"] = final_response
         _close_transcript_tail(agent, messages, final_response, interrupted, _recovered_from_stream)
+        if _turn_exit_reason in {"runtime_budget_handoff", "runtime_budget_checkpoint_failed"}:
+            agent._runtime_checkpoint_row = messages[-1] if messages else None
         if not interrupted and not failed and not safe_pause_stopped:
             _micro_compact_after_turn(agent, messages, final_response, logger, effective_task_id)
         agent._persist_session(messages, conversation_history)
 
     _guarded_cleanup("persist_session", _persist_step, _cleanup_errors, logger)
+
+    if _turn_exit_reason in {"runtime_budget_handoff", "runtime_budget_checkpoint_failed"} and not interrupted:
+        if settle_requested_goal_pause(agent):
+            interrupted = safe_pause_stopped = True
+            _turn_exit_reason = SAFE_PAUSE_REASON
+        else:
+            try:
+                _turn_exit_reason = _commit_runtime_checkpoint(
+                    agent, messages, final_response, _turn_exit_reason, _cleanup_errors)
+            except Exception as exc:
+                _cleanup_errors.append(f"runtime_checkpoint: {exc}")
+                _turn_exit_reason = "runtime_budget_checkpoint_failed"
+        if _turn_exit_reason == "runtime_budget_checkpoint_failed":
+            failed = True
 
     # Keep the gateway's separate in-memory history snapshot current even on
     # cleanup error, so a later prompt isn't sent with a pre-turn snapshot.
@@ -718,6 +894,9 @@ def finalize_turn(
         "api_calls": api_call_count,
         "completed": completed,
         "turn_exit_reason": _turn_exit_reason,
+        "runtime_checkpoint_source_message_id": (
+            (getattr(agent, "_runtime_checkpoint_row", None) or {}).get("message_uid")
+            if _turn_exit_reason == "runtime_checkpoint_decided" else None),
         "failed": failed,
         "partial": False,  # True only when stopped due to invalid tool calls
         "interrupted": interrupted,

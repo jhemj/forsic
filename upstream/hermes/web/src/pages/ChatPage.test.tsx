@@ -3,6 +3,7 @@ import {act, useEffect, useState, type ReactNode} from 'react'
 import {createRoot, type Root} from 'react-dom/client'
 import {MemoryRouter, useNavigate, type NavigateFunction} from 'react-router'
 import {afterEach, beforeEach, expect, it, vi} from 'vitest'
+import type {InvestigationGoal} from '@/lib/forsic-runtime'
 import type {ForsicConversationProps} from '@/components/ForsicConversation'
 import ChatPage, {type ForsicReviewActivityDetail} from './ChatPage'
 
@@ -10,14 +11,14 @@ const mocks = vi.hoisted(() => ({
   profile: 'default',
   conversation: vi.fn(), inspector: vi.fn(), view: vi.fn(), requests: vi.fn(),
   toggle: vi.fn(), send: vi.fn(), reconnect: vi.fn(), title: vi.fn(), onEvent: vi.fn(), onApproval: vi.fn(),
-  state: {connected: false, paused: true, pending: false, disabled: false, reviewActivity: null as {reviewId: string; startedAt?: number} | null, reviewCaseId: null as string | null},
+  state: {goal: null as InvestigationGoal | null, connected: false, paused: true, handoff: false, statusText: '일시정지됨', pending: false, disabled: false, reviewActivity: null as {reviewId: string; startedAt?: number} | null, reviewCaseId: null as string | null},
 }))
 vi.mock('@/hooks/useForsicConversation', () => ({useForsicConversation: (options: unknown) => {
   mocks.conversation(options)
-  return {rows: [{id: 'answer', role: 'assistant', text: '저장된 답변'}], running: false, connected: mocks.state.connected, loading: false,
-    reviewActivity: mocks.state.reviewActivity ? {...mocks.state.reviewActivity} : null, reviewCaseId: mocks.state.reviewCaseId, statusText: '일시정지됨', error: null, hasMore: false, onLoadEarlier: vi.fn(), send: mocks.send, inputDisabled: false,
+  return {investigationGoal: mocks.state.goal, rows: [{id: 'answer', role: 'assistant', text: '저장된 답변'}], running: false, connected: mocks.state.connected, loading: false,
+    reviewActivity: mocks.state.reviewActivity ? {...mocks.state.reviewActivity} : null, reviewCaseId: mocks.state.reviewCaseId, statusText: mocks.state.statusText, error: null, hasMore: false, onLoadEarlier: vi.fn(), send: mocks.send, inputDisabled: false,
     pendingRequests: [], pendingApproval: null, onApproval: mocks.onApproval, reconnect: mocks.reconnect,
-    control: {paused: mocks.state.paused, pending: mocks.state.pending, disabled: mocks.state.disabled, onToggle: mocks.toggle}}
+    control: {paused: mocks.state.paused, handoff: mocks.state.handoff, pending: mocks.state.pending, disabled: mocks.state.disabled, onToggle: mocks.toggle}}
 }}))
 vi.mock('@/hooks/useForsicInspector', () => ({useForsicInspector: (options: unknown) => {mocks.inspector(options); return {onEvent: mocks.onEvent}}}))
 vi.mock('@/contexts/useProfileScope', () => ({useProfileScope: () => ({profile: mocks.profile})}))
@@ -44,7 +45,7 @@ async function typeDraft(value: string) {const input = container.querySelector('
 beforeEach(() => {
   Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true})
   for (const mock of [mocks.conversation, mocks.inspector, mocks.view, mocks.requests, mocks.toggle, mocks.send, mocks.reconnect, mocks.title]) mock.mockClear()
-  mocks.profile = 'default'; Object.assign(mocks.state, {connected: false, paused: true, pending: false, disabled: false, reviewActivity: null, reviewCaseId: null})
+  mocks.profile = 'default'; Object.assign(mocks.state, {goal: null, connected: false, paused: true, handoff: false, statusText: '일시정지됨', pending: false, disabled: false, reviewActivity: null, reviewCaseId: null})
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
 })
 afterEach(async () => {await act(async () => {root.unmount()}); container.remove()})
@@ -143,4 +144,43 @@ it('requires a verified case for active header state and clears the old scope on
   window.dispatchEvent(new Event('forsic:review-activity-request'))
   expect(events).toHaveLength(afterUnmount)
  } finally {window.removeEventListener('forsic:review-activity', record)}
+})
+
+
+it('presents a partial handoff as chat follow-up and hides ordinary resume', async () => {
+  Object.assign(mocks.state, {connected: true, paused: true, handoff: true, statusText: '결과 정리됨 · 추가 질문 가능'})
+  await render()
+  const props = mocks.view.mock.calls.at(-1)![0] as ForsicConversationProps
+  expect(props.statusText).toBe('결과 정리됨 · 추가 질문 가능')
+  expect(props.control).toBeUndefined()
+  expect(container.textContent).toContain('추가 조사할 내용을 대화로 보내면 새 조사 시간 범위로 이어갑니다.')
+  expect([...container.querySelectorAll('button')].some(button => button.textContent === '재개')).toBe(false)
+  await act(async () => {await props.onSend('남은 범위를 확인해 주세요')})
+  expect(mocks.send).toHaveBeenCalledExactlyOnceWith('남은 범위를 확인해 주세요')
+  expect(mocks.toggle).not.toHaveBeenCalled()
+  Object.assign(mocks.state, {connected: false, statusText: '결과 정리됨 · 연결 확인 필요'})
+  await render()
+  const reconnect = [...container.querySelectorAll('button')].find(button => button.textContent?.includes('다시 연결'))!
+  expect(reconnect).toBeDefined()
+  await act(async () => {reconnect.click()})
+  expect(mocks.reconnect).toHaveBeenCalledOnce()
+  expect(mocks.toggle).not.toHaveBeenCalled()
+})
+
+it('projects the active conversation clock into the sidebar and removes it on navigation away', async () => {
+  const target = document.createElement('div'); document.body.append(target)
+  const goal = {status: 'paused', runtime_budget_seconds: 86400, runtime_elapsed_seconds: 3600, runtime_accounting_known: true}
+  mocks.state.goal = goal; mocks.state.connected = true
+  const page = (active: boolean) => <MemoryRouter initialEntries={['/chat?resume=session-a']}><ChatPage isActive={active} progressTarget={target}/></MemoryRouter>
+  try {
+    await act(async () => root.render(page(true)))
+    expect(container.querySelector('[role=progressbar]')).toBeNull()
+    expect(target.querySelector('[role=progressbar]')?.getAttribute('aria-valuenow')).toBe('3600')
+    mocks.state.goal = {...goal, runtime_elapsed_seconds: 7200}
+    await act(async () => root.render(page(true)))
+    expect(target.querySelector('[role=progressbar]')?.getAttribute('aria-valuenow')).toBe('7200')
+    await act(async () => root.render(page(false)))
+    expect(target.childElementCount).toBe(0)
+    expect(mocks.send).not.toHaveBeenCalled(); expect(mocks.toggle).not.toHaveBeenCalled()
+  } finally {await act(async () => root.unmount()); target.remove()}
 })

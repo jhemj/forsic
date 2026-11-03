@@ -103,6 +103,8 @@ def _result(normalized: List[dict], reply: dict) -> str:
         responses.append({"question": entry["question"], "choices_offered": entry["choices_offered"],
                           "status": status, "user_response": value})
     result: Dict[str, object] = {"responses": responses, "outcome": reply["outcome"]}
+    if reply.get("server_request_id"):
+        result["server_request_id"] = str(reply["server_request_id"])
     if reply.get("notice"):
         result["notice"] = str(reply["notice"])
     return json.dumps(result, ensure_ascii=False)
@@ -145,7 +147,10 @@ CLARIFY_SCHEMA = {
         "can't click). Result: {responses: [...], outcome} in question order. "
         "Each response has status answered, skipped or unanswered "
         "(user_response is null unless answered); outcome is submitted, "
-        "cancelled, timed_out or undelivered, with a notice saying why "
+        "cancelled, timed_out, undelivered or pending. Pending means the question "
+        "is displayed while independent work continues; server_request_id identifies "
+        "the request and the eventual response arrives separately. An unanswered "
+        "question is unknown, never consent. A notice says why "
         "when the wait ended without a submit. Prefer deciding "
         "low-stakes questions yourself; don't use this for dangerous-command "
         "confirmation (the terminal tool handles that)."

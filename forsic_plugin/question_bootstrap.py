@@ -45,6 +45,24 @@ def operation_id(case_id, goal_id, conversation_id):
     return 'initial-question-' + hashlib.sha256(owner).hexdigest()
 
 
+def continuation_question_call(resolved):
+    """Explicit neutral writer recovery for a verified human report handoff.
+
+    Merely offering this call never mutates a note. The normal question writer
+    retains ownership, operation replay and revision checks when it is invoked.
+    """
+    from .investigation_context import report_followup_selection
+    if not report_followup_selection(resolved):
+        return None
+    goal, scope = resolved['goal'], resolved['case'].config.get('scope')
+    if (goal is None or not goal.goal.strip() or not isinstance(scope, str) or not scope.strip()):
+        return None
+    return {'tool': 'forsic_question', 'arguments': {
+        'operation_id': operation_id(resolved['case_id'], resolved['goal_id'], resolved['conversation_id']),
+        'question': goal.goal, 'scope': scope, 'answer': PROVISIONAL_ANSWER,
+        'work_state': 'active', 'reason': '사용자가 요청한 질문의 범위를 보존하고 조사를 진행합니다.'}}
+
+
 def _owned_questions(state, goal_id, session_ids):
     return [q for q in state['questions'] if q.get('goal_id') == goal_id
             and q.get('session_id') in session_ids]
@@ -122,15 +140,25 @@ def bootstrap_question(session_id, *, intake_root, native_db=None,
                                      expected_goal_id, resolved['session_lineage'])
         if questions:
             return {'status': 'existing_question', 'question_ids': [q['id'] for q in questions]}
+        from .investigation_context import report_followup_selection
+        selection = report_followup_selection(resolved)
+        if selection:
+            return {'status': 'report_followup_task', 'question_ids': selection['question_ids'],
+                    'authority': 'read_only_report_selection_not_question_write_authority',
+                    'next_step': 'Continue the selected report. Register a new question only for substantive new investigation, not report delivery tracking.'}
         config = resolved['case'].config
-        question, scope = config.get('question'), config.get('scope')
+        followup = bool(resolved['goal'].runtime_followup_of)
+        # This origin is set only by trusted fresh human admission after handoff;
+        # ordinary goals retain the original explicitly selected intake question.
+        question = resolved['goal'].goal if followup else config.get('question')
+        scope = config.get('scope')
         if (not isinstance(question, str) or not question.strip()
                 or question == '질문 선택 대기' or not isinstance(scope, str) or not scope.strip()):
             return {'status': 'unavailable', 'reason': 'original_question_or_scope_unavailable'}
         # Comprehensive intake retains the user's optional question separately.
         onboarding = config.get('onboarding') or {}
         extra = onboarding.get('question') if isinstance(onboarding, dict) else None
-        if isinstance(extra, str) and extra and extra not in question:
+        if not followup and isinstance(extra, str) and extra and extra not in question:
             question += '\n' + extra
         request = {'action': 'question', 'payload': {
             'operation_id': operation_id(*expected[1:]),
@@ -148,7 +176,7 @@ def bootstrap_question(session_id, *, intake_root, native_db=None,
                     current['conversation_id']) != expected):
             return {'status': 'unavailable', 'reason': 'native_ownership_changed_before_save'}
         saved = host.invoke(Case(resolved['case'].manifest), request)
-        return {'status': saved.get('bootstrap_status', 'saved'),
+        return {'status': saved.get('bootstrap_status', 'saved'), 'followup': followup,
                 'operation_id': request['payload']['operation_id'], 'question': saved['question']}
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
         return {'status': 'unavailable', 'reason': 'initial_question_save_failed',

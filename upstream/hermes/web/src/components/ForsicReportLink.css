@@ -11,3 +11,8 @@
 .forsic-report-reader > header :is(a,button):focus-visible {outline:2px solid var(--forsic-focus,#d9232e);outline-offset:2px;}
 .forsic-report-reader iframe {flex:1;min-height:0;width:100%;border:0;background:#fff;}
 @media(max-width:600px) {.forsic-report-reader {inset:8px;}}
+
+.forsic-report-reader-meta {margin:4px 0;color:var(--forsic-muted);font-size:12px;}
+.forsic-report-reader > header small {font-size:11px;overflow-wrap:anywhere;color:var(--forsic-muted);}
+.forsic-report-reader-update {margin:0;padding:10px 16px;border-top:1px solid var(--forsic-border);background:var(--forsic-inset);font-size:13px;}
+.forsic-report-reader > header > div {min-width:0;}

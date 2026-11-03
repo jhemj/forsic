@@ -20,6 +20,19 @@ class IndependentReviewTests(unittest.TestCase):
     session=fixtures.InvestigationContextTests.session
     save_note=fixtures.InvestigationContextTests.save_note
 
+    def test_unreadable_receipt_has_safe_nonactionable_local_diagnostic(self):
+        self.setup_review()
+        resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
+        with patch.object(review, '_receipts', side_effect=OSError('PRIVATE_PATH_AND_SECRET')):
+            result = review._latest_result(resolved)
+        self.assertEqual(result['status'], 'unavailable')
+        self.assertTrue(result['requires_followup'])
+        self.assertFalse(result['followup_actionable'])
+        self.assertEqual(result['diagnostic']['code'], 'review_state_read_failed')
+        self.assertEqual(result['diagnostic']['phase'], 'receipt_projection')
+        self.assertNotIn('PRIVATE_PATH_AND_SECRET', json.dumps(result))
+        self.fake.assert_not_called()
+
     def setup_review(self,count=3):
         self.config={'model':{'provider':'custom','default':'synthetic-private-model','base_url':'http://127.0.0.1:9000/v1'}}
         self.stack.enter_context(patch('hermes_cli.config.load_config_readonly',return_value=self.config))
@@ -41,6 +54,30 @@ class IndependentReviewTests(unittest.TestCase):
         return iter([SimpleNamespace(choices=[SimpleNamespace(index=0,
             delta=SimpleNamespace(content='{"findings":[]}'),finish_reason='stop')],usage=None)])
 
+    def test_final_report_prose_is_labeled_and_invalidates_advice_without_new_source(self):
+        self.setup_review()
+        resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
+        before = review._collect(resolved, 'final')
+        question = review._question_records(resolved)[0]
+        value = {'schema':'forsic-report-narrative-2', 'question_ids':[question['id']],
+            'goal_id':resolved['goal_id'], 'basis_id':'synthetic-basis',
+            'draft_hash':'first', 'sections':{'scope':{'text':'BOUNDED_AUTHORED_PROSE'}},
+            'review':None}
+        self.case.record('report_narrative', value, self.sid)
+        first = review._collect(resolved, 'final')
+        body = json.loads(first['prompt'])
+        self.assertEqual(before['fingerprint'], first['fingerprint'])
+        self.assertNotEqual(before['evaluation_fingerprint'],first['evaluation_fingerprint'])
+        self.assertIn('BOUNDED_AUTHORED_PROSE', body['analyst_state']['report_draft']['content'])
+        self.assertEqual(body['analyst_state']['report_draft']['role'],'authored_report_not_source_evidence')
+        self.assertNotIn('BOUNDED_AUTHORED_PROSE',json.dumps(body['sources']))
+        self.assertNotIn('BOUNDED_AUTHORED_PROSE',review._collect(resolved)['prompt'])
+        self.case.record('report_narrative', {**value,'review':{'status':'reviewed'},'revision':99}, self.sid)
+        self.assertEqual(first['evaluation_fingerprint'],review.freshness(resolved)['evaluation_fingerprint'])
+        self.case.record('report_narrative', {**value,'draft_hash':'second'}, self.sid)
+        self.assertNotEqual(first['evaluation_fingerprint'],review.freshness(resolved)['evaluation_fingerprint'])
+        self.fake.assert_not_called()
+
     def test_first_review_requires_owned_agent_answer_not_bootstrap_or_read_count(self):
         from forsic_plugin.question_bootstrap import PROVISIONAL_ANSWER
         self.setup_review()
@@ -54,6 +91,153 @@ class IndependentReviewTests(unittest.TestCase):
         self.assertEqual(len(self.calls),1)
         self.assertNotIn('A provisional interpretation',self.calls[0]['messages'][1]['content'])
         self.assertTrue(result['requires_followup'])  # Saving an answer is no approval.
+
+    def test_report_finalize_reviews_its_selected_draft_and_other_scope_edits_do_not_replace_it(self):
+        from forsic_plugin.report_driven import host
+        self.setup_review()
+        self.fake.side_effect = self.empty_response
+        for key in ('answer', 'summary', 'last_response'):
+            self.note.get('investigation', {}).pop(key, None)
+        self.save_note()
+        resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
+        second = deepcopy(self.note)
+        second.update(note_id='other-report-scope', question='Other selected report question')
+        self.case.record('note', second, self.sid)
+        ids = [q['id'] for q in review._question_records(resolved)]
+        first_id, second_id = ids
+
+        def draft(qid, marker, revision=1):
+            self.case.record('report_narrative', {'schema':'forsic-report-narrative-2',
+                'question_ids':[qid], 'goal_id':resolved['goal_id'], 'revision':revision,
+                'draft_revision':revision, 'draft_hash':marker, 'basis_id':'synthetic-basis',
+                'fields':{}, 'sections':{'scope':{'text':marker}}}, self.sid)
+
+        draft(first_id, 'SELECTED_REPORT_A')
+        draft(second_id, 'OTHER_REPORT_B')  # latest goal draft is deliberately different
+        native = {'_session_id':resolved['conversation_id'], '_goal_id':resolved['goal_id'],
+            '_independent_review_options':{'enabled':True, 'session_id':self.sid,
+                'intake_root':str(self.intake), 'native_db':str(self.native)}}
+        rendered = host.invoke(self.case, {'action':'render', 'question_ids':[first_id],
+                                          'allow_partial':True, **native})
+        result = host.invoke(self.case, {'action':'finalize', 'bundle_id':rendered['bundle_id'], **native})
+        self.assertEqual(result['delivery_status'], 'independent_review_rerender_required')
+        self.assertEqual(len(self.calls), 1)
+        packet = json.loads(self.calls[0]['messages'][1]['content'])
+        self.assertIn('SELECTED_REPORT_A', packet['analyst_state']['report_draft']['content'])
+        self.assertNotIn('OTHER_REPORT_B', packet['analyst_state']['report_draft']['content'])
+        self.assertEqual([q['id'] for q in packet['analyst_state']['questions']], [first_id])
+        request = json.loads(self.request_paths()[0].read_text())
+        self.assertEqual(request['report_question_ids'], [first_id])
+        scoped = review.report_review_scope(resolved, [first_id])
+        before = review.freshness(scoped)['evaluation_fingerprint']
+        self.assertTrue(review.review_state(scoped)['final_review_current'])
+
+        # A remains selectable even after another scope exceeds the bounded
+        # recent-record window; SQL filters the scope before applying that cap.
+        for revision in range(2, 20):
+            draft(second_id, 'CHANGED_REPORT_B_' + str(revision), revision=revision)
+        self.assertEqual(before, review.freshness(scoped)['evaluation_fingerprint'])
+        self.assertTrue(review.review_state(scoped)['final_review_current'])
+        # Direct non-report final reviews retain their historical latest-draft behavior.
+        self.assertEqual(review._report_draft(resolved, review._question_records(resolved))['draft_hash'],
+                         'CHANGED_REPORT_B_19')
+        current_report = host.invoke(self.case, {'action':'render', 'question_ids':[first_id],
+                                                'allow_partial':True, **native})
+        finalized = host.invoke(self.case, {'action':'finalize', 'bundle_id':current_report['bundle_id'], **native})
+        self.assertTrue(finalized['finalized'])
+        self.assertEqual(len(self.calls), 1)  # same selected input reuses the retained receipt
+        self.assertFalse(review.review_state(review.report_review_scope(resolved, [second_id]))['final_review_current'])
+        self.assertFalse(review.review_state(resolved)['final_review_current'])
+        draft(first_id, 'CHANGED_REPORT_A', revision=2)
+        self.assertNotEqual(before, review.freshness(scoped)['evaluation_fingerprint'])
+        self.assertFalse(review.review_state(scoped)['final_review_current'])
+
+    def test_selected_report_reviews_share_the_existing_goal_call_budget(self):
+        self.setup_review()
+        self.fake.side_effect = self.empty_response
+        resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
+        first_id = review._question_records(resolved)[0]['id']
+        second = deepcopy(self.note)
+        second.update(note_id='second-budget-scope')
+        self.case.record('note', second, self.sid)
+        second_id = 'Q-second-budget-scope'
+        for qid, revision in ((first_id, 1), (second_id, 1), (first_id, 2), (second_id, 2)):
+            self.case.record('report_narrative', {'schema':'forsic-report-narrative-2',
+                'question_ids':[qid], 'goal_id':resolved['goal_id'], 'revision':revision,
+                'draft_hash':f'{qid}:{revision}', 'basis_id':'synthetic-basis', 'fields':{}}, self.sid)
+            result = review.goal_advisory_context(**self.kwargs(stage='final',report_question_ids=[qid]))
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(len(self.request_paths()), 3)
+        self.assertEqual(result['status'], 'budget_exhausted')
+        self.assertEqual(review._goal_key(resolved),
+                         review._goal_key(review.report_review_scope(resolved, [first_id])))
+
+    def test_operator_unlimited_budget_allows_fourth_final_and_reuses_exact_input(self):
+        self.setup_review()
+        self.fake.side_effect = self.empty_response
+        resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
+        self.assertEqual(review._call_budget(resolved), 3)
+        for number in range(3):
+            review.goal_advisory_context(**self.kwargs(stage='final',draft_response=f'draft {number}'))
+        result = review.goal_advisory_context(**self.kwargs(stage='final',draft_response='draft 3'))
+        self.assertEqual(result['status'], 'budget_exhausted')
+        before = {path:path.read_bytes() for path in self.request_paths()}
+        self.config['forsic'] = {'independent_review':{'call_budgets':{review._goal_key(resolved):None}}}
+        for _ in range(2):
+            result = review.goal_advisory_context(**self.kwargs(stage='final',draft_response='draft 3'))
+            self.assertEqual(result['status'], 'received')
+        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(len(self.request_paths()), 4)
+        self.assertEqual({path:path.read_bytes() for path in before}, before)
+
+    def test_operator_budget_is_bound_to_case_goal_conversation_and_manifest_path(self):
+        self.setup_review()
+        resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
+        self.config['forsic'] = {'independent_review':{'call_budgets':{review._goal_key(resolved):None}}}
+        self.assertIsNone(review._call_budget(resolved))
+        for change in ({'case_id':'other-case'}, {'goal_id':'other-goal'},
+                       {'conversation_id':'other-conversation'},
+                       {'case':SimpleNamespace(manifest=resolved['case'].manifest.parent/'other.json')}):
+            with self.subTest(change=change):
+                self.assertEqual(review._call_budget({**resolved, **change}), 3)
+
+    def test_malformed_operator_limits_fail_closed_without_dispatch(self):
+        self.setup_review()
+        resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
+        for limit in (True, False, -1, 'unlimited', '4', 4.0, [], {}):
+            with self.subTest(limit=limit):
+                self.config['forsic'] = {'independent_review':{'call_budgets':{review._goal_key(resolved):limit}}}
+                with self.assertRaisesRegex(ValueError, 'Invalid independent review call budget'):
+                    review._call_budget(resolved)
+                result = review.goal_advisory_context(**self.kwargs(stage='final',draft_response='candidate'))
+                self.assertEqual(result['status'], 'unavailable')
+                self.assertEqual(result['diagnostic']['code'], 'review_call_budget_config')
+        self.fake.assert_not_called()
+        self.assertEqual(self.request_paths(), [])
+
+    def test_finite_operator_limit_reserves_final_and_reports_its_limit(self):
+        self.setup_review()
+        self.fake.side_effect = self.empty_response
+        resolved = resolve_context(self.sid, intake_root=self.intake, native_db=self.native)
+        budgets = {review._goal_key(resolved):2}
+        self.config['forsic'] = {'independent_review':{'call_budgets':budgets}}
+        review.goal_advisory_context(**self.kwargs())
+        self.add_sources(8)
+        self.save_note(answer='Updated assessment for the added observations')
+        result = review.goal_advisory_context(**self.kwargs(turns_used=5))
+        self.assertEqual(result['status'], 'final_reserved')
+        self.assertEqual(len(self.calls), 1)
+        result = review.goal_advisory_context(**self.kwargs(stage='final',draft_response='candidate'))
+        self.assertEqual(result['status'], 'received')
+        result = review.goal_advisory_context(**self.kwargs(stage='final',draft_response='changed candidate'))
+        self.assertEqual(result['status'], 'budget_exhausted')
+        self.assertIn('2회', result['context'])
+        self.assertEqual(len(self.calls), 2)
+        budgets[review._goal_key(resolved)] = 0
+        result = review.goal_advisory_context(**self.kwargs(stage='final',draft_response='another candidate'))
+        self.assertEqual(result['status'], 'budget_exhausted')
+        self.assertIn('0회', result['context'])
+        self.assertEqual(len(self.calls), 2)
 
     def test_answer_lookup_failure_never_dispatches_auxiliary_call(self):
         self.setup_review()
@@ -221,8 +405,17 @@ class IndependentReviewTests(unittest.TestCase):
         self.setup_review();before=self.ledger()
         result=review.goal_advisory_context(**self.kwargs())
         self.assertEqual(result['status'],'received',result)
-        self.assertIn(self.inventory,result['context']);self.assertIn('/entries/0/path',result['context'])
-        self.assertIn('custom-account',result['context']);self.assertEqual(self.ledger(),before)
+        navigation=json.loads(result['context'])
+        self.assertEqual(navigation['pending_count'],1)
+        self.assertEqual(navigation['pending_items'][0]['read_call']['arguments']['review_id'],result['review_id'])
+        self.assertEqual(self.ledger(),before)
+        # Source coordinates and proposed tests remain preserved in the review,
+        # not copied into the native continuation as an adopted work plan.
+        resolved=resolve_context(self.sid,intake_root=self.intake,native_db=self.native)
+        finding=review.review_state(resolved)['pending_findings'][0]
+        self.assertEqual(finding['source_id'],self.inventory)
+        self.assertEqual(finding['pointer'],'/entries/0/path')
+        self.assertIn('custom-account',finding['next_check'])
         call=self.calls[0];self.assertEqual([m['role'] for m in call['messages']],['system','user'])
         prompt=call['messages'][1]['content'];body=json.loads(prompt)
         self.assertEqual(body['requested_question'],self.case.config['question'])
@@ -319,7 +512,9 @@ class IndependentReviewTests(unittest.TestCase):
         self.fake.side_effect=changed
         out=review.goal_advisory_context(**self.kwargs());self.assertEqual(out['status'],'stale')
         self.assertTrue(out['requires_followup']);self.assertIn('사용자별 설정 내용을',out['context'])
-        self.assertIn('이전 관측',review.latest_advice(resolve_context(self.sid,intake_root=self.intake,native_db=self.native)))
+        navigation=json.loads(review.latest_advice(resolve_context(self.sid,intake_root=self.intake,native_db=self.native)))
+        self.assertEqual(navigation['status'],'stale')
+        self.assertEqual(navigation['pending_count'],1)
 
     def test_only_presented_source_pointer_can_be_returned_and_input_is_bounded(self):
         self.setup_review()
@@ -425,8 +620,9 @@ class IndependentReviewTests(unittest.TestCase):
         self.assertEqual(item['source_role'],'derived_command_output')
         self.assertEqual(item['notice'],'파생 실행 결과—원본 직접 관측·검사 범위 보장 아님')
         fields={f['pointer']:f for f in item['fields']}
-        self.assertEqual(fields['/stdout']['value'],stdout[:1200])
-        self.assertEqual(fields['/stdout']['omitted_characters'],len(stdout)-1200)
+        excerpts=[f for f in item['fields'] if f['pointer']=='/stdout']
+        self.assertEqual([f['value'] for f in excerpts],[stdout[:1200],stdout[-1200:]])
+        self.assertEqual(item['omitted_text_characters']['/stdout'],len(stdout)-2400)
         self.assertEqual(fields['/stderr']['value'],'warning: retained command output only')
         self.assertEqual(fields['/execution/exit_code']['value'],0)
         self.assertFalse(fields['/original_evidence']['value'])
@@ -439,7 +635,7 @@ class IndependentReviewTests(unittest.TestCase):
         request=review._read(self.request_paths()[0]);manifest=next(s for s in request['input_manifest']['selected_sources'] if s['source_id']==sid)
         self.assertEqual(set(manifest['pointers']),set(fields))
         self.assertEqual(body['omitted']['derived_shell_outputs'],0)
-        self.assertEqual(review._parse(json.dumps({'findings':[dict(source_id=sid,pointer='/stdout',quote=stdout[:40],question='출력의 출처는 무엇인가?',why='파생 결과의 일부만 제시됨',next_check='실제 원본의 해당 부분을 기존 도구로 대조하세요.')]}),{sid:{key:value['value'] for key,value in fields.items()}})[0]['source_id'],sid)
+        self.assertEqual(review._parse(json.dumps({'findings':[dict(source_id=sid,pointer='/stdout',quote=stdout[:40],question='출력의 출처는 무엇인가?',why='파생 결과의 일부만 제시됨',next_check='실제 원본의 해당 부분을 기존 도구로 대조하세요.')]}),review._collect(resolve_context(self.sid,intake_root=self.intake,native_db=self.native))['refs'])[0]['source_id'],sid)
 
 
 class NativeStreamingRouteTests(unittest.TestCase):

@@ -277,6 +277,7 @@ class _ToolCallRef:
     task_id: str
     call_id: str
     trace: list
+    bridge_resolution: tuple[str, dict, bool] | None = None
 
     def middleware_kwargs(self) -> dict[str, Any]:
         """Keyword form ``_run_agent_tool_execution_middleware`` (and tests patching it) expect."""
@@ -392,41 +393,45 @@ def _canonical_tool_name(function_name: str) -> str:
 
 def _unwrap_tool_search_call(
     agent, function_name: str, function_args: dict, *, flatten_probe: bool = False
-) -> tuple[str, dict, Optional[str]]:
+) -> tuple[str, dict, Optional[str], bool | None]:
     """Peel the ``tool_call`` bridge so downstream hooks (checkpointing, guardrails, plugin
     hooks, activity feed) see the underlying tool; ``tool_call.function`` stays untouched for
     the transcript and tool_call_id pairing.
 
     The unwrap bypasses handle_function_call's scope check, so session toolset scope is
-    enforced HERE. Returns ``(name, args, scope_block)``; ``scope_block`` is the block
+    enforced HERE. Returns ``(name, args, scope_block, bridge_resolved)``;
+    ``bridge_resolved`` is trusted envelope provenance (None for non-bridge calls).
+    ``scope_block`` is the block
     message when the underlying tool is out of scope or its args fail the deferred-schema
     probe (``flatten_probe`` collapses the probe's JSON payload to one plain string for
     callers that wrap the message in ``{"error": ...}``).
     """
     scope_block: Optional[str] = None
+    bridge_resolved = None
     try:
         from tools import tool_search as _ts
         if function_name != _ts.TOOL_CALL_NAME:
-            return function_name, function_args, None
+            return function_name, function_args, None, None
         underlying, underlying_args, err = _ts.resolve_underlying_call(function_args)
+        bridge_resolved = bool(underlying) and not err
         if err or not underlying:
-            return function_name, function_args, None
+            return function_name, function_args, None, False
         if underlying == _ts.CONNECTOR_BATCH_SENTINEL:
             # Both executors retain the wrapper: scope/probe/hooks run per entry
             # in the batch dispatcher, not against a synthetic registry name.
-            return function_name, function_args, None
+            return function_name, function_args, None, True
         if underlying not in _tool_search_scoped_names(agent):
             # Session-gated GUI tools name their missing surface (#120413);
             # anything else keeps the generic block.
             return function_name, function_args, (
                 _ts.out_of_scope_reason(underlying)
                 or f"'{underlying}' is not available in this session. Use tool_search to find tools you can call."
-            )
+            ), True
         # Validate before unwrapping: the generic bridge hides the concrete
         # parameter schema from provider-native tool-call validation.
         scope_block = _ts.validate_deferred_call_args(underlying, underlying_args)
         if scope_block is None:
-            return underlying, underlying_args, None
+            return underlying, underlying_args, None, True
         if flatten_probe:
             probe = json.loads(scope_block)
             scope_block = (
@@ -436,7 +441,7 @@ def _unwrap_tool_search_call(
             ).strip()
     except Exception:
         pass
-    return function_name, function_args, scope_block
+    return function_name, function_args, scope_block, bridge_resolved
 
 
 @dataclass
@@ -449,18 +454,24 @@ class _ParsedCall:
     middleware_trace: list
     parse_error: Optional[str]
     scope_block: Optional[str]
+    bridge_resolution: tuple[str, dict, bool] | None = None
 
     def ref(self, task_id: str) -> _ToolCallRef:
-        return _ToolCallRef(self.name, self.args, task_id, _pairing_tool_call_id(self.tool_call), self.middleware_trace)
+        return _ToolCallRef(self.name, self.args, task_id, _pairing_tool_call_id(self.tool_call), self.middleware_trace,
+                            self.bridge_resolution)
 
 
 def _parse_tool_call(agent, tool_call, *, flatten_probe: bool = False) -> _ParsedCall:
     name = _canonical_tool_name(tool_call.function.name)
     args, parse_error = _parse_tool_arguments(tool_call.function.arguments)
     scope_block = None
+    bridge_resolution = None
     if parse_error is None:
-        name, args, scope_block = _unwrap_tool_search_call(agent, name, args, flatten_probe=flatten_probe)
-    return _ParsedCall(tool_call, name, args, [], parse_error, scope_block)
+        original_name, original_args = name, args
+        name, args, scope_block, resolved = _unwrap_tool_search_call(agent, name, args, flatten_probe=flatten_probe)
+        if resolved is not None:
+            bridge_resolution = (original_name, original_args, resolved)
+    return _ParsedCall(tool_call, name, args, [], parse_error, scope_block, bridge_resolution)
 
 
 @dataclass
@@ -1081,6 +1092,9 @@ def _commit_tool_result(
     observe_tool_outcome(agent, function_name, is_error)
     if observed:
         if not blocked:
+            if ref.bridge_resolution is not None:
+                bridge_name, bridge_args, resolved = ref.bridge_resolution
+                agent._tool_guardrails.note_bridge_resolution(bridge_name, bridge_args, resolved=resolved)
             function_result = agent._append_guardrail_observation(
                 function_name, function_args, function_result, failed=is_error, tool_call_id=tool_call_id,
             )

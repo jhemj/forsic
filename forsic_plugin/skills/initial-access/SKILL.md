@@ -20,7 +20,13 @@ differences. Missing earlier records do not establish absence of earlier intrusi
   hosts, targets, and times.
 
 Link confirmed times to originals through correlate-time and organize related indicators through organize-indicators.
-Keep a concise answer in the form '최초 확인 시점 / 가능한 경로 / 지지 근거 / 경쟁 설명 / 다음 판별'.
+Keep a concise nominal hierarchy: '시점 판단 / 유력 경로 / 근거 / 주요 한계 / 다음 판별'. Seek a useful
+qualified bound before returning only 미확인: the earliest supported unauthorized action may imply access no later
+than that action, even when entry itself was not logged. Explain that prerequisite and the host/session/clock
+linkage in the owning question's inference. A successful login or sudo record alone establishes account activity,
+not unauthorized access; report the account-activity period when that is the strongest supported conclusion.
+Do not convert no-later-than into strictly-before or infer an earlier calendar day. Report route and time separately
+so an unknown route does not erase a supported time bound, and a bounded time does not invent a route.
 Run the next discriminating check available through existing tools as a mission; if evidence is missing, report it
 as unconfirmed within scope. Do not connect to discovered service addresses or start exploit reproduction or
 credential use.

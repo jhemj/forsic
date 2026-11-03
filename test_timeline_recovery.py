@@ -111,7 +111,7 @@ class LocalPatienceTests(unittest.TestCase):
             monitor.api_kwargs = {'model': 'synthetic-model', 'messages': []}
             monitor._resolve_stale_timeout()
             self.assertEqual(monitor._stream_stale_timeout, 1800)
-        self.assertEqual(config['agent']['run_budget_seconds'], 43200)
+        self.assertEqual(config['agent']['run_budget_seconds'], 86400)
         self.assertEqual(config['agent']['max_turns'], 64)
         self.assertEqual(config['goals']['max_turns'], 32)
         self.assertEqual(config['agent']['api_max_retries'], 1)

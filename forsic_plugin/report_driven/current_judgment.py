@@ -2,6 +2,25 @@
 from copy import deepcopy
 
 
+def question_claims(state, question):
+    """Select the note-owned current claims, never historical adoption receipts."""
+    selected = {r['id'] for r in question.get('claim_refs', [])}
+    if selected:
+        registry={c['id']:c for c in state['claims']}
+        return [registry[r['id']] for r in question['claim_refs'] if r['id'] in registry
+                and registry[r['id']]['status'] not in ('retracted', 'superseded')]
+    if question.get('judgment_review_required', False):
+        return []
+    return [c for c in state['claims'] if c['id'] == 'F-' + question['id'][2:]
+            and c['status'] == 'candidate']
+
+
+def question_gaps(state, question):
+    """Disposition, rather than an old note's remaining_gap_ids, owns applicability."""
+    return sorted((g for g in state['gaps'] if g['question_ref']['id'] == question['id']
+                   and g['disposition'] not in ('resolved', 'not_applicable')), key=lambda g:g['id'])
+
+
 def analysis_declaration(claim):
     """Absence in old records is unknown; v2 omissions were never reviewed empty."""
     fields = ('counter_citation_refs','inference_strength','assumptions','limitations')
@@ -11,29 +30,35 @@ def analysis_declaration(claim):
 
 
 def current_judgment(state, question):
-    selected={r['id'] for r in question['claim_refs']}
-    claims=[c for c in state['claims'] if c['id'] in selected and c['status'] not in ('retracted','superseded')]
-    # An unadopted note answer still has limits. Losing claim_refs must not
-    # erase them from the goal/compaction view or imply an approved judgment.
-    if not selected:
-        claims=[c for c in state['claims'] if c['id']=='F-'+question['id'][2:] and c['status']=='candidate']
-    tests={t['id'] for t in state['tests'] if t['question_ref']['id']==question['id']}
+    claims = question_claims(state, question)
+    tests={t['id']:t for t in state['tests'] if t['question_ref']['id']==question['id']}
     # Local test reasoning is explicitly separate from the aggregate judgment.
-    local=[{'id':a['id'],'test_id':a['test_ref']['id'],'outcome':a['outcome'],
-            'reasoning_summary':a['reasoning_summary'],'limitations':a.get('limitations',[]),
-            'next_check':a.get('next_check','')} for a in state['assessments'] if a['test_ref']['id'] in tests]
+    local=[{'id':a['id'],'version':a['version'],'test_id':a['test_ref']['id'],'outcome':a['outcome'],
+            'reasoning_summary':a['reasoning_summary'],'limitations':deepcopy(a.get('limitations',[])),
+            'next_check':a.get('next_check',''),
+            'result_ref':deepcopy(a.get('result_ref')),
+            'observation_refs':deepcopy(a.get('observation_refs',[])),
+            'target_scope':deepcopy(tests[a['test_ref']['id']].get('target_scope')),
+            'result_scope':deepcopy(tests[a['test_ref']['id']].get('result_scope'))}
+           for a in state['assessments'] if a['test_ref']['id'] in tests]
     return {'question_id':question['id'],'revision':question['revision'],
             'definition_version':question['definition_version'],'target_proposition':question['target_proposition'],
             'scope':question['scope'],'answer':question['answer'],'assessment':question['assessment'],
             'review_required':question.get('judgment_review_required',False),
-            'claim_refs':deepcopy(question['claim_refs']),
+            'claim_refs':[{'kind':'claim', 'id':c['id'], 'version':c['version']} for c in claims
+                          if c['id'] in {r['id'] for r in question.get('claim_refs', [])}],
             'judgments':[{**{k:deepcopy(c.get(k,[] if k in ('assumptions','limitations','source_refs','counterevidence_refs') else 'unrated' if k=='inference_strength' else ''))
-                          for k in ('id','status','assertion_kind','inference_strength','assumptions','reasoning_summary','limitations','source_refs','counterevidence_refs')},
+                          for k in ('id','version','statement','scope','status','assertion_kind','inference_strength','assumptions','reasoning_summary','limitations','source_refs','counterevidence_refs')},
                           **analysis_declaration(c)} for c in claims],
-            'remaining_gaps':[{'id':g['id'],'disposition':g['disposition'],'reason':g['reason'],
-                               'feasible_next_action':g['feasible_next_action']}
-                              for g in state['gaps'] if g['question_ref']['id']==question['id']
-                              and g['disposition'] not in ('resolved','not_applicable')],
+            'remaining_gaps':[{k:deepcopy(g[k]) for k in
+                              ('id','version','original_obligation','disposition','impact','reason',
+                               'basis_refs','feasible_next_action','reopen_conditions') if k in g}
+                              for g in question_gaps(state, question)],
+            'resolved_gaps':[{k:deepcopy(g[k]) for k in
+                              ('id','version','original_obligation','disposition','reason',
+                               'resolution_refs','reopen_conditions') if k in g}
+                             for g in state['gaps'] if g['question_ref']['id']==question['id']
+                             and g['disposition'] in ('resolved','not_applicable')],
             'alternatives':deepcopy(question.get('alternatives',[])),
             'next_checks':deepcopy(question.get('next_checks',[])),
             'reopen_conditions':deepcopy(question.get('reopen_conditions',[])),
@@ -43,9 +68,33 @@ def current_judgment(state, question):
 
 
 def current_claims(state):
-    selected={r['id'] for q in state['questions'] for r in q['claim_refs']}
-    candidates={'F-'+q['id'][2:] for q in state['questions'] if not q['claim_refs'] and not q.get('judgment_review_required',False)}
-    return [c for c in state['claims'] if c['id'] in selected|candidates and c['status'] not in ('retracted','superseded')]
+    selected={c['id'] for q in state['questions'] for c in question_claims(state,q)}
+    return [c for c in state['claims'] if c['id'] in selected]
+
+
+def authoring_judgment(state, question):
+    """Material answer dependency, without navigation or unrelated note revisions."""
+    full = current_judgment(state, question)
+    result = {key: deepcopy(full[key]) for key in
+            ('question_id', 'definition_version', 'target_proposition', 'scope', 'answer',
+             'assessment', 'review_required', 'claim_refs', 'judgments', 'remaining_gaps', 'resolved_gaps',
+             'alternatives', 'next_checks', 'reopen_conditions', 'local_assessments')}
+    def stable(value):
+        if isinstance(value, dict):
+            return {key:stable(item) for key,item in value.items()
+                    if key != 'version' or value.get('kind') != 'question'}
+        if isinstance(value, list):
+            return [stable(item) for item in value]
+        return value
+    return stable(result)
+
+
+def judgment_read_call(state, question):
+    index = next(i for i, q in enumerate(state['questions']) if q['id'] == question['id'])
+    return {'tool':'forsic_reporting','arguments':{
+        'action':'state','question_id':question['id'],
+        'snapshot_id':state['meta']['snapshot_id'],
+        'pointer':'/questions/'+str(index)+'/current_judgment','offset':0}}
 
 
 def navigation_view(state, question):
@@ -83,10 +132,13 @@ def navigation_view(state, question):
             'scope':text(question['scope']), 'answer_is_model_assessment':text(full['answer']),
             'judgments':judgment,'alternatives':items(full['alternatives']),
             'next_checks':items(full['next_checks']), 'reopen':items(full['reopen_conditions']),
-            'latest_local_assessment_not_aggregate':local,'detail_pointer':full['detail_pointer'],
-            'details_call':{'tool':'forsic_reporting','arguments':{'action':'state','question_id':question['id']}}}
+            'latest_local_assessment_not_aggregate':local,
+            'detail_pointer':judgment_read_call(state,question)['arguments']['pointer'],
+            'details_call':judgment_read_call(state,question)}
     result['remaining_gap_count']=len(full['remaining_gaps'])
-    result['remaining_gap_examples']=[{**g,'reason':text(g['reason'],200)} for g in full['remaining_gaps'][:2]]
+    result['remaining_gap_examples']=[{k:(text(g[k],200) if k=='reason' else deepcopy(g[k]))
+                                     for k in ('id','disposition','reason','feasible_next_action')}
+                                    for g in full['remaining_gaps'][:2]]
     omitted+=max(0,len(full['remaining_gaps'])-2)
     result['omitted_details']=omitted
     context = full['forensic_context']

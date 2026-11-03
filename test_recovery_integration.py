@@ -257,6 +257,15 @@ class NewConversationContractTests(unittest.TestCase):
             ctx=Mock();ctx.get_config.return_value=None;register(ctx)
             handler=next(c.kwargs['handler'] for c in ctx.register_tool.call_args_list if c.kwargs['name']==tool)
             return json.loads(handler(args,session_id='session-'+owner))
+    def read_items(self,call):
+        """Follow only returned page calls; indexes do not inline full state."""
+        items=[]
+        while call is not None:
+            page=self.call(call['tool'],call['arguments'])
+            self.assertNotIn('error',page,page)
+            items.extend(page['items'])
+            call=page.get('next_call')
+        return items
     def create(self,owner='new'):
         return self.call('forsic_question',dict(operation_id='create-'+owner,question='Which explanation fits '+owner+'?',scope='Synthetic acquisition',answer='Undetermined; retained notes need source verification',priority='material',gaps=['Actual body unreviewed']),owner)
     def test_create_uses_current_owner_and_replay_keeps_single_question(self):
@@ -278,22 +287,34 @@ class NewConversationContractTests(unittest.TestCase):
         a=self.create('old');oldid=a['question']['question_id'];before=find(current(self.x.case),'questions',oldid)
         view=self.call('forsic_reporting',{'action':'state'})
         self.assertEqual(view['conversation_scope']['owned_question_count'],0)
-        self.assertEqual(view['state']['questions'],[])
+        section=view['sections']['questions']
+        rows=self.read_items(section['read_call'])
+        self.assertEqual(len(rows),section['count'])
+        self.assertTrue(any(item.get('value',item.get('ref',{})).get('id')==oldid for item in rows))
         history_call=view['conversation_scope']['case_history_call']
         history=self.call(history_call['tool'],history_call['arguments'])
         self.assertTrue(any(item.get('value',{}).get('id')==oldid for item in history['items']))
         detail=self.call('forsic_reporting',{'action':'state','question_id':oldid})
         self.assertNotIn('error',detail,detail)
         self.assertFalse(detail['editable_in_current_conversation'])
-        self.assertEqual(detail['read_call'],{'tool':'forsic_reporting','arguments':{'action':'state','question_id':oldid}})
+        self.assertEqual(detail['read_call'],{'tool':'forsic_reporting','arguments':{
+            'action':'state','question_id':oldid,'snapshot_id':detail['snapshot_id'],
+            'pointer':detail['pointer'],'offset':0}})
+        reread=self.call(detail['read_call']['tool'],detail['read_call']['arguments'])
+        self.assertFalse(reread['editable_in_current_conversation'])
+        self.assertEqual(next(item['value'] for item in reread['items'] if item.get('key')=='id'),oldid)
         rejected=self.call('forsic_question',{'operation_id':'wrong-owner','question_id':oldid,'expected_revision':before['revision'],'answer':'Do not adopt'})
         self.assertIn('another native conversation',rejected['error']);self.assertEqual(find(current(self.x.case),'questions',oldid),before)
         saved=self.create();qid=saved['question']['question_id'];view=self.call('forsic_reporting',{'action':'state'})
         self.assertEqual(view['conversation_scope']['owned_question_count'],1)
-        self.assertEqual(view['state']['questions'][0]['id'],qid)
-        read_call=view['state']['questions'][0]['read_call']
-        self.assertNotIn('pointer',view['state']['questions'][0])
-        self.assertEqual(read_call,saved['question']['read_call'])
+        rows=self.read_items(view['sections']['questions']['read_call'])
+        selected=next(item for item in rows if item.get('value',item.get('ref',{})).get('id')==qid)
+        fields={item['key']:item.get('value') for item in self.read_items(selected['read_call'])}
+        self.assertEqual(fields['id'],qid)
+        self.assertEqual((fields['goal_id'],fields['session_id']),('goal-new','session-new'))
+        # The creation result owns the stable question selector; collection
+        # coordinates remain exact read navigation, never new write authority.
+        read_call=saved['question']['read_call']
         detail=self.call(read_call['tool'],read_call['arguments'])
         self.assertTrue(detail['editable_in_current_conversation'])
         self.assertEqual(next(item['value'] for item in detail['items'] if item.get('key')=='id'),qid)

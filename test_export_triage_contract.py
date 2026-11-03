@@ -112,6 +112,35 @@ class ExportTriageContractTests(unittest.TestCase):
         self.assertEqual(source['retained_export_target']['pointer'], '/stdout')
         self.assertNotIn('retained_export_targets', source)
 
+    def test_preparation_requires_agent_format_choice_then_uses_exact_export(self):
+        source, _ = self.export()
+        from forsic_plugin.triage_policy import validate, PROFILES
+        preparation = source['triage_handoff']
+        self.assertEqual(preparation['state'], 'preparation_only')
+        self.assertEqual(set(preparation['choose_profile']), set(PROFILES))
+        call = deepcopy(preparation['call_template'])
+        self.assertEqual(call['arguments']['targets'], [source['retained_export_target']])
+        with self.assertRaises(ValueError):
+            validate(call['arguments'])  # A file name never chooses a profile.
+        call['arguments'].update(profile='linux_login_parser', login_format='linux-glibc-x86-le-384')
+        value, runner = self.invoke(call['arguments'])
+        self.assertNotIn('error', value, value)
+        self.assertEqual(runner.call_count, 1)
+        self.assertEqual(value['candidates'][0]['status'], 'candidate_not_adopted')
+        pruned = json.loads(summarize('forsic_shell', {}, json.dumps(source)))
+        self.assertNotIn('triage_handoff', pruned)
+        self.assertEqual(pruned['triage_profile_lookup']['arguments']['pointer'], '/execution_policy/triage')
+        self.assertEqual(pruned['retained_export_target'], source['retained_export_target'])
+
+    def test_preparation_self_references_do_not_disguise_duplicate_execution(self):
+        from forsic_plugin.loop_comparison import project
+        source, workspace = self.export()
+        (workspace/'selected.wtmp').unlink()
+        second, _ = self.export()
+        one = project('forsic_shell', {'command': 'same synthetic export'}, json.dumps(source))
+        two = project('forsic_shell', {'command': 'same synthetic export'}, json.dumps(second))
+        self.assertEqual(one['result']['triage_handoff'], two['result']['triage_handoff'])
+
     def test_redirected_export_to_real_persistence_helper_preserves_candidate_range(self):
         payload = b'# synthetic comment\r\n@reboot /bin/synthetic-job\r\n'
         source, workspace = self.export(payload=payload)

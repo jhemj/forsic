@@ -260,17 +260,21 @@ def clear_session(session_key: str) -> int:
     return cancelled
 
 
-def resolve_clarify_timeout(config: dict) -> int:
-    """Clarify timeout (seconds) on messaging platforms: legacy ``clarify.timeout`` if explicitly set,
-    else ``agent.clarify_timeout``, else 3600. CLI, TUI and Desktop never time a clarify out — the user
-    is at the screen it is painted on. ``<= 0`` is kept verbatim (unlimited); non-numeric -> 3600."""
-    raw = (config.get("clarify") or {}).get("timeout")
-    if raw is None:
-        raw = (config.get("agent") or {}).get("clarify_timeout", 3600)
+def resolve_clarify_timeout(config: dict, *, surface: str = "messaging") -> int:
+    """Clarify timeout in seconds; ``<= 0`` means unlimited.
+
+    Messaging keeps its legacy ``clarify.timeout`` / ``agent.clarify_timeout`` precedence
+    and 3600s default. TUI, Desktop and dashboard opt in with ``clarify.ui_timeout``;
+    their default remains unlimited. Invalid values use the respective surface default.
+    """
+    default = 0 if surface == "ui" else 3600
+    raw = (config.get("clarify") or {}).get("ui_timeout" if surface == "ui" else "timeout")
+    if raw is None and surface != "ui":
+        raw = (config.get("agent") or {}).get("clarify_timeout", default)
     try:
         return int(raw)
     except (TypeError, ValueError):
-        return 3600
+        return default
 
 
 def get_clarify_timeout() -> int:

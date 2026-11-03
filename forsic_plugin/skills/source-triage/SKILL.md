@@ -5,12 +5,19 @@ description: Find question-relevant logs, autorun settings, and file traces in L
 # Explore evidence and extract leads
 Inspect actual directories before choosing evidence for the question. For access, examine authentication logs;
 for scheduled execution, cron/systemd settings and execution logs; for command traces, shell history and results.
-Use forsic_image_files(list) for E01 listings, forsic_image_search(path=이미지, file_path=내부 범위, text=문자열)
+Use forsic_image_files(action="list", path=이미지, file_path=내부 디렉터리) for E01 inventories, forsic_image_search(path=이미지, file_path=내부 범위, text=문자열)
 for search, and forsic_image_read for content. Use forsic_search/read for extracted files. For image processing or
 derived copies in the terminal, use the shared reader `python /opt/forsic/image_access.py`. Read
 `references/image-access.md` for detailed examples when needed. Set file_path and text, and recursive when needed,
 for search. Check omitted scope and subsequent pages; read original context around search lines for important
 claims. Continue long lines with read_bytes. If a file path is missing, find its actual name in the parent listing.
+Use action names from the current tool schema. After a rejected action, inspect tool_describe and correct it;
+renaming the tool while keeping the unsupported action does not repair the call. A rejection is not a file search.
+For /work copies, copy the destination from the completed export receipt or the actual workspace listing;
+artifact labels and original paths do not specify a derived filename. Keep diagnostics visible while checking paths.
+If a text reader rejects binary content, inspect the returned capability/schema guidance and choose the supported
+bounded byte or static-analysis path for the actual format. Changing line limits is not a binary parser. Keep a
+missing-path observation with its selected view and reuse it until the scope or a useful discriminating check changes.
 Copying search next_call passes the selected source_ref as cursor_ref to continue precisely. Do not rewrite cursor
 internals. Preserve explicit scope such as file_path/text. A page can end within a file; scan_exhausted on the last
 page does not mean all previous scope was reviewed. Keep skipped files, regions, and formats as unchecked scope;
@@ -26,6 +33,9 @@ actual OS/format, capabilities and inputs. Choose applicable scope and profiles;
 all-profile checklist. Reuse a matching completed scan. If not applicable, unsupported, missing input, failed or
 deferred, update the existing question's answer/gaps with the actual reason and unreviewed scope, then continue
 other useful work. Focused questions still choose checks by their value to the requested question.
+One completed profile covers its selected inputs, not the investigation's other relevant mechanisms. For Linux
+persistence questions, compare discovered system and user schedules before judging coverage; a login scan does
+not inspect scheduled execution. Keep important deferred checks in the existing question, not another checklist.
 
 When selected files match the question, prefer a bounded triage pass over repeated
 manual parsing: `forsic_shell(action="triage", profile="windows_evtx", targets=...)`
@@ -35,7 +45,9 @@ Each target requires explicit `kind="evidence_file"` (returned selected-file pat
 pointer) or `kind="workspace_export"` (the exact returned pointer to a complete export
 receipt), plus `source_handle` or exact `source_id`/`source_version`. Copy a returned
 `retained_export_target` or one `retained_export_targets` entry, including its exact export_line when present;
-it selects a receipt, and admission still
+`triage_handoff.call_template` already carries the first exact target. Choose a profile and fill its
+required format assertions from observed input; the template is preparation, not an executed scan.
+Other exports remain available in the selector list. The selector identifies a receipt, and admission still
 checks conversation ownership, complete-file status and file hash. For image inputs, export selected complete
 files with the shared reader and preserve its returned JSON receipt streams. Copy the returned selector's exact
 /stdout or /stderr pointer; do not discard both receipt streams or replace them with ls/cat output. A file in
@@ -100,6 +112,9 @@ absence throughout the investigation scope.
 For partial listings, record returned row ranges and next_line/next_call. Questions requiring total, unique, or
 absence claims require reading the necessary remainder or narrowing the claim. Do not infer organizational roles,
 deployers, or authorization from filenames or account names when the source does not show them.
+For retained shell output, use readable_output_calls and copy next_call to read omitted UTF-8 pages. Their offsets
+describe decoded derived output, not original-file coordinates or a citation. Preserve the original source handle
+and use returned citation choices or the relevant original reader when adopting evidence.
 
 ## Select specialized evidence only as needed
 

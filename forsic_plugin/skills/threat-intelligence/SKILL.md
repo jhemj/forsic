@@ -9,6 +9,10 @@ During investigation, use `forsic_intel` for indicators that could change the cu
 report, cross-check every supported, authorized IOC selected for its appendix, including those already recorded
 without an external result. Reuse preserved results for the exact indicator; use refresh=true only when elapsed
 time warrants a new query within the existing authorization and budget. Reuse is not a fresh GTI request.
+This requirement is bounded by configured access: if a returned prerequisite says the connection is not configured,
+preserve that shared lookup limitation and continue useful local analysis. Do not retry each IOC against the same
+missing credential or require external lookup completion before saving local findings. Ask for missing access only
+when its expected value materially changes the remaining investigation; never change connections or infer approval.
 
 - Query files using MD5/SHA1/SHA256 of the actual entire target file. Do not substitute E01 container or partial
   hashes for internal file hashes. If a whole-file hash is unavailable, record that limit and proceed with supported

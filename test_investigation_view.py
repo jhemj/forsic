@@ -47,6 +47,87 @@ class InvestigationViewTests(unittest.TestCase):
     def project(self):
         return view.project_view(self.resolved,profile='default')
 
+    def writer_commit(self):
+        # A second connection must commit while UI-derived work runs. A retained
+        # read transaction would make this commit fail in DELETE journal mode.
+        with closing(sqlite3.connect(self.case.db, timeout=0.05)) as writer:
+            with writer:
+                writer.execute("INSERT INTO events VALUES (?,?,?,?,?)",
+                               ('concurrent-ui-writer', 2, 'test', 'session', '{}'))
+
+    def test_review_validation_does_not_hold_the_ui_sql_read_lock(self):
+        original = view._review_questions
+        def review(*args, **kwargs):
+            self.writer_commit()
+            return original(*args, **kwargs)
+        with patch.object(view, '_review_questions', side_effect=review):
+            result = self.project()
+        self.assertEqual(result['questions'][0]['id'], 'Q-n')
+        self.assertEqual(self.case.event('concurrent-ui-writer')['kind'], 'test')
+
+    def test_report_projection_releases_sql_snapshot_before_revalidation(self):
+        from forsic_plugin.report_driven.host import current
+        def project(case, *, events, _source_records=None):
+            self.writer_commit()
+            # Replay the exact selected rows, not the concurrent event.
+            self.assertNotIn('concurrent-ui-writer', {e['id'] for e in events})
+            return current(case, events=events, _source_records=_source_records)
+        with patch('forsic_plugin.report_driven.host.current', side_effect=project):
+            result = view._report_current_basis(self.case)
+        self.assertEqual(result['questions'][0]['id'], 'Q-n')
+        self.assertEqual(self.case.event('concurrent-ui-writer')['kind'], 'test')
+
+    def test_report_authoring_reuses_the_one_bounded_retained_snapshot_readonly(self):
+        from forsic_plugin.report_driven.narrative import progress_view
+        from forsic_plugin.report_driven.template_contract import GROUPS
+        from forsic_plugin.task_focus import retained_task_state
+        snapshot = retained_task_state(self.case)
+        from forsic_plugin.report_workspace import authoring
+        expected, _ = authoring(self.case,snapshot)
+        before = self.case.db.read_bytes()
+        with patch('forsic_plugin.task_focus.retained_task_state',return_value=snapshot) as retained, \
+             patch('forsic_plugin.report_driven.narrative.progress_view',wraps=progress_view) as progress, \
+             patch.object(view,'_report_current_basis',side_effect=AssertionError('No second ledger read')), \
+             patch.object(Case,'record',side_effect=AssertionError('Read-only projection')):
+            result = self.project()
+        retained.assert_called_once_with(self.case)
+        progress.assert_called_once()
+        self.assertEqual(progress.call_args.args[0]['questions'], snapshot['questions'])
+        self.assertEqual(result['report_authoring'],expected)
+        self.assertEqual([g['id'] for g in expected['groups']],[g[0] for g in GROUPS])
+        self.assertTrue(all(g['state']=='missing' for g in expected['groups']))
+        self.assertEqual(before,self.case.db.read_bytes())
+
+    def test_unavailable_snapshot_stays_unknown_for_authoring_and_saved_report_comparison(self):
+        from forsic_plugin.report_driven.template_contract import GROUPS
+        snapshot_id='c'*64; bundle_id='d'*64
+        saved=dict(meta=dict(case_id='synthetic',snapshot_id=snapshot_id))
+        raw=json.dumps(saved).encode()
+        (self.case.output/('report-state-'+snapshot_id+'.json')).write_bytes(raw)
+        directory=self.case.output/('report-bundle-'+bundle_id);directory.mkdir()
+        (directory/'integrated.html').write_text('saved synthetic report')
+        (directory/'manifest.json').write_text(json.dumps(dict(case_id='synthetic',bundle_id=bundle_id,
+            snapshot_id=snapshot_id,state_sha256=hashlib.sha256(raw).hexdigest(),files=[dict(name='integrated.html')])))
+        with patch('forsic_plugin.task_focus.retained_task_state',return_value=None), \
+             patch.object(view,'_report_current_basis',side_effect=AssertionError('Do not retry a bounded unavailable read')):
+            result=self.project()
+        progress=result['report_authoring']
+        self.assertEqual(progress['status'],'unavailable')
+        self.assertEqual(len(progress['groups']),len(GROUPS))
+        self.assertTrue(all(g['state']=='unavailable' and not g['preview'] for g in progress['groups']))
+        self.assertEqual(result['reports'][0]['comparison_status'],'unavailable')
+        self.assertNotIn('current',result['reports'][0])
+
+    def test_large_history_keeps_task_cards_without_certifying_full_report_state(self):
+        self.append('tool_result', dict(tool='forsic_reporting', obsolete_prose='x' * (5 * 1024 * 1024)))
+        before = self.case.db.read_bytes()
+        result = self.project()
+        self.assertEqual(result['task_focus']['status'], 'ready')
+        self.assertEqual(result['task_focus']['tasks'][0]['id'], 'Q-n')
+        self.assertEqual(result['task_focus']['tasks'][0]['answer_is_model_assessment'], self.note['answer'])
+        self.assertEqual(result['report_authoring']['status'], 'drafting')
+        self.assertEqual(before, self.case.db.read_bytes())
+
     def observation(self,ident='O-current'):
         return dict(id=ident,version='saved-version',source_ref=dict(kind='source',id=self.source_id,version=self.source['version']),
             statement='Recorded string',field_pointer='/lines/0/text',literal='Oct 1 03:00',byte_start=0,byte_end=11,
@@ -104,7 +185,7 @@ class InvestigationViewTests(unittest.TestCase):
                     projected=self.project()['review_questions'][0]
                 self.assertEqual(self.case.db.read_bytes(),before)
                 self.assertEqual(projected['response'],dict(question_id='Q-n',revision=revision,
-                    disposition=disposition,reason=answer['reason'],limitation=answer.get('limitation'),
+                    disposition=disposition,reason=answer['reason'],limitation=answer.get('limitation') or '',
                     citation_refs=answer['citation_refs']))
                 self.assertEqual(projected['disposition_validation'],'validated_saved_response')
                 self.assertFalse(projected['semantic_approval'])

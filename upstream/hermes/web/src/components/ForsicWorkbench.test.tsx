@@ -18,7 +18,7 @@ const snapshot = (): ReturnType<typeof useForsicInspector> => ({
 });
 const emptyCase = {case_id: 'bound-case', session_id: 'sample', profile: 'default', questions: [], observations: [], sources: [], timeline: [], reports: [], activities: []};
 const locale = {schema:'forsic.ui.skill-copy.v1',locale:'ko',skills:{'correlate-time':{display_name:'시각 대조',description:'원문 시각과 추정 시간 관계를 대조합니다.',category:'사건 재구성',search_terms:['타임라인']}}};
-function mockInvestigation(value: unknown) {fetchJSON.mockImplementation(async (url: string) => url === '/api/plugins/forsic/skills-ui-copy' ? locale : url.startsWith('/api/plugins/forsic/capabilities') ? {revision:'r1',local_admin:true,settings:{target_os:'all',tools:{},skills:{}},tools:snapshot().toolItems.map(item=>({...item,required:false,enabled:true,default_enabled:true,target_os:['windows','macos','linux'],overridden:false})),skills:snapshot().skillItems.map(item=>({...item,required:false,enabled:true,default_enabled:true,target_os:['windows','macos','linux'],overridden:false}))} : value);}
+function mockInvestigation(value: unknown) {fetchJSON.mockImplementation(async (url: string) => url.startsWith('/api/plugins/forsic/review-history?') ? {case_id: 'bound-case', session_id: 'sample', profile: 'default', scope: 'case', snapshot: 'snapshot', offset: 0, next_offset: null, total: 0, items: [], issues: [], counts: {total: 0, answered: 0, pending: 0, historical_answer: 0, historical_goal: 0, receipts: 0}} : url === '/api/plugins/forsic/skills-ui-copy' ? locale : url.startsWith('/api/plugins/forsic/capabilities') ? {revision:'r1',local_admin:true,settings:{target_os:'all',tools:{},skills:{}},tools:snapshot().toolItems.map(item=>({...item,required:false,enabled:true,default_enabled:true,target_os:['windows','macos','linux'],overridden:false})),skills:snapshot().skillItems.map(item=>({...item,required:false,enabled:true,default_enabled:true,target_os:['windows','macos','linux'],overridden:false}))} : value);}
 beforeEach(() => {Object.defineProperty(window, 'innerWidth', {value: 1280, configurable: true}); mockInvestigation(emptyCase);});
 let dispose = () => {};
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -83,7 +83,7 @@ it('returns keyboard focus to the selected control after closing its panel with 
 it('opens the shared investigation monitor on desktop and returns focus when closed', async () => {
   mockInvestigation({case_id: 'bound-case', session_id: 'sample', profile: 'default', questions: [], observations: [], sources: [], timeline: []});
   const state = snapshot(); const {host, click} = await render(state);
-  expect(fetchJSON).toHaveBeenCalledExactlyOnceWith('/api/plugins/forsic/investigation-view?session_id=sample&profile=default');
+  expect(fetchJSON).toHaveBeenCalledExactlyOnceWith('/api/plugins/forsic/investigation-view?session_id=sample&profile=default', {signal: expect.any(AbortSignal)});
   expect(host.querySelector('aside')?.getAttribute('aria-label')).toBe('조사 모니터');
   expect(document.activeElement).toBe(host.querySelector('aside'));
   expect(host.textContent).toContain('아직 연결된 시간 기록이 없어요.');
@@ -101,7 +101,7 @@ it('labels a saved conversation without a live runtime without implying an ongoi
   expect(host.querySelector('[role="status"]')?.textContent).toBe('저장된 대화');
   expect(host.textContent).toContain('기존 대화 화면');
   expect(host.querySelector('.forsic-workbench-presence')?.getAttribute('data-running')).toBe('false');
-  expect(fetchJSON).toHaveBeenCalledWith('/api/plugins/forsic/investigation-view?session_id=sample&profile=default');
+  expect(fetchJSON).toHaveBeenCalledWith('/api/plugins/forsic/investigation-view?session_id=sample&profile=default', {signal: expect.any(AbortSignal)});
   expect(state.refresh).not.toHaveBeenCalled();
   expect(state.onReconnect).not.toHaveBeenCalled();
 });
@@ -109,7 +109,7 @@ it('labels a saved conversation without a live runtime without implying an ongoi
 it.each(['연결이 끊어졌습니다.', '일시정지됨'])('preserves explicit native transport or pause status for a disconnected conversation: %s', async statusText => {
   const {host} = await render(snapshot(), {connected: false, running: false, statusText});
   expect(host.querySelector('[role="status"]')?.textContent).toBe(statusText);
-  expect(fetchJSON).toHaveBeenCalledWith('/api/plugins/forsic/investigation-view?session_id=sample&profile=default');
+  expect(fetchJSON).toHaveBeenCalledWith('/api/plugins/forsic/investigation-view?session_id=sample&profile=default', {signal: expect.any(AbortSignal)});
 });
 
 
@@ -191,14 +191,32 @@ it('publishes Ren panel selection only while the independent-review tab is visib
     expect(signals.at(-1)).toMatchObject({selected: false, sessionId: 'sample', caseId: 'bound-case'});
     await click('렌 · 독립 검토');
     expect(signals.at(-1)?.selected).toBe(true);
-    await click('시간 흐름');
+    await click('조사 모니터');
     expect(signals.at(-1)?.selected).toBe(false);
     await click('렌 · 독립 검토');
     await click('도구');
     expect(signals.at(-1)?.selected).toBe(false);
     await click('조사 모니터');
+    expect(signals.at(-1)?.selected).toBe(false);
+    await click('렌 · 독립 검토');
     expect(signals.at(-1)?.selected).toBe(true);
     await click('조사 패널 닫기');
     expect(signals.at(-1)?.selected).toBe(false);
   } finally {window.removeEventListener('forsic:review-panel', receive);}
+});
+
+
+it('opens Ren directly in the top-level navigation and removes the nested monitor tab', async () => {
+  const {host, click} = await render();
+  expect([...host.querySelectorAll('.forsic-inspector-tabs button')].filter(button => button.textContent?.includes('렌'))).toHaveLength(1);
+  expect([...host.querySelectorAll('.fi-view-tabs button')].some(button => button.textContent?.includes('렌'))).toBe(false);
+  await click('렌 · 독립 검토');
+  expect(host.querySelector('aside')?.getAttribute('aria-label')).toBe('렌 · 독립 검토');
+  expect(host.querySelector('[aria-label="렌의 독립 검토 기록"]')).not.toBeNull();
+  const requests = fetchJSON.mock.calls.filter(([url]) => url.startsWith('/api/plugins/forsic/review-history?'));
+  expect(requests).toHaveLength(1);
+  const query = new URL(requests[0][0], 'http://synthetic').searchParams;
+  expect(Object.fromEntries(query)).toMatchObject({case_id: 'bound-case', session_id: 'sample', profile: 'default'});
+  await click('상태 다시 조회');
+  expect(fetchJSON.mock.calls.filter(([url]) => url.startsWith('/api/plugins/forsic/review-history?'))).toHaveLength(2);
 });

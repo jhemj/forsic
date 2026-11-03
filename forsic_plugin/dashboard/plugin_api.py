@@ -474,7 +474,8 @@ def evidence(eid: str, case_id: str = ''):
 def indicator_list(case_id: str, query: str = '', status: str = '', offset: int = 0):
     from forsic_plugin.indicators import invoke
     try:
-        return invoke(selected_case(case_id), {'action':'list','query':query,'status':status,'offset':offset,'limit':25})
+        case = selected_case(case_id)
+        return {'case_id': case.config['case_id'], **invoke(case, {'action':'list','query':query,'status':status,'offset':offset,'limit':25})}
     except (ValueError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from None
 
@@ -617,6 +618,23 @@ def investigation_view(session_id: str = Query(..., min_length=1, max_length=256
         return apply_cached_display(resolved, project_view(resolved, profile=profile))
     except (ValueError, KeyError, TypeError, sqlite3.Error) as exc:
         raise HTTPException(409, '보존된 조사 기록을 확인하지 못했습니다. 다시 조회해주세요.') from exc
+
+
+@router.get('/review-history')
+def review_history(session_id: str = Query(..., min_length=1, max_length=256),
+                   profile: str = Query(..., min_length=1, max_length=128),
+                   case_id: str = Query(..., min_length=1, max_length=256),
+                   offset: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=50),
+                   snapshot: str | None = Query(None, min_length=64, max_length=64)):
+    import sqlite3
+    from forsic_plugin.independent_review_history import project_history
+    resolved = investigation_scope(session_id, profile)
+    if resolved['case_id'] != case_id:
+        raise HTTPException(409, '선택한 대화와 사건이 다릅니다.')
+    try:
+        return project_history(resolved, profile=profile, offset=offset, limit=limit, snapshot=snapshot)
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+        raise HTTPException(409, '검토 기록이 바뀌었거나 조회하지 못했습니다. 처음부터 다시 조회해주세요.') from exc
 
 
 class InvestigationEnrichmentInput(BaseModel):

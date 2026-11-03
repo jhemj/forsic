@@ -176,12 +176,14 @@ def _ac_inflight_original(session: dict) -> str:
 
 
 def _enqueue_prompt(session: dict, text: Any, transport: Any, image_paths: list[str] | None = None,
-                    turn_author: dict | None = None) -> dict | None:
+                    turn_author: dict | None = None, *, merge_text: bool = True) -> dict | None:
     """Queue a message for the next turn. Text-only arrivals share a slot and merge losslessly (like the
     consecutive-user merge in ``repair_message_sequence``); image-bearing and authored ones stay separate
     envelopes so attachment chronology and the sender survive. ``transport`` is pinned so the drained turn
     streams to its sender. Returns the envelope dict the text landed in (the merged head on a merge)
-    so the caller can attach durable state to it; None when the text was dropped as a duplicate."""
+    so the caller can attach durable state to it; None when the text was dropped as a duplicate.
+    ``merge_text=False`` preserves a native transport result as its own envelope in both directions.
+    """
     image_paths = list(image_paths or [])
     # Scrub live-turn self-duplicates first so the text merge below can't glue "{original}\n\n{later}" and re-fire the
     # original after a correction settles.
@@ -191,10 +193,12 @@ def _enqueue_prompt(session: dict, text: Any, transport: Any, image_paths: list[
     # A text-only self-copy of the live prompt would restart it on drain; an authored copy is another sender's message.
     if text_only and not turn_author and text.strip() == _ac_inflight_original(session) != "":
         return None
-    queued = {"text": text, "transport": transport, **({"image_paths": image_paths} if image_paths else {}),
+    queued = {"text": text, "transport": transport, **({"_separate_prompt": True} if not merge_text else {}),
+              **({"image_paths": image_paths} if image_paths else {}),
               **({"turn_author": turn_author} if turn_author else {})}
     existing = session.get("queued_prompt")
-    if (existing and text_only and not turn_author and isinstance(existing.get("text"), str)
+    if (merge_text and existing and not existing.get("_separate_prompt")
+            and text_only and not turn_author and isinstance(existing.get("text"), str)
             and not existing.get("image_paths") and not existing.get("turn_author")
             and not session.get("queued_prompts")):
         prev = existing["text"]
@@ -488,6 +492,20 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     with _session_turn_admission(session) as admitted:
         if not admitted or session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running") or session.get("_turn_cancel_requested") or _session_goal_paused(session):
             return False
+        if queued.get("_clarification_result"):
+            # A background answer/deadline can arrive just before the native judge
+            # concludes the goal. Retain its context without reopening finished work.
+            from hermes_cli.goals import load_goal
+            goal = load_goal(str(session.get("session_key") or ""))
+            if goal is not None and goal.status != "active":
+                entries = [queued, *(session.get("queued_prompts") or [])]
+                explicit = next((entry for entry in entries if not entry.get("_clarification_result")), None)
+                if explicit is None:
+                    return False
+                # An accepted user message may pass retained transport context. Its
+                # own row/text stays intact; preparation consumes the context as a note.
+                _ac_set_queue(session, [explicit, *(entry for entry in entries if entry is not explicit)])
+                queued = explicit
         queue_generation = int(session.get("_queued_prompt_generation", 0))
         _ac_set_queue(session, session.get("queued_prompts") or [])
         session["running"] = True

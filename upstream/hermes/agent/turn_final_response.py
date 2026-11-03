@@ -338,6 +338,9 @@ def finish_text_response(
     if _sg.continue_turn:
         final_response = None
         return _verdict("continue")
+    if _sg.stop_reason:
+        final_response = _sg.final_response
+        final_msg = {'role': 'assistant', 'content': final_response, 'finish_reason': _sg.stop_reason}
 
     # Plugins rewrite the reply BEFORE it is appended and flushed: SQLite treats a non-blank
     # assistant row as settled, so a transform after this write would reach the user but never
@@ -368,7 +371,7 @@ def finish_text_response(
             exc_info=True,
         )
 
-    _turn_exit_reason = f"text_response(finish_reason={finish_reason})"
+    _turn_exit_reason = _sg.stop_reason or f"text_response(finish_reason={finish_reason})"
     if not agent.quiet_mode:
         agent._safe_print(f"🎉 Conversation completed after {api_call_count} OpenAI-compatible API call(s)")
     return _verdict("break")

@@ -32,11 +32,22 @@ def indicator(kind, value):
     raise ValueError('file, ip, domain 중 하나를 선택해주세요.')
 
 
+def prerequisite_unavailable(kind, value, name, status, error):
+    return {'error':error, 'error_code':'prerequisite_unavailable',
+            'outcome':'not_configured' if name == 'api_key' else 'unavailable',
+            'delivery':'not_sent', 'source_kind':'external_intelligence',
+            'indicator_type':kind, 'indicator':value,
+            'scope':'Existing report for this exact indicator only',
+            'prerequisite':{'capability':'external_intelligence','name':name,'status':status},
+            'meaning':'This lookup was not performed; indicator reputation remains unknown.',
+            'limitation':LIMITATION, 'automatic_retry':False,
+            'retry_when':'Only after this prerequisite changes; continue independent local checks.'}
+
 def fetch(kind, value):
     collection, value = indicator(kind, value)
     api_key = connections.key()
     if not api_key:
-        return {'error': '설정에서 VT/GTI API 키를 등록해주세요.', 'outcome': 'not_configured', 'delivery': 'not_sent'}
+        return prerequisite_unavailable(kind, value, 'api_key', 'missing', '설정에서 VT/GTI API 키를 등록해주세요.')
     url = connections.VT_URL + '/' + collection + '/' + quote(value, safe='')
     result = {'source_kind': 'external_intelligence', 'provider': 'Google Threat Intelligence / VirusTotal',
               'indicator_type': kind, 'indicator': value, 'lookup_at': time.time(),
@@ -67,13 +78,13 @@ def fetch(kind, value):
 
 
 def lookup(case, args):
-    prefs = connections.preferences()
-    if not prefs.get('gti_enabled'):
-        return {'error':'VT/GTI 연결이 꺼져 있어요. 설정에서 켜주세요.', 'delivery':'not_sent'}
     kind = args['kind']
     _, value = indicator(kind, args['indicator'])
+    prefs = connections.preferences()
+    if not prefs.get('gti_enabled'):
+        return prerequisite_unavailable(kind, value, 'gti_enabled', 'disabled', 'VT/GTI 연결이 꺼져 있어요. 설정에서 켜주세요.')
     if kind != 'file' and not prefs.get('gti_public_network'):
-        return {'error':'IP·도메인 조회는 설정에서 공개 지표 전송을 허용한 뒤 사용할 수 있어요.', 'delivery':'not_sent'}
+        return prerequisite_unavailable(kind, value, 'gti_public_network', 'disabled', 'IP·도메인 조회는 설정에서 공개 지표 전송을 허용한 뒤 사용할 수 있어요.')
     # Reuse the retained result in this case. No hidden retry or another model call.
     with case.connect() as db:
         row = db.execute("SELECT id,data FROM events WHERE kind='tool_result' AND json_extract(data,'$.tool')='forsic_intel' AND json_extract(data,'$.indicator_type')=? AND json_extract(data,'$.indicator')=? AND json_extract(data,'$.outcome') IN ('found','not_found') ORDER BY time DESC LIMIT 1", (kind,value)).fetchone()

@@ -15,6 +15,7 @@ RUN apt-get update \
        sleuthkit=4.12.1+dfsg-3build1 \
        testdisk=7.2-0.1build1 \
        ewf-tools=20140816-2build1 \
+       binutils=2.46-3ubuntu2 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=parser /usr/local /usr/local
 RUN ldconfig

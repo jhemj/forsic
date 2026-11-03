@@ -1,7 +1,7 @@
 """Post-call response verification for the conversation turn's retry loop: stop the thinking
 spinner, validate the response shape (retry / eager fallback / terminal invalid-response
 result), derive ``finish_reason`` per api_mode, route content-policy refusals and
-``length`` truncation, fold usage into the compressor, and mark the logical relay call
+``length`` truncation, account each returned attempt before recovery, and mark the logical relay call
 complete. Nothing here imports ``agent.conversation_loop`` at module level (cycle) —
 loop-internal helpers resolve lazily so ``patch("agent.conversation_loop.X")`` keeps intercepting.
 """
@@ -16,7 +16,10 @@ from typing import Any, Dict, Optional
 from agent.error_classifier import FailoverReason
 from agent.turn_api_call import stop_thinking_spinner
 from agent.turn_failure_copy import invalid_response_failure_reason, provider_label_for, site_copy, stamp_failure
-from agent.turn_truncation import handle_content_policy_refusal, recover_from_truncation
+from agent.turn_truncation import (
+    _prompt_filled_window, handle_content_policy_refusal, normalize_response_for_agent,
+    recover_from_truncation,
+)
 from agent.turn_usage import record_response_usage
 
 logger = logging.getLogger("agent.conversation_loop")
@@ -41,6 +44,9 @@ class ResponseCheckVerdict:
     _preflight_compression_blocked: Any
     _last_preflight_pressure: Any
     api_duration: Any
+    conversation_history: Any = None
+    approx_tokens: Any = None
+    _provider_overflow_recovery_pending: bool = False
     result: Optional[Dict[str, Any]] = None
 
 
@@ -97,8 +103,10 @@ def check_api_response(
     truncated_tool_call_retries: Any, current_turn_user_idx: Any, api_call_count: Any,
     api_request_id: Any, api_start_time: Any, effective_task_id: Any, turn_id: Any,
     _preflight_compression_blocked: Any, _last_preflight_pressure: Any,
+    system_message: Any = None, approx_tokens: Any = None,
+    _provider_overflow_recovery_pending: bool = False,
 ) -> ResponseCheckVerdict:
-    """Verify ``response`` in the original order. The retry buffer is NOT cleared on success
+    """Account the returned attempt before verification and recovery. The retry buffer is NOT cleared on success
     (bytes back != usable content); ``_preflight_compression_blocked``/``_last_preflight_pressure``
     reset only when the usage fold re-arms the compression budget."""
     from agent.turn_recovery import validate_response_shape
@@ -113,6 +121,8 @@ def check_api_response(
             truncated_tool_call_retries=truncated_tool_call_retries,
             _preflight_compression_blocked=_preflight_compression_blocked,
             _last_preflight_pressure=_last_preflight_pressure, api_duration=api_duration,
+            conversation_history=conversation_history, approx_tokens=approx_tokens,
+            _provider_overflow_recovery_pending=_provider_overflow_recovery_pending,
             result=result,
         )
 
@@ -127,6 +137,18 @@ def check_api_response(
     if agent.verbose_logging:
         resp_model = getattr(response, 'model', 'N/A') if response else 'N/A'
         logging.debug(f"API Response received - Model: {resp_model}, Usage: {response.usage if hasattr(response, 'usage') else 'N/A'}")
+
+    # Fold provider usage into compressor / anchors / session counters / state.db
+    # (agent/turn_usage.py). A rearmed budget also clears the preflight-block latch.
+    _usage_outcome = record_response_usage(
+        agent, response, messages=messages, api_call_count=api_call_count,
+        api_duration=api_duration, compression_attempts=compression_attempts,
+        max_compression_attempts=max_compression_attempts,
+    )
+    compression_attempts = _usage_outcome.compression_attempts
+    if _usage_outcome.rearmed:
+        _preflight_compression_blocked = False
+        _last_preflight_pressure = None
 
     response_invalid, error_details = validate_response_shape(agent, response)
     from agent.goal_pause import goal_pause_requested
@@ -166,6 +188,19 @@ def check_api_response(
     from hermes_cli.observability.shared_metrics_harness import record_reply_finish
     record_reply_finish(agent, response, finish_reason)
 
+    # A returned physical attempt is observable even when recovery discards its body.
+    # Fire before fallback/compression changes the route or the priced transcript.
+    from agent.turn_response_intake import _coerce_content_text, _fire_post_api_request_hook
+    _response_message = normalize_response_for_agent(agent, response)
+    if _response_message.content is not None and not isinstance(_response_message.content, str):
+        _response_message.content = _coerce_content_text(_response_message.content)
+    _fire_post_api_request_hook(
+        agent, response, _response_message, finish_reason,
+        api_messages=api_messages, api_call_count=api_call_count, api_duration=api_duration,
+        api_start_time=api_start_time, api_request_id=api_request_id,
+        effective_task_id=effective_task_id, turn_id=turn_id,
+    )
+
     # HTTP-200 refusals are deterministic: one fallback try, else return the refusal.
     if finish_reason == "content_filter" and not pause_pending:
         _rv = handle_content_policy_refusal(
@@ -184,7 +219,44 @@ def check_api_response(
         compression_attempts = 0
         return _verdict("break")
 
+    if finish_reason == "length" and pause_pending:
+        # A safe pause retains accepted complete batches, never a cut-off tool call.
+        # Stop here so a syntactically valid prefix cannot reach tool execution.
+        from agent.goal_pause import SAFE_PAUSE_NOTICE, SAFE_PAUSE_REASON, settle_requested_goal_pause
+        from agent.message_sanitization import close_interrupted_tool_sequence
+        settle_requested_goal_pause(agent)
+        agent._cleanup_task_resources(effective_task_id)
+        close_interrupted_tool_sequence(messages, SAFE_PAUSE_NOTICE)
+        agent._persist_session(messages, conversation_history)
+        return _verdict("return", {
+            "final_response": SAFE_PAUSE_NOTICE, "messages": messages,
+            "api_calls": api_call_count, "completed": False, "partial": True,
+            "interrupted": True, "turn_exit_reason": SAFE_PAUSE_REASON,
+        })
+
     if finish_reason == "length" and not pause_pending:
+        filled = _prompt_filled_window(agent, response)
+        if (
+            filled is not None
+            and not getattr(response, "_overflow_terminal", False)
+            and getattr(_response_message, "tool_calls", None)
+        ):
+            from agent.turn_overflow import recover_from_filled_context
+            _ov = recover_from_filled_context(
+                agent, _retry, messages=messages, api_messages=api_messages,
+                system_message=system_message, active_system_prompt=active_system_prompt,
+                conversation_history=conversation_history, prompt_tokens=filled[0],
+                compression_attempts=compression_attempts,
+                max_compression_attempts=max_compression_attempts,
+                api_call_count=api_call_count, effective_task_id=effective_task_id,
+            )
+            messages = _ov.messages
+            active_system_prompt = _ov.active_system_prompt
+            conversation_history = _ov.conversation_history
+            approx_tokens = _ov.approx_tokens
+            compression_attempts = _ov.compression_attempts
+            _provider_overflow_recovery_pending |= _ov.provider_overflow_recovery_pending
+            return _verdict(_ov.action, _ov.result)
         _tv = recover_from_truncation(
             agent, response, finish_reason, _retry, messages=messages,
             conversation_history=conversation_history, api_kwargs=api_kwargs,
@@ -203,18 +275,6 @@ def check_api_response(
         compression_attempts = _tv.compression_attempts
         if _tv.action in ("return", "break", "continue"):
             return _verdict(_tv.action, _tv.result)
-
-    # Fold provider usage into compressor / anchors / session counters / state.db
-    # (agent/turn_usage.py). A rearmed budget also clears the preflight-block latch.
-    _usage_outcome = record_response_usage(
-        agent, response, messages=messages, api_call_count=api_call_count,
-        api_duration=api_duration, compression_attempts=compression_attempts,
-        max_compression_attempts=max_compression_attempts,
-    )
-    compression_attempts = _usage_outcome.compression_attempts
-    if _usage_outcome.rearmed:
-        _preflight_compression_blocked = False
-        _last_preflight_pressure = None
 
     _retry.has_retried_429 = False
     # Clearing Nous rate-limit state proves the limit reset so other sessions may resume.

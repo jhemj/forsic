@@ -105,6 +105,31 @@ class QuestionBootstrapTests(unittest.TestCase):
         self.assertEqual(len(questions), 1)
         self.assertEqual(questions[0]['question'], config['question'] + '\n' + extra)
 
+    def test_human_followup_seeds_new_objective_and_keeps_previous_question_read_only(self):
+        self.run_bootstrap()
+        old = host.current(self.case)['questions'][0]
+        old_goal_id = goal_identity(self.goal)
+        self.goal = GoalState(goal='이 프로세스의 통신 부분을 추가 조사해 주세요', created_at=123.0,
+            runtime_followup_of=old_goal_id, runtime_followup_user_row_id=55)
+        self.session(self.sid, goal=self.goal)
+        result = self.run_bootstrap()
+        self.assertEqual(result['status'], 'saved', result)
+        self.assertTrue(result['followup'])
+        state = host.current(self.case)
+        self.assertEqual(len(state['questions']), 2)
+        self.assertEqual(next(q for q in state['questions'] if q['id'] == old['id']), old)
+        followup = next(q for q in state['questions'] if q['goal_id'] == goal_identity(self.goal))
+        self.assertEqual(followup['question'], self.goal.goal)
+        self.assertEqual(followup['scope'], self.case.config['scope'])
+        self.assertEqual(followup['answer'], bootstrap.PROVISIONAL_ANSWER)
+        self.assertEqual(followup['claim_refs'], [])
+        self.assertEqual(self.case.config['question'], '합성 기록에서 침해가 확인되는가?')
+        self.assertEqual(self.run_bootstrap()['status'], 'existing_question')
+        with self.assertRaisesRegex(ValueError, 'another native goal'):
+            host.invoke(self.case, dict(action='question', payload=dict(operation_id='old-question-edit',
+                question_id=old['id'], expected_revision=old['revision'], answer='Not an authorized transfer'),
+                _goal_id=goal_identity(self.goal), _session_id=self.sid, _question_contract='v2'))
+
     def test_other_goal_and_conversation_are_not_adopted_or_modified(self):
         self.save(goal_id='foreign-goal', conversation='foreign-session')
         old = host.current(self.case)['questions'][0]

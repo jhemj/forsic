@@ -44,7 +44,7 @@ _HOOK_TIMEOUT_BOUNDED_HOOKS: Set[str] = {
     "pre_llm_call", "post_llm_call", "pre_api_request", "post_api_request", "api_request_error",
     "pre_auxiliary_call", "post_auxiliary_call", "pre_verify", "on_session_start", "on_session_end",
     # Their callers detect missing results and surface unavailable state, never empty evidence.
-    "goal_evaluation_context", "post_context_compaction",
+    "goal_evaluation_context", "post_context_compaction", "clarification_resolved",
 }
 
 # Policy hooks: timeout / still-running must fail closed (block the tool).

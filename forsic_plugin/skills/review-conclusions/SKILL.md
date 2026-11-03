@@ -15,8 +15,18 @@ judgment and related review_responses together via forsic_question. Otherwise fo
 disposition on the same question using top-level fields and its current expected_revision. Explain the actual
 finding with selected C1/C2 evidence, or use scope_limited with an explicit limitation. Receiving advice is not
 answering it; do not accept a reviewer's premise without checking. Choose useful followup checks yourself.
+Save ready dispositions one finding at a time when the answer is unchanged; reread review_inbox after each
+successful receipt for the current revision and remaining findings. Already returned adequate citations can be
+reused. A rejected write commits none of its answer or dispositions: follow its exact recovery call, correct the
+named fields in the original draft, and confirm a receipt. Keep a material answer correction in that same question;
+an individual disposition must not replace a needed answer/gap correction. `reasoning_note` is unsupported;
+use `reason` for the correction and `judgment.reasoning_summary` for inference. C1/C2 references select citations,
+while `evidence_ids` selects retained source event IDs; preserve this distinction during repair.
 Only if forsic_review_response is absent from the session's pinned menu, use review_inbox's response_contract.legacy_input
 with the same fields under forsic_reporting(action=review_response, payload=...).
+Use the inbox's retained source lookups and existing citations before acquiring evidence again. Reading an already
+retained field is enough to recover its citation coordinates; newer source versions do not strengthen the same
+observation. Save a ready disposition without waiting for all review findings, then read the updated inbox.
 
 1. **Observation:** Compare the statement with the selected citation field's subject, object, action, result, and time.
    Commands/configuration, execution, success/effects, authorization, and attribution to a person are different
@@ -25,6 +35,10 @@ with the same fields under forsic_reporting(action=review_response, payload=...)
    preserved field; byte_preview is a byte display. Do not turn records_decoded=false into structured-record
    interpretation. Zero literal matches or omissions in partial listings do not establish absence across unchecked
    periods, expressions, or activities.
+   Separate discovered paths from body reads and interpreted behavior. observed_scope originals and
+   derived_observations describe different acquisition boundaries; neither proves an analyst reviewed everything.
+   Compare the mechanisms covered by selected scans with the actual claim. Narrow an absence claim or preserve
+   a meaningful unread lead as a gap; do not promote a familiar name or empty sample to system-wide absence.
 3. **Links:** State assumptions needed to connect observations to explanations. Compare source/clue independence
    and explanatory power; summaries, notes, or repeated queries of the same result are not independent evidence.
    Interpretation labels do not justify incorrect observations.
@@ -40,6 +54,12 @@ For discrepancies, correct the statement itself and use answer-question to corre
 answer, evidence, counterarguments, and limits together. Do not retain an earlier categorical claim by merely
 appending limitations. Distinguish retrying a failed save from actual semantic review. Preserve originals and
 pre-correction records; continue other feasible investigation work.
+Compare summary, body and technical appendix against the same current judgment. Check resolved limits
+resurfacing, administrator recovery becoming attack time, historical snapshots becoming current live state,
+unrelated citations standing in for direct support, and rows answering the wrong question. Check grammatical
+Korean outside exact quotations. A formatting-only change does not reopen an unchanged analytical question.
+After a human handoff, preserve applicable earlier review rounds and use the returned current-owner recovery
+contract; never repeatedly submit a response against a read-only historical question or restart its investigation.
 
 Judge completion through the original request, actual review scope, and value of remaining checks. Disclose
 important unreviewed material without requiring every file to be checked. File creation, successful save validation,

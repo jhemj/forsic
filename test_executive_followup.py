@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 import unittest
 import uuid
+from unittest.mock import patch
 
 from forsic_plugin import independent_review as review
 from forsic_plugin.investigation_context import resolve_context
@@ -161,6 +162,67 @@ class ExecutiveFollowupTests(unittest.TestCase):
         self.call()
         self.assertEqual(len(self.calls),3)
 
+    def test_large_expanded_citations_cannot_prevent_the_next_mandatory_round(self):
+        self.prepare()
+        for _ in range(2):
+            self.call()
+            self.answer(review.review_state(self.resolved())['pending_findings'])
+        resolved = self.resolved()
+        projection = review.review_state(resolved)
+        snapshot = review._collect(resolved, 'final', 'Current report draft')
+        expected = {}
+        for response in projection['dispositions'][-5:]:
+            expected[response['finding_id']] = {key: deepcopy(value) for key, value in response.items() if key != 'citations'}
+            # Native expanded coordinates can be much larger than exact saved
+            # reference handles. They are metadata copies, not five new answers.
+            response['citations'] = [{'literal': 'retained coordinate metadata ' * 350}]
+        before = deepcopy(projection)
+        packet = review._executive_snapshot(resolved, snapshot, 3, projection)
+        self.assertEqual(projection, before)  # Projection remains read-only.
+        self.assertLessEqual(len(packet['prompt']) + len(packet['system']), review.MAX_INPUT)
+        previous = json.loads(packet['prompt'])['executive_followup']['previous_round']
+        self.assertEqual(len(previous['questions']), 5)
+        self.assertEqual(previous['citation_projection']['expanded_coordinates_omitted'], 5)
+        for item in previous['questions']:
+            self.assertEqual(item['main_response'], expected[item['finding_id']])
+            self.assertTrue(item['main_response']['citation_refs'])
+        # The native final boundary still dispatches the required third round.
+        self.assertEqual(self.call()['status'], 'received')
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(review.review_state(resolved)['executive_followup']['rounds'][-1]['round'], 3)
+
+    def test_irreducible_packet_failure_is_explicit_nonactionable_and_does_not_dispatch(self):
+        self.prepare()
+        self.call()
+        self.answer(review.review_state(self.resolved())['pending_findings'])
+        error = ValueError('Complete executive question/answer history exceeds the review input bound')
+        with patch.object(review, '_executive_snapshot', side_effect=error):
+            result = self.call()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(result['status'], 'unavailable')
+        self.assertTrue(result['requires_followup'])
+        self.assertFalse(result['followup_actionable'])
+        self.assertEqual(result['diagnostic']['code'], 'executive_history_budget')
+        self.assertEqual(result['diagnostic']['phase'], 'final_packet')
+        self.assertEqual(result['diagnostic']['recovery']['arguments']['action'], 'review_inbox')
+        self.assertNotIn('provider', result['diagnostic']['reason'])
+
+    def test_review_progress_requires_question_changes_not_unrelated_reads_or_prose(self):
+        self.prepare()
+        self.call(draft_response='First draft')
+        before = review.review_state(self.resolved())
+        again = self.call(draft_response='Another unsupported completion claim')
+        self.assertEqual(again['progress_fingerprint'], before['progress_fingerprint'])
+        self.assertEqual(again['followup_action'], 'respond')
+        self.add_sources(1)
+        changed = review.review_state(self.resolved())
+        self.assertEqual(changed['progress_fingerprint'], before['progress_fingerprint'])
+        self.assertEqual(changed['pending_finding_ids'], before['pending_finding_ids'])
+        self.save_note(answer='Updated current answer with an explicit remaining limitation.')
+        changed = review.review_state(self.resolved())
+        self.assertNotEqual(changed['progress_fingerprint'], before['progress_fingerprint'])
+        self.assertEqual(changed['pending_finding_ids'], before['pending_finding_ids'])
+
     def test_honest_unavailable_answers_advance_but_partial_answers_do_not(self):
         self.prepare();first=self.call()
         findings=review.review_state(self.resolved())['findings']
@@ -190,6 +252,57 @@ class ExecutiveFollowupTests(unittest.TestCase):
         result=self.call()
         self.assertEqual(len(self.calls),4)
         self.assertEqual(result['executive_followup']['rounds'][0]['round'],1)
+
+    def test_completed_generic_rounds_require_current_report_review_without_restarting_dialogue(self):
+        from test_report_narrative import ReportNarrativeTests
+        from forsic_plugin.report_driven.narrative import material, status
+        from forsic_plugin.report_driven.template_contract import WRITING_ORDER, REVIEW_CHECKS
+        self.prepare()
+        for number in range(1,4):
+            self.call()
+            findings=[f for f in review.review_state(self.resolved())['findings']
+                      if f.get('executive_round')==number]
+            self.answer(findings)
+        self.assertTrue(review.review_state(self.resolved())['executive_followup']['complete'])
+        self.assertEqual(len(self.calls),3)
+        native={'_session_id':self.resolved()['conversation_id'],'_goal_id':self.resolved()['goal_id'],
+            '_independent_review_options':{'enabled':True,'executive_followup':True,'session_id':self.sid,
+                'intake_root':str(self.intake),'native_db':str(self.native)}}
+        # Main-agent document writing/review cannot certify a newer report for
+        # Ren. Its ordinary final call preserves the completed three rounds.
+        author=ReportNarrativeTests('test_native_render_requests_authored_prose_not_blank_template')
+        author.case=self.case
+        keys=[row['key'] for row in material(host.current(self.case))
+              if row['kind']=='question' or row['kind']=='gap' and row.get('impact') in ('material','decision_critical')]
+        for group in WRITING_ORDER:
+            packet=host.invoke(self.case,{'action':'compose','section':group,**native})
+            host.invoke(self.case,{'action':'compose','section':group,'operation_id':'native-author-'+group,
+                'edit_ref':packet['save_contract']['edit_ref'],'question_ids':packet['question_ids'],
+                'draft':author.draft(group,packet,keys=keys),**native})
+        packet=host.invoke(self.case,{'action':'compose','section':'review',**native})
+        host.invoke(self.case,{'action':'compose','section':'review','operation_id':'native-document-review',
+            'edit_ref':packet['save_contract']['edit_ref'],'question_ids':packet['question_ids'],
+            'review':{'summary':'Synthetic main-agent whole-document comparison against preserved evidence.',
+                'reviewed_node_ids':packet['reviewed_node_ids'],
+                'checks':[{'check':check,'result':'satisfied','reason':'Synthetic scope and uncertainty comparison.'}
+                          for check in REVIEW_CHECKS], 'comparisons':[{
+                    'node_ids':[packet['reviewed_node_ids'][0]], 'basis_keys':[],
+                    'statement':'The synthetic draft preserves an unconfirmed connection.',
+                    'source_support':'No common task identity establishes the connection.',
+                    'limits':'Authorization and final execution success remain unknown.',
+                    'assessment':'Retain the qualified account within the selected scope.'}], 'findings':[]},**native})
+        self.assertTrue(status(host.current(self.case))['ready'])
+        self.fake.side_effect=lambda **kw: fixtures.IndependentReviewTests.empty_response(self,**kw)
+        report=host.invoke(self.case,{'action':'render',**native})
+        result=host.invoke(self.case,{'action':'finalize','bundle_id':report['bundle_id'],**native})
+        self.assertEqual(result['delivery_status'],'independent_review_rerender_required')
+        self.assertIsNone(result['review']['availability_status'])
+        self.assertTrue(result['review']['final_review_current'])
+        self.assertTrue(result['review']['executive_followup']['complete'])
+        report=host.invoke(self.case,{'action':'render',**native})
+        result=host.invoke(self.case,{'action':'finalize','bundle_id':report['bundle_id'],**native})
+        self.assertTrue(result['finalized'])
+        self.assertEqual(len(self.calls),4)
 
     def test_invalid_question_count_and_duplicate_or_unpresented_anchor_never_advance(self):
         self.prepare()
@@ -234,7 +347,8 @@ class ExecutiveFollowupTests(unittest.TestCase):
         self.assertEqual(state['executive_followup']['status'],'blocked')
         self.assertEqual(state['executive_followup']['blocked_status'],'delivery_unconfirmed')
         self.assertEqual(partial['status'],'delivery_unconfirmed')
-        self.assertFalse(partial['requires_followup'])  # No endless continuation of an unknown call.
+        self.assertTrue(partial['requires_followup'])  # Still incomplete, but no model retry loop.
+        self.assertFalse(partial['followup_actionable'])
         self.assertIn('미완료',partial['context'])
         context={'enabled':True,'resolved':self.resolved()}
         disclosure=independent_review_projection(context,host.current(self.case))

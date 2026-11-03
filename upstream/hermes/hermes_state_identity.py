@@ -12,6 +12,38 @@ from agent.message_sanitization import coalesce_tool_call_id
 from hermes_state_common import _json_or
 
 
+def resolve_message_generation(conn, row_id: int, session_ids):
+    """Resolve an immutable receipt row through native compaction copies, read-only.
+
+    The caller supplies an already verified compression lineage. A physical row
+    archived as rewind-only is usable only when its durable occurrence UID still
+    has a visible latest generation. Content similarity never supplies identity.
+    Legacy stores without UIDs can certify only the original visible row.
+    """
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(messages)')}
+    fields = 'id,session_id,role,active,display_kind,display_metadata'
+    fields += ',compacted' if 'compacted' in columns else ',0 AS compacted'
+    fields += ',message_uid,content' if 'message_uid' in columns else ',NULL AS message_uid'
+    def read(query, parameters):
+        cursor = conn.execute(query, parameters)
+        names = [column[0] for column in cursor.description]
+        row = cursor.fetchone()
+        return dict(zip(names, row)) if row is not None else None
+    origin = read('SELECT ' + fields + ' FROM messages WHERE id=?', (row_id,))
+    if origin is None or origin['session_id'] not in session_ids:
+        return None
+    current = origin
+    if origin['message_uid']:
+        current = read('SELECT ' + fields + ' FROM messages WHERE message_uid=? AND session_id IN (' +
+            ','.join('?' for _ in session_ids) + ') ORDER BY id DESC LIMIT 1',
+            (origin['message_uid'], *session_ids))
+        if any(current[key] != origin[key] for key in ('role', 'content', 'display_kind')):
+            return None
+    if not (current['active'] or current['compacted']):
+        return None
+    return origin, current
+
+
 def _live_or_column(msg: Mapping[str, Any], live_key: str, column: str) -> Any:
     """Flushed dicts and batch rows carry the live key; import payloads carry the column name."""
     return msg.get(live_key) if live_key in msg else msg.get(column)

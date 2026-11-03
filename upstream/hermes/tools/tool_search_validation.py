@@ -206,7 +206,8 @@ def local_batch_error(entries: List[Dict[str, Any]]) -> str:
                  if len(entries) > 1 else "")
     return (
         f"tool_call takes exactly one entry for local tools; you sent {len(entries)}. "
-        f"Retry with only: {retry}{remaining}. Only connectors__ names may be batched together."
+        f"Retry with only: {retry}{remaining}. Separate invocations may be in the same assistant response. "
+        "Only connectors__ names may be batched together."
     )
 
 

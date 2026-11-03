@@ -7,6 +7,7 @@ import {ForsicConversation} from '@/components/ForsicConversation'
 import {ForsicRequests} from '@/components/ForsicRequests'
 import {ForsicWorkbench} from '@/components/ForsicWorkbench'
 import {ForsicConnectionCard} from '@/components/ForsicConnectionCard'
+import {ForsicRuntimeBar} from '@/components/ForsicRuntimeBar'
 import {useForsicConversation} from '@/hooks/useForsicConversation'
 import {useForsicInspector} from '@/hooks/useForsicInspector'
 import {useProfileScope} from '@/contexts/useProfileScope'
@@ -19,9 +20,9 @@ export interface ForsicReviewActivityDetail {
   profile: string; sessionId: string; caseId: string | null; active: boolean
   reviewId: string | null; startedAt: number | null; observedAt: number
 }
-export interface ChatPageProps {isActive?: boolean; navigationTarget?: HTMLElement | null; caseLabel?: string; conversationTitle?: string}
+export interface ChatPageProps {isActive?: boolean; navigationTarget?: HTMLElement | null; progressTarget?: HTMLElement | null; caseLabel?: string; conversationTitle?: string}
 
-function ConversationPage({isActive = true, navigationTarget, caseLabel, conversationTitle, sessionId, profile, expectedCaseId}: ChatPageProps & {
+function ConversationPage({isActive = true, navigationTarget, progressTarget, caseLabel, conversationTitle, sessionId, profile, expectedCaseId}: ChatPageProps & {
   sessionId: string; profile: string; expectedCaseId?: string
 }) {
   const {setTitle} = usePageHeader()
@@ -44,16 +45,20 @@ function ConversationPage({isActive = true, navigationTarget, caseLabel, convers
       window.dispatchEvent(new CustomEvent('forsic:review-activity', {detail: {...reviewSignal.current, profile, sessionId, active: false, reviewId: null, startedAt: null, observedAt: Date.now()}}))
     }
   }, [profile, sessionId])
+  const statusText = chat.control.handoff ? chat.statusText : chat.control.paused ? '일시정지됨' : chat.statusText
   return <div className="forsic-chat-page">
     <PluginSlot name="chat:top" />
     {isActive && navigationTarget && createPortal(<ForsicConnectionCard connected={chat.connected} reconnecting={chat.reconnecting} connectionText={chat.connectionText}/>, navigationTarget)}
-    <ForsicWorkbench inspector={inspector} expectedCaseId={expectedCaseId} connected={chat.connected} running={chat.running} statusText={chat.control.paused ? '일시정지됨' : chat.statusText}>
+    {isActive && progressTarget && createPortal(<ForsicRuntimeBar key={`${profile}:${sessionId}`} goal={chat.investigationGoal} connected={chat.connected}
+      work={{rows: chat.rows, running: chat.running, reconnecting: chat.reconnecting, pausing: chat.control.pausing, reviewing: Boolean(chat.reviewActivity), statusText}}/>, progressTarget)}
+    <ForsicWorkbench inspector={inspector} expectedCaseId={expectedCaseId} connected={chat.connected} running={chat.running} statusText={statusText}>
       <ForsicConversation key={`${profile}:${sessionId}`} rows={chat.rows} running={chat.running} connected={chat.connected} loading={chat.loading}
-        statusText={chat.control.paused ? '일시정지됨' : chat.statusText} error={chat.error} hasMore={chat.hasMore} onLoadEarlier={chat.onLoadEarlier}
-        onSend={chat.send} inputDisabled={chat.inputDisabled} control={chat.control} contextUsage={chat.contextUsage} recentAvgTps={chat.recentAvgTps} reviewActivity={chat.reviewActivity} connectionText={chat.connectionText}
+        statusText={statusText} error={chat.error} hasMore={chat.hasMore} onLoadEarlier={chat.onLoadEarlier}
+        onSend={chat.send} inputDisabled={chat.inputDisabled} control={chat.control.handoff ? undefined : chat.control} contextUsage={chat.contextUsage} recentAvgTps={chat.recentAvgTps} reviewActivity={chat.reviewActivity} connectionText={chat.connectionText}
         pendingContent={<ForsicRequests requests={chat.pendingRequests} pendingApproval={chat.pendingApproval?.params}
           onApproval={chat.onApproval} connected={chat.connected} />}>
-        {!chat.connected && !chat.control.paused && <div className="forsic-chat-recovery"><span>{chat.reconnecting ? '연결을 자동으로 다시 확인하고 있어요.' : '현재 연결을 다시 확인할 수 있어요.'}</span><button type="button" disabled={chat.loading} onClick={chat.reconnect}><RefreshCw size={13} />다시 연결</button></div>}
+        {chat.control.handoff && <div className="forsic-chat-recovery" role="status"><span>현재까지의 결과와 남은 한계를 정리했습니다. 추가 조사할 내용을 대화로 보내면 새 조사 시간 범위로 이어갑니다.</span></div>}
+        {!chat.connected && (!chat.control.paused || chat.control.handoff) && <div className="forsic-chat-recovery"><span>{chat.reconnecting ? '연결을 자동으로 다시 확인하고 있어요.' : '현재 연결을 다시 확인할 수 있어요.'}</span><button type="button" disabled={chat.loading} onClick={chat.reconnect}><RefreshCw size={13} />다시 연결</button></div>}
       </ForsicConversation>
     </ForsicWorkbench>
     <PluginSlot name="chat:bottom" />

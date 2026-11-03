@@ -154,10 +154,9 @@ def prepare_iteration(
     if _pre_api_steer:
         _inject_steer_after_newest_tool_result(agent, messages, _pre_api_steer)
 
-    # One-shot run-budget wrap-up notice at 80% of agent.run_budget_seconds, appended to the
-    # newest tool result; off with no budget.
-    if getattr(agent, "run_budget_seconds", None):
-        _maybe_inject_run_budget_wrapup(agent, messages)
+    # Whole-goal closing phase uses the durable clock even after a turn/profile resume.
+    # The control is a new row, never a mutation of the source tool result.
+    _maybe_inject_run_budget_wrapup(agent, messages)
 
     # Appended to the newest tool result; never a synthetic user/system row.
     _maybe_inject_iteration_budget_warning(agent, messages)
@@ -372,6 +371,13 @@ def begin_iteration(
         _turn_exit_reason = f"interrupted_by_system({_issuer})" if _issuer else "interrupted_by_user"
         if not agent.quiet_mode:
             agent._safe_print("\n⚡ Breaking out of tool loop due to interrupt...")
+        return _verdict("break")
+
+    from agent.conversation_loop import _run_budget_checkpoint_due
+    if _run_budget_checkpoint_due(agent):
+        # All accepted results are already durable. Reserve the last 5% for the
+        # existing toolless closing request; the original hard deadline still owns it.
+        _turn_exit_reason = "runtime_budget_handoff"
         return _verdict("break")
 
     # Aggregate input budget for detached auxiliary forks bounds the whole review, not

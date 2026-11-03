@@ -10,6 +10,130 @@ import time
 
 RUNTIME_BUDGET_REASON = "goal runtime budget exhausted"
 RUNTIME_HISTORY_REASON = "goal runtime history unavailable"
+RUNTIME_HANDOFF_REASON = "runtime_budget_handoff"
+RUNTIME_CHECKPOINT_FAILED_REASON = "runtime_budget_checkpoint_failed"
+RUNTIME_CHECKPOINT_THRESHOLDS = (12 * 3600, 18 * 3600)
+
+
+def runtime_checkpoint_due(state, *, now=None):
+    """Earliest unreceipted milestone; never authorize work beyond the shared cap."""
+    if (state is None or state.status != "active" or state.pause_requested
+            or runtime_remaining(state, now=now) in (None, 0)):
+        return None
+    if any(item.get("decision") == "finish" for item in state.runtime_checkpoints):
+        return None  # the model already chose closing; do not restart discovery decisions
+    seen = {item.get("threshold_seconds") for item in state.runtime_checkpoints}
+    elapsed = runtime_elapsed(state, now=now)
+    return next((threshold for threshold in RUNTIME_CHECKPOINT_THRESHOLDS
+                 if threshold < state.runtime_budget_seconds and threshold <= elapsed
+                 and threshold not in seen), None)
+
+
+def runtime_phase(state, *, now=None):
+    """Milestone choices precede closing; reserve the last 5% for a partial handoff.
+
+    This is a projection of the same durable allowance as the hard deadline, never
+    another timer or a resettable per-turn budget. Paused goals authorize no phase.
+    """
+    if state is None or state.status != "active" or state.pause_requested:
+        return None
+    remaining = runtime_remaining(state, now=now)
+    if remaining is None:
+        return None
+    if remaining <= 0:
+        return "exhausted"
+    if remaining <= state.runtime_budget_seconds * 0.05:
+        return "handoff"
+    if any(item.get("decision") == "finish" for item in state.runtime_checkpoints):
+        return "closing"
+    if runtime_checkpoint_due(state, now=now) is not None:
+        return "checkpoint"
+    return "closing" if remaining <= state.runtime_budget_seconds * 0.1 else "investigation"
+
+
+def finish_runtime_handoff(db, session_id, *, expected_goal_id, checkpoint_saved, now=None):
+    """Pause this exact goal after a closing checkpoint, without minting time or completion.
+
+    A human pause/replacement wins. The hard deadline retains priority if it elapsed
+    during checkpoint persistence. Returns the reason committed here, or None on a race.
+    """
+    from hermes_cli.goals import GoalState, _meta_key
+    expected = db.get_meta(_meta_key(session_id))
+    state = GoalState.from_json(expected) if expected else None
+    if (state is None or state.status != "active" or state.pause_requested
+            or runtime_identity(state) != expected_goal_id):
+        return None
+    if not pause_expired_runtime(state, now=now):
+        settle_runtime(state, now=now)
+        state.status, state.runtime_started_at = "paused", None
+        state.paused_reason = RUNTIME_HANDOFF_REASON if checkpoint_saved else RUNTIME_CHECKPOINT_FAILED_REASON
+        state.last_verdict = "partial" if checkpoint_saved else "checkpoint_failed"
+        state.last_reason = state.paused_reason
+        state.clear_wait()
+        state.evaluation_receipt = None
+    return state.paused_reason if db.compare_and_swap_meta(_meta_key(session_id), expected, state.to_json()) else None
+
+
+def commit_runtime_milestone(db, session_id, *, expected_goal_id, row, now=None):
+    """CAS a decision only after its native source row is durable. Safe to replay.
+
+    The row's native metadata also recovers a crash between row insert and this
+    CAS; evidence text cannot supply a decision or a goal identity.
+    """
+    from hermes_cli.goals import GoalState, _meta_key
+    from agent.message_metadata import MESSAGE_UID
+    metadata = (row.get("display_metadata") or {}).get("runtime_milestone")
+    uid = row.get(MESSAGE_UID)
+    if (not isinstance(metadata, dict) or not uid or row.get("role") != "assistant"
+            or metadata.get("goal_identity") != list(expected_goal_id)
+            or metadata.get("threshold_seconds") not in RUNTIME_CHECKPOINT_THRESHOLDS
+            or metadata.get("decision") not in {"continue", "finish"}
+            or not isinstance(metadata.get("reason"), str) or not metadata["reason"].strip()):
+        return "invalid"
+    source = next((item for item in db.get_messages(session_id)
+                   if item.get(MESSAGE_UID) == uid), None)
+    if source is None or source.get("content") != row.get("content") or source.get("display_metadata") != row.get("display_metadata"):
+        return "invalid"
+    expected = db.get_meta(_meta_key(session_id))
+    state = GoalState.from_json(expected) if expected else None
+    if (state is None or state.status != "active" or state.pause_requested
+            or runtime_identity(state) != expected_goal_id):
+        return None
+    if pause_expired_runtime(state, now=now):
+        return "exhausted" if db.compare_and_swap_meta(_meta_key(session_id), expected, state.to_json()) else None
+    threshold = metadata["threshold_seconds"]
+    existing = next((item for item in state.runtime_checkpoints if item["threshold_seconds"] == threshold), None)
+    if existing:
+        return existing["decision"] if existing["source_message_id"] == uid else None
+    if runtime_checkpoint_due(state, now=now) != threshold:
+        return None
+    settle_runtime(state, now=now)
+    state.runtime_checkpoints.append({"threshold_seconds": threshold, "decision": metadata["decision"],
+                                     "reason": metadata["reason"], "decided_at": time.time() if now is None else now,
+                                     "elapsed_seconds": state.runtime_elapsed_seconds, "source_message_id": uid})
+    state.last_verdict, state.last_reason = "continue", metadata["reason"]
+    if metadata["decision"] == "finish":
+        # Closing intent is not completion or a pause. The same native turn loop
+        # can still save, verify and render the answer/report inside its old cap.
+        state.last_verdict = "closing"
+        state.clear_wait()
+        state.evaluation_receipt = None
+    return metadata["decision"] if db.compare_and_swap_meta(_meta_key(session_id), expected, state.to_json()) else None
+
+
+def recover_runtime_milestones(db, session_id):
+    """Recover only native labelled, persisted decisions at a safe loop boundary."""
+    from hermes_cli.goals import GoalState, _meta_key
+    raw = db.get_meta(_meta_key(session_id))
+    state = GoalState.from_json(raw) if raw else None
+    if runtime_checkpoint_due(state) is None:
+        return
+    identity = runtime_identity(state)
+    for row in db.get_messages(session_id):
+        if (row.get("display_metadata") or {}).get("runtime_milestone"):
+            result = commit_runtime_milestone(db, session_id, expected_goal_id=identity, row=row)
+            if result in {"finish", "exhausted"}:
+                return
 
 
 def runtime_identity(state):

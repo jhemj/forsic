@@ -12,7 +12,7 @@ class ReportReferenceError(ValueError):
         if not isinstance(selected,list) or any(not isinstance(key,str) for key in selected):
             selected=None
         allowed = [q['id'] for q in state['questions'] if not report_scope or
-                   all(q.get(key, '') == value for key, value in report_scope.items())]
+                   question_in_scope(q, report_scope)]
         arguments = {'action': 'render'}
         if selected and set(selected) <= set(allowed):
             arguments['question_ids'] = selected
@@ -38,7 +38,23 @@ class ReportReferenceError(ValueError):
 
 
 def scope_from_args(args):
-    return {key: args.get('_' + key, '') for key in ('session_id', 'goal_id')}
+    scope = {key: args.get('_' + key, '') for key in ('session_id', 'goal_id')}
+    previous = args.get('_report_source_goal_id')
+    if previous and all(scope.values()):
+        scope['source_goal_id'] = previous
+        selected = args.get('_report_source_question_ids')
+        if isinstance(selected, list) and all(isinstance(qid, str) for qid in selected):
+            scope['source_question_ids'] = selected
+    return scope
+
+
+def question_in_scope(question, scope):
+    if not any(scope.values()):
+        return True
+    return (question.get('session_id', '') == scope.get('session_id', '')
+            and (question.get('goal_id', '') in {scope.get('goal_id', ''),
+                                                scope.get('source_goal_id', scope.get('goal_id', ''))}
+                 or question.get('id') in scope.get('source_question_ids', [])))
 
 
 def rendering_options(case, manifest):
@@ -96,7 +112,7 @@ def resolve_report(case, state, bundle_id, *, snapshot_id=None, report_scope=Non
         if 'report_scope' in manifest and manifest['report_scope'] != report_scope:
             fail('Rendered report belongs to another conversation or goal.', 'report_scope_mismatch')
         selected = [q for q in saved['questions'] if q['id'] in ids]
-        if any(any(q.get(key, '') != value for key, value in report_scope.items()) for q in selected):
+        if any(not question_in_scope(q, report_scope) for q in selected):
             fail('Rendered questions do not belong to the current conversation and goal.',
                  'report_scope_mismatch')
     try:

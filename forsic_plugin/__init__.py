@@ -90,7 +90,7 @@ def register(ctx):
     specs['indicators'] = ('Case indicators; load organize-indicators. Keep raw values/exact citations; observed is not malicious. upsert merges canonical provenance. list/get/export are offline; CSV/JSON is local, not a blocklist or delivery.', schema_properties(), ['action'])
     from .shell_workspace import schema as shell_schema
     shell_contract = shell_schema()
-    specs['shell'] = ('Isolated case terminal. run requires command; capabilities checks installed tools. triage runs one bounded selected-file profile sequentially (Windows EVTX, explicit Linux login ABI, or Linux cron/systemd configuration candidates). triage_query pages/filters its retained safe candidates by scan_id and index_sha256 without rerunning; candidates require source recheck and analyst adoption. sensitive_scan uses retained targets for local secrets/PII detection; no arbitrary command or online credential checks. /evidence is read-only; /work persists per conversation. Output is derived. Inspect execution receipts; never replay unknown work.',
+    specs['shell'] = ('Isolated case terminal. static_scan searches selected /work files with literal or strings mode and explicit no-match/missing/partial results. run requires command; capabilities checks installed tools. E01 directory inventory uses forsic_image_files(action=list, path=image, file_path=directory). triage runs one bounded selected-file profile sequentially (Windows EVTX, explicit Linux login ABI, or Linux cron/systemd configuration candidates). triage_query pages/filters its retained safe candidates by scan_id and index_sha256 without rerunning; candidates require source recheck and analyst adoption. sensitive_scan uses retained targets for local secrets/PII detection; no arbitrary command or online credential checks. /evidence is read-only; /work persists per conversation. Output is derived. Inspect execution receipts; never replay unknown work.',
                       shell_contract['properties'],shell_contract['required'])
     from .search_selection import reference_schema
     specs['search'][1]['cursor_ref'] = reference_schema()
@@ -161,10 +161,10 @@ def register(ctx):
         reference_schema['properties'],reference_schema['required'])
     from .image_reader import image_read_entry_schema
     direct_read_schema=image_read_entry_schema(allow_image_ref=True)
-    specs['image_read'] = ('Read an allocated E01 file. Select image_ref from a returned image selection, or path (E01); always supply file_path (internal) and action (read/read_bytes). Copy returned selections instead of rebuilding paths. Saved unexecuted missions use forsic_image_read_mission; new plans require exact paths.',
+    specs['image_read'] = ('Read an allocated E01 file. filesystem_view defaults to physical; explicit target reads the mounted OS/LVM filesystem without volume_offset. Select image_ref from a returned image selection, or path (E01); always supply file_path (internal) and action (read/read_bytes). Copy returned selections instead of rebuilding paths. Saved unexecuted missions use forsic_image_read_mission; new plans require exact paths.',
         direct_read_schema['properties'],direct_read_schema['required'])
     search_schema = image_search_entry_schema(allow_image_ref=True)
-    specs['image_search'] = ('Literal search of one E01 internal file/directory. Select returned image_ref or path (image), plus file_path (internal scope; / for root) and nonempty text for a new search. Copy next_call to continue; its cursor_ref restores the original query when text is omitted or empty. Zero matches covers only returned scope. No extraction/execution.', search_schema['properties'], search_schema['required'])
+    specs['image_search'] = ('Literal search of one E01 internal file/directory. filesystem_view defaults to physical; target uses the mounted OS/LVM filesystem without volume_offset. Select returned image_ref or path (image), plus file_path (internal scope; / for root) and nonempty text for a new search. Copy next_call to continue; its cursor_ref restores the original query when text is omitted or empty. Zero matches covers only returned scope. No extraction/execution.', search_schema['properties'], search_schema['required'])
     from .archive_selection import entry_schema, relist_schema
     archive_schema = entry_schema()
     specs['archive_read'] = ('Read a displayed archive_list member: copy source_ref as listing_ref and member_index. offset/length select bytes. Binding/version/image/volume/member metadata are checked; preserved metadata cannot prove unchanged contents. No extraction, execution, links, path overrides or mission required.',
@@ -185,7 +185,7 @@ def register(ctx):
     from .image_reference import reference_schema as image_reference_schema
     properties['image_ref'] = image_reference_schema()
     required = [key for key in required if key != 'path']
-    specs['image_files']=('Inspect allocated E01 volumes/directories/metadata without mounting. Select returned image_ref or explicit path; file_path is inside the image. Content: forsic_image_read; search: forsic_image_search. archive_list returns TAR/TAR.GZ indexes/source_ref for forsic_archive_read. One volume auto-selects; otherwise set volume_offset. hash covers the complete allocated file, not a slice or image container. No extraction/execution.',properties,required)
+    specs['image_files']=('E01 directory inventory: action=list, path=image, file_path=directory; copy returned paths. Use stat for one entry and volumes for discovered volumes. filesystem_view defaults to physical; target applies Dissect OS/LVM mounting without volume_offset. Archive operations require physical. Select returned image_ref or explicit path; file_path is inside the image. Content: forsic_image_read; search: forsic_image_search. archive_list returns TAR/TAR.GZ indexes/source_ref for forsic_archive_read. One volume auto-selects; otherwise set volume_offset. hash covers the complete allocated file, not a slice or image container. No extraction/execution.',properties,required)
     compact['mission']['properties']['gap_id'] = {**compact['mission']['properties']['gap_id'],
         'description': 'Copy one current unresolved question gap ID from state/gaps.'}
     compact['mission']['required'] = [*compact['mission']['required'], 'gap_id']
@@ -203,22 +203,29 @@ def register(ctx):
     properties['finding_id'] = {'type':'string','description':'review_inbox: filter one finding together with its review_id.'}
     properties['query'] = {'type':'string','minLength':1,'description':'source: literal query (up to 256 UTF-8 bytes) in one retained source_id, string fields only. Matches label body/input/metadata. Copy next_call unchanged; partial zero matches is not absence.'}
     properties['locator_cursor'] = {'type':'object','description':'source query: copy locator_cursor unchanged from next_call; include source_version. Do not combine with pointer/offset.'}
-    properties.update(pointer={'type':'string','description':'Returned JSON pointer, not a file path. state/gaps pages require current snapshot_id; source pages require source_version.'},
+    properties.update(pointer={'type':'string','description':'Returned JSON pointer, not a file path. state/gaps and compose draft pages require their returned snapshot_id; source pages require source_version. Copy returned page calls.'},
                       offset={'type':'integer','minimum':0,'description':'Collection index or scalar UTF-8 byte offset; use returned next_offset.'},
                       limit={'type':'integer','minimum':1,'description':'Up to 25 collection items or 4096 scalar UTF-8 bytes; budget may return fewer.'},
                       source_version={'type':'string','description':'Copy source.version/source_ref.version; required for source continuation.'})
     properties['source_handle'] = {'type':'string','description':'source: copy this returned selection to reuse the exact retained source and version. Replaces source_id/source_version; explicit conflicts fail. Keep pointer/query/paging from read_call/next_call.'}
-    from .report_driven.narrative import schema as narrative_schema
+    properties['representation'] = {'type':'string','enum':['shell_utf8'],
+        'description':'source only: copy readable_output_calls to page retained shell output as UTF-8. Offset is in decoded output bytes, not base64 or original evidence coordinates. This view is derived navigation, not a citation selection.'}
+    from .report_driven.narrative import input_schema as narrative_schema, review_schema as narrative_review_schema
+    from .report_driven.template_contract import GROUPS
     properties['action']['enum'].append('compose')
     properties.update(
-        section={'type':'string','enum':['summary','findings','limits'],
-                 'description':'compose: read a bounded writing packet; save fresh Korean prose for one section with draft.'},
+        evidence_keys={'type':'array','minItems':1,'maxItems':8,'uniqueItems':True,'items':{'type':'string'},
+            'description':'compose read only: choose current non-Q support keys with snapshot_id to read scoped source cards and exact originals. No automatic evidence adoption.'},
+        section={'type':'string','enum':[group[0] for group in GROUPS] + ['review'],
+                 'description':'compose: read/save one fixed v2 template group. review returns the whole-document node index and exact field/material page calls; compare material assertions with sources and limits before saving the review.'},
+        edit_ref={'type':'string','description':'compose save: copy the current server-issued edit_ref; save receipts return fresh edit_refs for the next edit. Binds case/session, material and CAS revision. Never reconstruct it.'},
         basis_id={'type':'string','description':'compose: exact current basis_id returned by the writing packet.'},
         expected_revision={'type':'integer','minimum':0,'description':'compose save: current editorial revision, independent of note revisions.'},
         operation_id={'type':'string','description':'compose save: stable unique ID; reuse only for identical retry.'},
         draft=narrative_schema(),
+        review=narrative_review_schema(),
         allow_partial={'type':'boolean','description':'render: explicitly allow a technical interim snapshot without current authored prose; not a completed reader report.'})
-    description += ' compose prepares/saves native-agent reader prose with existing judgments; no new model loop. render requests composition if prose is missing/stale. Every paragraph selects returned basis_keys; citations are numbered by the host.'
+    description += ' compose prepares/saves native-agent reader prose with existing judgments; no new model loop. render requests composition if prose is missing/stale. Every template entry selects returned basis_keys; citations are numbered by the host. Complete all fixed nodes and save section=review with dispositions before ready; unknown facts may have honest unavailable explanations.'
     specs['reporting'] = (description + ' review_inbox reads pending findings/source lookups offline. Investigate, then forsic_review_response records disposition with C1/C2 evidence or scoped limits. state is bounded: follow pointer/next_offset with snapshot_id (source_version for source). Source child read_calls select exact text or whole finite numbers for citation_ref. No evidence-tool cache reads or whole-state repeats for omitted records.', properties, required)
     # Case scope is already supplied at each native turn; refresh via the read facade.
     specs.pop('case')
@@ -242,25 +249,10 @@ def register(ctx):
     restricted_intake = ctx.get_config('remote_evidence_directory_only') is True
     early_attempts = {}
 
+    from .review_delivery import automatic_review_context
+
     def review_view(resolved):
-        # Retain every review/finding identity and disposition across review rounds.
-        value=review_state(resolved)
-        clipped=[]
-        value['pending_findings']=[{'review_id':f['review_id'],'finding_id':f['finding_id']} for f in value['pending_findings']]
-        for field in ('findings','dispositions'):
-            allowed={'review_id','finding_id','kind','impact','question','why','next_check','quote','source_id','pointer',
-                     'quote_validation','disposition','reason','limitation','citation_refs','question_id','question_revision',
-                     'review_ref','source_version','retrieval','citations'}
-            value[field]=[{k:v for k,v in item.items() if k in allowed} for item in value.get(field,[])]
-            for item in value[field]:
-                for key in ('question','why','next_check','reason','limitation','quote'):
-                    limit=500 if key=='quote' else 240
-                    text=item.get(key)
-                    if isinstance(text,str) and len(text)>limit:
-                        item[key]=text[:limit];clipped.append({'finding_id':item.get('finding_id'),'field':key,'omitted_characters':len(text)-limit})
-        value.update(role='independent_advice_not_source_evidence',clipped_fields=clipped,
-            response_instruction='Read review_inbox for complete pending questions and source lookups. After relevant investigation, save an explicit disposition with the current question revision: include review_responses in a changed answer via forsic_question, or use forsic_review_response with top-level fields. Only if forsic_review_response is absent from the pinned tool menu for this session, use review_inbox response_contract.legacy_input: forsic_reporting(action=review_response, payload=the same fields). Receiving advice is not answering it; contextual suggestions do not block completion.')
-        return value
+        return automatic_review_context(review_state(resolved))
 
     def early_review(sid,tool,args,result,binding):
         if not independent_review_enabled or binding.get('goal_status')!='active':return None
@@ -287,7 +279,7 @@ def register(ctx):
             advice=goal_advisory_context(session_id=sid,goal_id=resolved['goal_id'],goal_text=resolved['goal'].goal,
                 turns_used=1,stage='exploration',cancel_check=cancel,enabled=True,
                 executive_followup=executive_followup_enabled,**projection_options)
-        signature=_hash(advice)
+        signature=_hash({name:value for name,value in advice.items() if name!='progress_fingerprint'})
         if early_attempts.get(key)==signature:return None
         if advice['status']!='in_progress' or _receipts(resolved):early_attempts[key]=signature
         advice['role']='independent_advice_not_source_evidence'
@@ -345,6 +337,8 @@ def register(ctx):
                     target = {'question':'forsic_question','mission':'forsic_mission','assess':'forsic_assess'}.get(args.get('action'),'forsic_question')
                     raise ValueError('Use '+target+' with top-level fields. Legacy report mutations are not exposed on this native adapter.')
                 phase = "execution_or_storage"
+                if tool == 'forsic_reporting' and 'representation' in args and args.get('action') != 'source':
+                    raise ValueError('representation is only for retained source lookup')
                 if tool == 'forsic_reporting' and args.get('action') == 'case':
                     call_tool, call_args = 'forsic_case', {}
                 raw = case.invoke(call_tool, call_args, sid, request_context=request_context, tool_schemas=evidence_schemas,
@@ -392,17 +386,20 @@ def register(ctx):
                         # Advice failure must not turn a committed answer into a failed save.
                         try:
                             advice=early_review(sid,tool,args,result,request_context)
-                            if advice is not None:view['independent_review']=advice
+                            if advice is not None:view['independent_review']=automatic_review_context(advice)
                         except Exception:
-                            view['independent_review']={'provider':'forsic-independent','status':'unavailable',
+                            view['independent_review']=automatic_review_context({'provider':'forsic-independent','status':'unavailable',
                                 'requires_followup':False,'pending_finding_ids':[],
                                 'role':'independent_advice_not_source_evidence',
-                                'context':'The answer was saved. Independent review state is unavailable; inspect saved review records before deciding completion.'}
+                                'context':'The answer was saved. Independent review state is unavailable; inspect saved review records before deciding completion.'})
                     return json.dumps(view, ensure_ascii=False)
                 phase = 'input_validation'
                 if tool == 'forsic_note':
                     from .notes import model_view
                     return json.dumps(model_view(json.loads(raw), args), ensure_ascii=False)
+                if tool == 'forsic_reporting' and args.get('action') == 'finalize':
+                    from .report_driven.model_finalization import finalization_view
+                    return json.dumps(finalization_view(json.loads(raw)), ensure_ascii=False)
                 if tool in EVIDENCE_TOOLS or tool in ('forsic_image_read_mission','forsic_image_read','forsic_image_search','forsic_archive_read','forsic_archive_relist'):
                     phase = 'presentation'
                     from .model_results import evidence_view
@@ -414,7 +411,7 @@ def register(ctx):
                             'requires_followup':False,'pending_finding_ids':[],
                             'role':'independent_advice_not_source_evidence',
                             'context':'Early independent advice is unavailable; the evidence result is retained. Inspect current review state before deciding completion.'}
-                    if advice is not None:result['independent_review']=advice
+                    if advice is not None:result['independent_review']=automatic_review_context(advice)
                     return json.dumps(result, ensure_ascii=False)
                 if tool == 'forsic_reporting' and args.get('action') == 'source':
                     from .report_driven.assessment_basis import citation_choices
@@ -523,6 +520,8 @@ def register(ctx):
         from tools.skills_tool import skill_view
         selected_capabilities = capabilities()
         if not args.get('name'):
+            if 'file_path' in args:
+                return json.dumps({'error': 'Select a registered skill name before reading one of its listed references.'})
             return json.dumps({'skills': [item for item in skill_catalog if selected_capabilities.skill_enabled(item['name'])] + extension_catalog(extension_skills, intake, capabilities, session_id or task_id)}, ensure_ascii=False)
         if args.get('name') in ('report-executive', 'report-analyst') and 'file_path' not in args:
             args = {'name': 'forsic-report-driven', 'file_path': 'references/audiences.md'}
@@ -593,9 +592,14 @@ def register(ctx):
                         investigation_turn=activated or is_native_investigation_turn(resolved['goal'], user_message),
                         turn_id=kwargs.get('turn_id', ''), expected_case_id=resolved['case_id'],
                         expected_goal_id=resolved['goal_id'], expected_conversation_id=resolved['conversation_id'])
+                    if resolved['goal'] is not None and resolved['goal'].runtime_followup_of:
+                        context += ('\nThis new goal is limited to the current human follow-up. Previous scoped '
+                            'questions and report versions remain available read-only in this conversation; '
+                            'read retained sources as needed and explicitly select evidence for the new question. '
+                            'Do not resume the entire previous investigation or copy its conclusions as new evidence.')
                     if seeded.get('status') == 'unavailable':
                         context += '\nInitial question persistence: ' + json.dumps(seeded, ensure_ascii=False)
-                    elif seeded.get('status') == 'saved':
+                    elif seeded.get('status') == 'saved' and not seeded.get('followup'):
                         from .onboarding import initial_triage
                         starting_points = initial_triage(case.config, capabilities())
                         if starting_points:
@@ -701,5 +705,6 @@ def register(ctx):
         return None
     ctx.register_hook('pre_tool_call', partial(clarification_notice, 'requested'))
     ctx.register_hook('post_tool_call', partial(clarification_notice, 'resolved'))
+    ctx.register_hook('clarification_resolved', partial(clarification_notice, 'settled', tool_name='clarify'))
     for hook in ("pre_api_request", "post_api_request", "api_request_error", "pre_auxiliary_call", "post_auxiliary_call"):
         ctx.register_hook(hook, partial(receipt, hook))

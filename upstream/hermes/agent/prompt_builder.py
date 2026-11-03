@@ -424,7 +424,9 @@ PARALLEL_TOOL_CALL_GUIDANCE = (
     "read-only commands should be batched into the same assistant turn — the runtime executes independent "
     "calls concurrently, and batching avoids resending the whole conversation on every extra round-trip.\n"
     "Only serialize calls when a later call genuinely depends on an earlier call's result (e.g. you must "
-    "read a file before you can patch it). When in doubt and the calls are independent, batch them."
+    "read a file before you can patch it). For deferred local tools, send separate tool_call invocations "
+    "in that same response, each with exactly one calls entry. Only connectors__ tools may share a "
+    "multi-entry tool_call envelope; never mix connector and local tools."
 )
 
 # Execution-discipline guidance for models that abandon partial results, skip prerequisite lookups, answer

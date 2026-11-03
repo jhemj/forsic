@@ -78,8 +78,12 @@ class ReviewActionsTests(unittest.TestCase):
             source = host.invoke(self.case, self.args(**f['source_lookup']['arguments']))
             self.assertEqual(source['source_ref']['id'], origin['source_id'])
             from forsic_plugin.report_driven.model_pages import select
-            actual = select(source['result'], origin['pointer'])
+            actual = select(self.case.event(origin['source_id'])['data'], origin['pointer'])
             self.assertEqual(origin['quote'], actual if isinstance(actual, str) else review._json(actual))
+            if isinstance(actual, str):
+                page = host.invoke(self.case, self.args(action='source', source_id=origin['source_id'],
+                    source_version=source['source_ref']['version'], pointer=origin['pointer']))
+                self.assertEqual(page['text'], actual)
             self.assertEqual(origin['source_version'], review._retained_version(self.case, origin['source_id']))
 
     def test_finding_lookup_requires_owned_exact_ids_and_current_question(self):

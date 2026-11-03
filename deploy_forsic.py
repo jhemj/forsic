@@ -24,7 +24,55 @@ from urllib.parse import urlsplit
 
 PIN = 'bafb42b431fca313471958fdf77f9c30e455f86b'
 DEPENDENCIES = {'python-docx': '1.2.0', 'lxml': '6.1.3', 'python-telegram-bot': '22.8'}
-ROOT_FILES = ('test_container_start.py', 'test_initial_triage_context.py', 'test_linux_persistence.py',
+ROOT_FILES = (
+    'test_api_receipts.py',
+    'test_audience_typography.py',
+    'test_claim_evidence_binding.py',
+    'test_current_judgment_navigation.py',
+    'test_efficiency_metrics.py',
+    'test_evidence_delivery_boundary.py',
+    'test_executive_synthesis.py',
+    'test_export_triage_contract.py',
+    'test_finalization_model_view.py',
+    'test_integrated_report.py',
+    'test_judgment_claim_retention.py',
+    'test_live_connections.py',
+    'test_public_briefings.py',
+    'test_reader_report_projection.py',
+    'test_recovery_native_paths.py',
+    'test_remote_collection_routes.py',
+    'test_report_evidence_export.py',
+    'test_report_node_paging.py',
+    'test_report_reading_flow.py',
+    'test_report_reference.py',
+    'test_report_research.py',
+    'test_report_slot_traceability.py',
+    'test_report_slot_updates.py',
+    'test_report_slots.py',
+    'test_report_template_fidelity.py',
+    'test_report_template_projection.py',
+    'test_report_workspace.py',
+    'test_review_actions.py',
+    'test_review_history.py',
+    'test_review_recovery_contract.py',
+    'test_scoped_plugin_recovery.py',
+    'test_session_profile_compression.py',
+    'test_source_call_path.py',
+    'test_source_recovery_contract.py',
+    'test_terminal_recovery_contract.py',
+    'test_triage_handoff.py',
+    'test_triage_profiles.py',
+    'docs/settings.md',
+    'REPORTING_V2.txt',
+'test_current_report_contract.py', 'test_report_continuation_contract.py', 'test_report_followup.py', 'test_report_readability.py', 'test_report_quality_integration.py',
+              'test_review_input_efficiency.py', 'test_report_diagnostic_efficiency.py',
+              'test_authoring_context_diagnostics.py', 'test_tool_policy_diagnostics.py',
+              'test_reference_recovery_contract.py', 'test_native_context_transport.py', 'test_review_context_delivery.py',
+              'test_compaction_observation_recovery.py', 'test_report_followup_review.py', 'test_native_runtime_followup.py', 'test_reader_cards.py', 'test_report_resume_context.py', 'test_pending_review_context.py',
+              'test_review_scope_recovery.py', 'test_retained_navigation_recovery.py',
+              'test_review_inbox_navigation.py', 'docs/clarification.md', 'test_recovery_capabilities.py', 'test_agentic_review_saves.py', 'docs/agentic-recovery.md',
+              'test_cron_review_packet.py', 'test_retained_shell_text.py', 'test_derived_observation_scope.py',
+              'test_container_start.py', 'test_initial_triage_context.py', 'test_linux_persistence.py',
               'test_skill_proposals.py', 'test_skill_proposal_native.py', 'test_skill_proposal_api.py', 'test_task_focus.py',
               'test_telegram_clarify_native.py',
               'test_model_result_compaction.py', 'test_triage_target_contract.py',
@@ -32,7 +80,7 @@ ROOT_FILES = ('test_container_start.py', 'test_initial_triage_context.py', 'test
               'test_tenant_memory.py', 'test_tenant_ownership.py', 'test_tenant_boundaries.py',
               'docs/tenant-architecture.md', 'docs/ren-model.md',
               'test_remote_tenant_evidence.py', 'test_ren_model_connection.py',
-              'test_report_word_export.py', 'test_report_word_api.py', 'test_report_narrative.py', 'docs/report-authoring.md', 'test_reader_explanation.py', 'test_report_numbered_references.py', 'test_native_agent_options.py', 'test_repository_builder.py', 'test_management_api.py', 'test_environment_management.py', 'test_environment_support.py', 'test_extension_hub.py',
+              'test_report_word_export.py', 'test_report_word_api.py', 'test_report_narrative.py', 'test_report_retained_regions.py', 'test_report_hierarchy.py', 'docs/report-authoring.md', 'test_reader_explanation.py', 'test_report_numbered_references.py', 'test_native_agent_options.py', 'test_repository_builder.py', 'test_management_api.py', 'test_environment_management.py', 'test_environment_support.py', 'test_extension_hub.py',
               'docs/environment-management.md', 'docs/extensions/format.md',
               'docs/extensions/repository-builder.md', 'docs/roadmap/skill-creator.md',
               'test_filename_observations.py', 'test_numeric_source_citations.py', 'test_review_numeric_grounding.py', 'test_multi_image_report.py', 'test_triage_query.py', 'test_acceptance_cases.py',
@@ -67,6 +115,7 @@ ROOT_FILES = ('test_container_start.py', 'test_initial_triage_context.py', 'test
               'test_review_overlap.py', 'test_forensic_workbench.py', 'test_forensic_workbench_writer.py',
               'test_temporal_inference.py', 'test_temporal_report.py', 'test_workbench_views.py',
               'test_review_response_writer.py', 'test_independent_review_finalization.py',
+              'test_review_attempt_diagnostics.py', 'test_executive_packet_composition.py', 'test_review_packet_budget.py',
               'HARNESS_REVIEW_RECOVERY.txt',
               'test_report_projection_memory.py', 'test_report_write_status.py',
               'telegram_actions.py', 'deploy_forsic.py', 'setup_forsic.py', 'test_setup_bootstrap.py', 'test_setup.py', 'test_hosting.py',
@@ -82,13 +131,75 @@ ROOT_FILES = ('test_container_start.py', 'test_initial_triage_context.py', 'test
               'test_investigation_state.py', 'test_investigation_context.py', 'test_mission_native_tools.py',
               'test_native_goal_evaluation.py', 'test_native_tool_reload.py', 'test_current_judgment.py', 'test_direction_review.py', 'test_source_locator.py', 'test_relationship_api.py', 'test_execution_crash_windows.py',
               'test_archive_reader.py', 'test_archive_selection.py', 'test_archive_host_origin.py', 'test_image_admission.py', 'test_image_read_entry.py', 'test_mission_reference.py', 'test_efficiency_contracts.py', 'test_assessment_basis.py', 'test_retained_mission_contract.py', 'test_indicators.py', 'test_search_resume.py', 'test_log_timeline.py', 'test_indicator_integration.py')
-PUBLIC_FILES = ('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'SECURITY.md',
+PUBLIC_FILES = ('.gitattributes', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'SECURITY.md',
                 'NOTICE', 'NOTICE.txt', '.gitignore', '.dockerignore')
 REQUIRED_PUBLIC = ('README.md', 'docs/ARCHITECTURE.md', 'docs/TOOLS_AND_SKILLS.md',
                    'LICENSE', 'THIRD_PARTY_NOTICES.txt', '.gitignore', '.dockerignore')
 CONFIG_FILES = ('SOUL.md', 'AGENTS.md', 'skin.yaml', 'forsic-theme.yaml', 'config.example.yaml', 'bundled-skills/README.txt')
 FIXTURES = ('notes.txt', 'cron.log', 'change.txt')
 UPSTREAM_ADDITIONS = (
+    'tests/agent/test_compaction_notice_locale.py',
+    'tests/agent/test_failed_turn_locale.py',
+    'tests/agent/test_stream_transport_observability.py',
+    'tests/agent/test_tool_failure_rounds.py',
+    'tests/hermes_cli/test_session_live_snapshot.py',
+    'tests/tui_gateway/test_compaction_notice_locale.py',
+    'tests/tui_gateway/test_model_config_reload.py',
+    'web/public/assets/ren-reviewer.svg',
+    'web/src/components/ChatSidebar.connection.test.tsx',
+    'web/src/components/ForsicActivityMark.tsx',
+    'web/src/components/ForsicConnectionCard.tsx',
+    'web/src/components/ForsicConversation.test.tsx',
+    'web/src/components/ForsicConversation.tsx',
+    'web/src/components/ForsicHostingSettings.tsx',
+    'web/src/components/ForsicIdentity.test.tsx',
+    'web/src/components/ForsicIndicators.css',
+    'web/src/components/ForsicIndicators.tsx',
+    'web/src/components/ForsicPaneSeparator.test.tsx',
+    'web/src/components/ForsicPaneSeparator.tsx',
+    'web/src/components/ForsicRequests.test.tsx',
+    'web/src/components/ForsicRequests.tsx',
+    'web/src/components/ForsicReviewHistory.test.tsx',
+    'web/src/components/ForsicReviewHistory.tsx',
+    'web/src/components/ForsicToolCall.tsx',
+    'web/src/components/ForsicWorkbench.test.tsx',
+    'web/src/components/ForsicWorkbench.tsx',
+    'web/src/components/forsic-activity-mark.css',
+    'web/src/components/forsic-conversation.css',
+    'web/src/components/forsic-pane-separator.css',
+    'web/src/components/forsic-requests.css',
+    'web/src/components/forsic-review-history.css',
+    'web/src/components/forsic-tool-call.css',
+    'web/src/components/forsic-workbench.css',
+    'web/src/hooks/useForsicConversation.test.tsx',
+    'web/src/hooks/useForsicConversation.ts',
+    'web/src/hooks/useForsicInspector.test.tsx',
+    'web/src/hooks/useForsicInspector.ts',
+    'web/src/hooks/useForsicPaneWidth.ts',
+    'web/src/hooks/useForsicReviewHistory.test.tsx',
+    'web/src/hooks/useForsicReviewHistory.ts',
+    'web/src/lib/forsic-connection.test.ts',
+    'web/src/lib/forsic-connection.ts',
+    'web/src/lib/forsic-conversation.test.ts',
+    'web/src/lib/forsic-conversation.ts',
+    'web/src/lib/forsic-inspector.test.ts',
+    'web/src/lib/forsic-inspector.ts',
+    'web/src/lib/forsic-review-history.ts',
+    'web/src/lib/forsic-tool-copy.ts',
+    'web/src/lib/forsic-tool-detail.test.ts',
+    'web/src/lib/forsic-tool-detail.ts',
+    'web/src/pages/ForsicManagementPage.test.tsx',
+    'web/src/pages/forsic-chat-page.css',
+
+    'web/src/lib/forsic-runtime.test.ts',
+    'web/src/lib/forsic-runtime.ts',
+    'web/src/components/ForsicRuntimeBar.tsx',
+    'web/src/components/forsic-runtime-bar.css',
+    'web/src/components/ForsicRuntimeBar.test.tsx',
+    'tests/agent/test_run_budget_wrapup.py', 'tests/tui_gateway/test_runtime_handoff_followup.py',
+    'tests/tui_gateway/test_runtime_checkpoint_dispatch.py',
+    'tui_gateway/clarify_requests.py', 'tests/tui_gateway/test_clarify_background.py',
+    'tests/agent/test_context_full_tool_recovery.py',
     'tests/hermes_cli/test_runtime_custom_credentials.py',
     'agent/goal_pause.py', 'tests/agent/test_goal_safe_pause.py',
     'tests/tui_gateway/test_safe_pause_control.py',
@@ -155,6 +266,7 @@ UPSTREAM_ADDITIONS = (
     'agent/tool_argument_diagnostics.py',
     'tests/agent/test_tool_boundary_diagnostics.py',
     'tests/agent/test_tool_failure_groups.py',
+    'tests/agent/test_bridge_envelope_recovery.py', 'tests/tools/test_bridge_envelope_contract.py',
     'tests/agent/test_guardrail_notice_locale.py',
 )
 
@@ -194,8 +306,9 @@ def initial_config(base_url, model, *, wizard=False):
         'platform_toolsets': {name: ['forsic', 'clarify'] for name in ('cli', 'api', 'web', 'desktop', 'telegram')},
         'agent': {'max_turns': 64, 'api_max_retries': 1, 'auto_recovery_cycles': 0,
                   'coding_context': 'off', 'execution_guidance': False,
-                  'run_budget_seconds': 43200, 'local_stream_stale_timeout': 1800},
+                  'run_budget_seconds': 86400, 'local_stream_stale_timeout': 1800},
         'goals': {'max_turns': 32},
+        'clarify': {'background': True, 'ui_timeout': 3600},
         'tool_loop_guardrails': {'hard_stop_enabled': True,
                                 'hard_stop_after': {'exact_failure': 8, 'same_tool_failure': 8}},
         'memory': {'memory_enabled': False, 'user_profile_enabled': False, 'nudge_interval': 0},
@@ -390,6 +503,44 @@ def frontend_preflight(root):
             'builds': 0, 'model_requests': 0, 'network_requests': 0}
 
 
+def tool_search_policies(root):
+    """Describe independent profiles without exposing credentials or changing scope."""
+    try:
+        from forsic_plugin.tenants import _config
+        from tools.tool_search import ToolSearchConfig
+    except ImportError:
+        return [{'status': 'unavailable', 'reason': 'Native policy resolver dependencies unavailable'}]
+    home = Path(root) / 'state/hermes'
+    if (Path(root) / 'state').is_symlink() or home.is_symlink():
+        return [{'status': 'unavailable', 'reason': 'Profile root is not a regular managed directory'}]
+    profiles = home / 'profiles'
+    homes = [('default', home)]
+    if profiles.is_dir() and not profiles.is_symlink():
+        homes.extend((path.name, path) for path in sorted(profiles.iterdir())
+                     if path.is_dir() and not path.is_symlink())
+    result = []
+    for name, path in homes:
+        row = {'profile': name, 'config_path': str(path / 'config.yaml')}
+        try:
+            if path.is_symlink() or (path / 'config.yaml').is_symlink():
+                raise ValueError('Profile config must be a regular managed file')
+            config = _config(path)
+            tools = config.get('tools')
+            raw = tools.get('tool_search') if isinstance(tools, dict) else None
+            explicit = 'enabled' in raw if isinstance(raw, dict) else isinstance(raw, bool)
+            # Resolve only the requested scalar. Other tool settings can contain
+            # credential references and are irrelevant to this diagnostic.
+            setting = {'enabled': raw['enabled']} if isinstance(raw, dict) and explicit else raw if isinstance(raw, bool) else None
+            row.update(status='observed', enabled=ToolSearchConfig.from_raw(setting).enabled,
+                       source='profile_config' if explicit else 'native_default',
+                       activation='Any eligible deferred tool activates on/auto; off disables the bridge.')
+        except Exception:
+            # A YAML error can embed secret-bearing source lines.
+            row.update(status='unavailable', reason='Cannot inspect this profile configuration safely')
+        result.append(row)
+    return result
+
+
 def doctor(root):
     """Metadata/file checks only. No model, Telegram, network or Docker daemon calls."""
     checks = []
@@ -441,6 +592,8 @@ def doctor(root):
         # that configuration could not be checked, never its exception text.
         add('model_connection_config', False, 'cannot verify configuration with this Python; no values printed')
     return {'ready_for_manual_preflight': all(row['ok'] for row in checks), 'checks': checks,
+            'tool_search_policies': tool_search_policies(root),
+            'tool_search_policy_scope': 'Profile configuration only; active sessions may retain their existing tool menu.',
             'idle': idle_state(root), 'python': sys.executable, 'network_requests': 0, 'model_requests': 0,
             'not_verified': ['Ollama connectivity/model identity', 'Docker permission/parser image',
                              'PM selected-environment freshness', 'frontend freshness/browser behavior',

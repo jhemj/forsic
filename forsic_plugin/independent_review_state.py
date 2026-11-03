@@ -46,14 +46,28 @@ def review_state(resolved,state=None):
             'historical_review_ids':[],'stale_review_ids':[],'latest_stage':None,
             'final_review_current':False,'latest_final_review_id':'','latest_final_status':None,
             'inflight_review_ids':[],'rejected_findings':[],'invalid_dispositions':[],
-            'judgment_review_questions':[]}
+            'judgment_review_questions':[],'historical_executive_requests':[],'recovered_receipts':[]}
     try:
+        resolved = review.native_report_review_scope(resolved)
         receipts=review._receipts(resolved)
-        if not receipts:return result
+        if not receipts:
+            result.update(followup_actionable=False, followup_action='none',
+                          progress_fingerprint=review._hash({'reviews': []}))
+            if resolved.get('_report_question_ids') is not None:
+                from .investigation_context import report_followup_selection
+                previous = report_followup_selection(resolved)
+                if (previous and previous['question_ids'] == resolved['_report_question_ids']
+                        and review._report_draft(resolved, review._review_questions(resolved)) is None):
+                    result.update(requires_followup=True, followup_actionable=True, followup_action='compose_report')
+            return result
         inflight = set(review.inflight_review_ids(resolved))
+        policy, restarts = review.executive_receipt_sequence(resolved, receipts)
+        restart_ids = {request['request_id'] for _,request in restarts}
         # Avoid loading all source result bodies through the report projection.
-        questions=review._question_records(resolved) if state is None else [q for q in state.get('questions',[])
-            if q.get('goal_id')==resolved['goal_id'] and q.get('session_id') in resolved['session_lineage']]
+        permitted = review._question_records(resolved, include_report_source=resolved.get('_report_question_ids') is not None)
+        permitted_ids = {q['id'] for q in permitted}
+        questions=permitted if state is None else [q for q in state.get('questions',[])
+            if q.get('id') in permitted_ids and q.get('session_id') in resolved['session_lineage']]
         result['judgment_review_questions']=[{'question_id':q['id'],'revision':q.get('revision',q.get('version')),
             'read_call':{'tool':'forsic_reporting','arguments':{'action':'state','question_id':q['id']}}}
             for q in questions if q.get('judgment_review_required')]
@@ -74,6 +88,7 @@ def review_state(resolved,state=None):
         current=snapshot['fingerprint']
         executive=[]
         for path,request in receipts:
+            same_report_scope = request.get('report_question_ids') == resolved.get('_report_question_ids')
             rid=request['request_id'];result['review_id']=rid;result['latest_stage']=request.get('stage','checkpoint')
             response=review._response_for(path,request)
             live = not response and rid in inflight
@@ -86,11 +101,12 @@ def review_state(resolved,state=None):
                 result['historical_review_ids'].append(rid)
                 if request is receipts[-1][1]:result['status']='historical_unvalidated'
                 continue
-            if (current!=request.get('material_fingerprint') or request.get('stage')=='final'
+            if (request.get('stage') != 'final' or same_report_scope) and (
+                    current!=request.get('material_fingerprint') or request.get('stage')=='final'
                     and snapshot['evaluation_fingerprint']!=request.get('evaluation_fingerprint')):
                 result['stale_review_ids'].append(rid)
                 if request is receipts[-1][1]:result['status']='stale'
-            validated=[];parsed=False;rejected=[]
+            validated=[];parsed=False;rejected=[];body={}
             if response:
                 # Recheck the original presented values, rather than trust mutable status flags.
                 raw=response.get('raw_advice')
@@ -106,31 +122,57 @@ def review_state(resolved,state=None):
                         result['rejected_findings'].append({'review_id':rid,'index':None,'reason':str(exc)[:500],
                             'role':'rejected_advice_not_evidence',
                             'recovery':'Use retained source evidence in the current question and record an explicit limitation; do not resubmit this review.'})
+            recovered=(receipt_status=='invalid_advice' and parsed and not rejected
+                       and isinstance(json.loads(response['raw_advice']),list))
+            if recovered:
+                # Revalidate the immutable raw response against its original
+                # request. This repairs transport shape, never semantic meaning
+                # or freshness, and never refunds/repeats the recorded call.
+                result['recovered_receipts'].append({'review_id':rid,'original_status':receipt_status,
+                    'method':'lossless_array_envelope_exact_item_revalidation',
+                    'status':'received','semantic_approval':False})
+                receipt_status='received'
+                if result['status']!='stale':result['status']=receipt_status
             if receipt_status=='received' and (not parsed or rejected and not validated):
                 receipt_status='invalid_advice'
                 if result['status']!='stale':result['status']=receipt_status
-            if request.get('stage')=='final':
+            if request.get('stage')=='final' and same_report_scope and rid not in restart_ids:
                 result['latest_final_review_id']=rid
                 result['latest_final_status']=receipt_status
                 result['final_review_current']=(receipt_status=='received'
+                    and request.get('identity') == review._identity(resolved)
                     and current==request.get('material_fingerprint')
                     and snapshot['evaluation_fingerprint']==request.get('evaluation_fingerprint'))
             if request.get('executive_round'):
                 number=request['executive_round']
-                if type(number) is not int or number!=len(executive)+1 or number>review.EXECUTIVE_ROUNDS:
-                    raise ValueError('Invalid executive round sequence')
                 answered=sum((rid,f['finding_id']) in answers for f in validated)
-                executive.append({'round':number,'review_id':rid,'status':receipt_status,
+                draft = body.get('analyst_state', {}).get('report_draft')
+                entry={'round':number,'review_id':rid,'status':receipt_status,
                     'question_count':len(validated),'answered':answered,
+                    'report_context':{'question_ids':request.get('report_question_ids'),
+                        'draft_present':isinstance(draft, dict) if parsed else None,
+                        'omitted_characters':draft.get('omitted_characters') if isinstance(draft, dict) else None},
                     'complete':receipt_status=='received' and len(validated)==review.EXECUTIVE_QUESTIONS
-                               and answered==review.EXECUTIVE_QUESTIONS})
+                               and answered==review.EXECUTIVE_QUESTIONS}
+                if rid in restart_ids:
+                    result['historical_executive_requests'].append({**entry,
+                        'goal_id':request['identity']['goal_id'],
+                        'role':'historical_handoff_restart', 'policy_round_counted':False,
+                        'findings_require_explicit_disposition':True})
+                    for finding in validated:
+                        finding['executive_policy_role']='historical_handoff_restart'
+                else:
+                    executive.append(entry)
             result['findings'].extend(validated)
-            if not live and not validated and receipt_status in ('delivery_unconfirmed','incomplete','invalid_advice'):
+            availability_key=(rid,'availability-'+rid[:24])
+            if (not live and not validated and receipt_status in ('delivery_unconfirmed','incomplete','invalid_advice')
+                    or recovered and availability_key in answers):
                 result['findings'].append({'review_id':rid,'finding_id':'availability-'+rid[:24],
                     'kind':'availability','impact':'material','question':'독립 검토 결과의 이용 가능성과 현재 답의 한계를 확인하세요.',
                     'why':'검토 호출은 기록됐지만 검증 가능한 완전한 조언이 수신되지 않았습니다.',
                     'next_check':'같은 입력을 재전송하지 말고 현재 근거로 조사한 뒤 검토 제한을 명시적으로 처분하세요.',
-                    'quote_validation':'not_applicable'})
+                    'quote_validation':'not_applicable',
+                    **({'historical_after_receipt_recovery':True} if recovered else {})})
         known={(f['review_id'],f['finding_id']) for f in result['findings']}
         for key,answer in answers.items():
             if key not in known:
@@ -153,15 +195,166 @@ def review_state(resolved,state=None):
             # The requested dialogue ends after the main investigator answers
             # round three. Requiring its pre-answer fingerprint would force a
             # fourth review forever; current validated dispositions are the fence.
-            result['final_review_current']=complete and not result['judgment_review_questions']
+            latest = policy[-1][1]
+            # The conversation spans evolving questions/report selections. All
+            # fifteen dispositions remain required; current-report freshness is
+            # certified only by the latest actual selection and authored draft.
+            # Earlier missing/different report context stays visible per round.
+            current_ordinary = (result['final_review_current'] and result['latest_final_review_id'] != latest['request_id'])
+            result['final_review_current']=(complete and not result['judgment_review_questions'] and (
+                current_ordinary or latest.get('identity', {}).get('goal_id') == resolved['goal_id']
+                and latest.get('report_question_ids') == resolved.get('_report_question_ids')
+                and (resolved.get('_report_question_ids') is None or
+                     latest.get('report_draft_fingerprint') == snapshot.get('report_draft_fingerprint'))))
             if complete:result['status']='received'
             elif all(r['complete'] for r in executive):result['requires_followup']=True
+            elif blocked:
+                # A disclosed availability limit closes that finding, not the
+                # explicitly requested dialogue. Native callers pause this
+                # nonactionable incomplete state instead of judging it DONE.
+                result['requires_followup'] = True
+            if complete and resolved.get('_report_question_ids') is not None and not result['final_review_current']:
+                result['requires_followup'] = True
         if result['judgment_review_questions']:result['final_review_current']=False
+        # A native final boundary may re-enter only after durable review,
+        # current question or report changes. Unadopted reads and assistant
+        # prose are not progress on the response/finalization obligation.
+        result['progress_fingerprint'] = review._hash({
+            'evaluation': snapshot.get('evaluation_fingerprint'),
+            'report_draft': snapshot.get('report_draft_fingerprint'),
+            'questions': [{'id': q['id'], 'revision': q.get('revision', q.get('version'))} for q in questions],
+            'receipts': [{'review_id': r['request_id'], 'response': review._response_for(p, r)} for p,r in receipts],
+            'dispositions': result['dispositions'],
+            'pending': result['pending_finding_ids']})
+        action = ('respond' if result['pending_findings'] else
+                  'revise_judgment' if result['judgment_review_questions'] else
+                  'wait' if result['inflight_review_ids'] else
+                  'next_review_round' if executive and not result['executive_followup']['complete']
+                    and all(r['complete'] for r in executive) else
+                  'final_report_review' if executive and result['executive_followup']['complete']
+                    and not result['final_review_current'] else 'none')
+        if resolved.get('_report_question_ids') is not None:
+            from .investigation_context import report_followup_selection
+            previous = report_followup_selection(resolved)
+            if (previous and previous['question_ids'] == resolved['_report_question_ids']
+                    and review._report_draft(resolved, review._review_questions(resolved)) is None):
+                result['requires_followup'] = True
+                action = 'compose_report'
+        if action == 'respond' and not any(q.get('goal_id') == resolved['goal_id'] for q in questions):
+            from .question_bootstrap import continuation_question_call
+            recovery = continuation_question_call(resolved)
+            if recovery:
+                action = 'create_continuation_question'
+                result['recovery'] = recovery
+        result.update(followup_action=action, followup_actionable=action in
+                      ('respond', 'revise_judgment', 'next_review_round', 'final_report_review', 'wait', 'compose_report', 'create_continuation_question'))
         return result
-    except (OSError,ValueError,KeyError,TypeError,StopIteration,sqlite3.Error):
+    except (OSError,ValueError,KeyError,TypeError,StopIteration,sqlite3.Error) as exc:
         # Unknown read state is not evidence of no pending findings.
-        result.update(status='unavailable',requires_followup=True)
+        result.update(review._unavailable(exc, 'review_state'))
         return result
+
+
+def report_grounding(resolved, draft, max_chars=11000):
+    """Deliver the report's actual cited spans before optional inventory metadata.
+
+    Resolve current canonical observations, including retained legacy projections;
+    a latest raw report_change row is not the canonical observation registry.
+    Coordinate checks are not semantic approval or a claim of complete evidence.
+    """
+    import hashlib
+    from . import independent_review as review
+    from .notes import EVIDENCE_TOOLS
+    from .report_driven.host import current, source_record
+    from .report_driven.narrative import basis, material
+    from .report_driven.model_pages import select
+    from .report_driven.retained_scalar import citation_context, number_literal
+    actual, selected = basis(current(resolved['case']), draft['question_ids'])
+    if actual != draft['basis_id']:
+        raise ValueError('Report citation basis changed; compose/render the current selected report before final review.')
+    observations = {item['id']: item for item in selected['observations']}
+    claim_keys = {}
+    for item in material(selected):
+        if item['kind'] != 'claim':
+            continue
+        for ref in item.get('citation_refs', []):
+            if ref.get('kind') == 'observation':
+                claim_keys.setdefault(ref['id'], []).append(item['key'])
+    references = {}
+    for group in draft.get('fields', {}).values():
+        for entry in group.get('entries', []):
+            for ref in entry.get('citation_refs', []):
+                if ref.get('kind') == 'observation':
+                    key = (ref['id'], ref['version'])
+                    references[key] = None
+    result = {'role': 'report_selected_retained_spans_not_semantic_approval',
+        'semantic_validation': False, 'selected_observations': len(references),
+        'presented_observations': 0, 'omitted_observations': 0, 'unmet_expectations': [],
+        'coverage': 'Bounded selected citations only; omissions are not absent original evidence.'}
+    fields = []
+    # Give each supported claim a representative before filling multiple spans
+    # for one claim. This is deterministic sampling, not evidential weighting.
+    first = []; rest = []; represented = set()
+    for key in references:
+        keys = set(claim_keys.get(key[0], []))
+        if keys - represented:
+            first.append(key); represented.update(keys)
+        else:
+            rest.append(key)
+    with resolved['case'].connect() as db:
+        for oid, version in first + rest:
+            try:
+                observation = observations.get(oid)
+                if not observation or observation['version'] != version:
+                    raise ValueError('Selected canonical observation/version is unavailable.')
+                origin = observation['source_ref']
+                row = db.execute("SELECT kind,session,length(CAST(data AS BLOB)) FROM events WHERE id=?",
+                                 (origin['id'],)).fetchone()
+                if not row or row[0] != 'tool_result' or row[1] not in resolved['session_lineage']:
+                    raise ValueError('Selected source is outside this retained conversation.')
+                # A large result must not hide a small exact selected field.
+                # Retained result reads remain finite; never transmit whole results.
+                if row[2] > 16 * 1024 * 1024:
+                    raise ValueError('Selected source exceeds the bounded retained-result read.')
+                data = json.loads(db.execute('SELECT data FROM events WHERE id=?',(origin['id'],)).fetchone()[0])
+                if data.get('tool') not in EVIDENCE_TOOLS:
+                    raise ValueError('Selected source tool is unsupported.')
+                event = {'id': origin['id'], 'kind': row[0], 'session': row[1], 'data': data}
+                metadata = source_record(event)
+                if metadata['version'] != origin['version']:
+                    raise ValueError('Selected source version changed.')
+                pointer = observation['field_pointer']
+                value = select(data, pointer)
+                raw = (value if isinstance(value, str) else number_literal(value)).encode()
+                literal = observation['literal']; start = observation['byte_start']; end = observation['byte_end']
+                if (not isinstance(literal, str) or not literal
+                        or type(start) is not int or type(end) is not int or start < 0
+                        or end != start + len(literal.encode()) or raw[start:end] != literal.encode()
+                        or not isinstance(value, str) and (start != 0 or end != len(raw))
+                        or hashlib.sha256(literal.encode()).hexdigest() != observation['canonical_sha256']):
+                    raise ValueError('Selected literal/UTF-8 coordinates do not match.')
+                excerpt = literal[:1200] if isinstance(value, str) else literal
+                field = {'source_id': origin['id'], 'source_version': metadata['version'],
+                    'source_role': 'derived_command_output' if data['tool'] == 'forsic_shell' else metadata['source_role'],
+                    'source_result_status': 'failed_or_partial' if data.get('error') or data.get('exit_code') else 'returned',
+                    'reused_from': data.get('reused_from'),
+                    'pointer': pointer, 'value': excerpt, 'byte_start': start, 'byte_end': start+len(excerpt.encode()),
+                    'presented_view': 'exact_excerpt' if isinstance(value, str) else 'metadata',
+                    'observation_id': oid, 'basis_keys': sorted(set(claim_keys.get(oid, []))),
+                    'omitted_observation_characters': len(literal)-len(excerpt),
+                    'acquisition_context': citation_context(data, pointer)}
+                fields.append(field)
+                # Leave room for per-source envelopes and opaque review handles.
+                if len(review._json(result)) + len(review._json(fields)) + 100 * len(fields) > max_chars:
+                    fields.pop(); result['omitted_observations'] += 1
+                else:
+                    result['presented_observations'] += 1
+            except (ValueError, KeyError, TypeError, IndexError) as exc:
+                result['omitted_observations'] += 1
+                item = {'observation_id': oid, 'reason': str(exc)}
+                if len(result['unmet_expectations']) < 4:
+                    result['unmet_expectations'].append(item)
+    return result, fields
 
 
 def final_grounding(resolved,questions,max_chars=7000):

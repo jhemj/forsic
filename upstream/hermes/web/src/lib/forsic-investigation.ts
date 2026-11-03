@@ -34,13 +34,30 @@ export interface InvestigationView {
   case_id: string; session_id?: string; profile?: string; questions: InvestigationQuestion[]; sources: InvestigationSource[]; observations: InvestigationObservation[]; timeline: InvestigationTime[]
   review_questions?: InvestigationReviewQuestion[]; review_question_coverage?: {current_goal_questions?: number; historical_goal_questions?: number}; timeline_empty_reason?: string
   task_focus?: InvestigationTaskFocus
+  report_workspace?: InvestigationReportWorkspace
+  report_authoring?: InvestigationReportAuthoring
   scope?: 'case'; sessions?: InvestigationSession[]; reports?: InvestigationReport[]
   counts?: Record<string, number>; omitted_counts?: Record<string, number>; partial?: boolean
 }
 export interface InvestigationSession {id: string; label: string; available?: boolean}
 export interface InvestigationReportChange {question_id: string; title: string; kinds: string[]}
 export interface InvestigationReportFile {name: string; url: string; method?: 'POST'}
-export interface InvestigationReport {word_export?: InvestigationReportFile & {method: 'POST'}; editorial_status?: 'authored_current' | 'technical_partial'; timestamp_basis?: string; omitted_changes?: number; snapshot_id?: string; current?: boolean; comparison_status?: 'current' | 'changed' | 'unavailable'; changes?: InvestigationReportChange[]; id: string; name: string; title: string; created_at?: string; session_id?: string; scope?: string; files: InvestigationReportFile[]}
+export interface InvestigationReport {draft_revision?: number; narrative_revision?: number; draft_saved_at?: string; draft_relation?: 'same' | 'older' | 'different_scope' | 'unknown'; lifecycle?: 'saved' | 'final' | 'previous_final'; finalization?: {receipt_id: string; selected_at: string; independent_review_current: boolean; layout_status: string}; verification?: {semantic: string; layout: string}; word_export?: InvestigationReportFile & {method: 'POST'}; editorial_status?: 'authored_current' | 'technical_partial'; timestamp_basis?: string; omitted_changes?: number; snapshot_id?: string; current?: boolean; comparison_status?: 'current' | 'changed' | 'unavailable'; changes?: InvestigationReportChange[]; id: string; name: string; title: string; created_at?: string; session_id?: string; scope?: string; files: InvestigationReportFile[]}
+export interface InvestigationReportWorkspace {
+  phase: 'drafting' | 'review' | 'needs_revision' | 'ready_to_generate' | 'ready_to_finalize' | 'final_selected' | 'unavailable'
+  stage_label: string; next_step: string; completed_groups: number; total_groups: number
+  saved_report_id: string | null; final_report_id: string | null
+  draft?: {revision: number; draft_revision: number; saved_at: string | null; current: boolean | null; review_status: string; content_complete: boolean; question_ids: string[]}
+  independent_review?: {status: string; pending_count: number; review_id: string | null}
+}
+export interface InvestigationReportAuthoring {
+  saved_at?: string | null; content_complete?: boolean; read_issue?: string
+  template_version: string; status: 'ready' | 'recheck' | 'review' | 'drafting' | 'unavailable'
+  question_ids?: string[]; revision?: number | null; draft_revision?: number | null; ready?: boolean; current?: boolean | null
+  reviewed: boolean; review_status?: 'complete' | 'required' | 'needs_revision' | 'unavailable'
+  groups: {id: string; label: string; state: 'missing' | 'in_progress' | 'saved' | 'unavailable' | 'recheck' | 'ready'
+    saved_at: number | null; preview: {node_id: string; text: string; omitted_characters: number; status: 'saved' | 'unavailable'; unavailable_reason?: string; omitted_reason_characters?: number}[]; omitted_entries: number}[]
+}
 export interface InvestigationSourcePage {source_ref: InvestigationRef; text?: string; value?: unknown; retained_coverage?: unknown; acquisition_context?: unknown; items?: {pointer: string; key?: string}[]; byte_start?: number; byte_end?: number; total_bytes?: number; has_more?: boolean; next_offset?: number | null; total?: number; offset?: number}
 export interface InvestigationSourceRequest {source: InvestigationRef; pointer?: string; offset?: number}
 export function timeContext(row: InvestigationTime): InvestigationTemporal {return {...row.temporal, ...row.temporal_context}}

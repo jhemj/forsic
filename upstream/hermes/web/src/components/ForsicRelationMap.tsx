@@ -1,16 +1,14 @@
 import {useState} from 'react'
 import type {InvestigationObservation, InvestigationRef, InvestigationQuestion} from '@/lib/forsic-investigation'
-import {displayTitle, displaySummary, exactQuestionRefs, recordKey, sameRef, sessionLabel, sessionOf, type MonitorView} from './forsic-monitor'
+import {displayTitle, displaySummary, judgmentCard, exactQuestionRefs, recordKey, sameRef, sessionLabel, sessionOf, type MonitorView} from './forsic-monitor'
 
 interface Props {data: MonitorView; onSource: (source: InvestigationRef, observation?: InvestigationObservation) => void}
 const shorten = (value: string, max = 24) => value.length > max ? `${value.slice(0, max)}…` : value
-export function QuestionJudgment({question}: {question: InvestigationQuestion}) {
+export function QuestionJudgment({question, onSource}: {question: InvestigationQuestion; onSource?: (ref: InvestigationRef) => void}) {
   const explanation = question.reader_explanation
   const readable = explanation && ['current', 'provisional'].includes(explanation.status)
-  const paragraphs = readable ? explanation.paragraphs.filter(paragraph => paragraph.text.trim() !== question.answer.trim()) : []
-  const limits = [...new Set([...(question.limitations ?? []), ...(question.gaps ?? []), ...(explanation?.limitations ?? [])])]
-  const objections = [...new Set([...(question.counterarguments ?? []), ...(explanation?.counterarguments ?? [])])]
-  return <div className="fi-judgment fi-readable-judgment">
+  const {paragraphs, limits, objections, references, freshness} = judgmentCard(question)
+  return <div className="fi-judgment fi-readable-judgment" data-freshness={freshness}>
     <section className="fi-answer"><h4>현재 답</h4><p>{question.answer || '저장된 답이 없습니다.'}</p></section>
     {readable && paragraphs.length > 0 && <section className="fi-reader-explanation" aria-label="조사 판단 설명">
       <h4>{explanation.title || '판단을 이해하기 위한 설명'}</h4>
@@ -24,10 +22,14 @@ export function QuestionJudgment({question}: {question: InvestigationQuestion}) 
       </div>)}
     </section>}
     {explanation?.status === 'stale' && <p className="fi-reader-status" role="status">답·범위 또는 근거가 바뀌어 이전 설명의 갱신이 필요합니다. 위에는 현재 저장된 답을 표시합니다.</p>}
-    <div className="fi-judgment-context">
-      <section><h4>중요한 반론</h4>{objections.length ? <ul>{objections.map((item,index) => <li key={index}>{item}</li>)}</ul> : <p>별도로 저장된 반론이 없습니다.</p>}</section>
-      <section><h4>남은 한계</h4>{limits.length ? <ul>{limits.map((item,index) => <li key={index}>{item}</li>)}</ul> : <p>별도로 저장된 한계가 없습니다. 원문과 관측의 확인 범위를 함께 확인하세요.</p>}</section>
-    </div>
+    {references.length > 0 && <details className="fi-technical"><summary>현재 답에 연결된 근거 · {references.length}건</summary>{references.map(ref => <div key={`${ref.kind}:${ref.id}@${ref.version}`}>
+      {onSource ? <button type="button" className="fi-reference" onClick={() => onSource(ref)}>이 답의 출처 보기</button> : null}<code>{ref.kind} · {ref.id} · {ref.version}</code>
+    </div>)}</details>}
+    <details className="fi-technical"><summary>현재 판단의 버전</summary><code>{question.id} · {question.version}</code></details>
+    {(objections.length > 0 || limits.length > 0) && <div className="fi-judgment-context">
+      {objections.length > 0 && <section><h4>중요한 반론</h4><ul>{objections.map((item,index) => <li key={index}>{item}</li>)}</ul></section>}
+      {limits.length > 0 && <section><h4>남은 한계</h4><ul>{limits.map((item,index) => <li key={index}>{item}</li>)}</ul></section>}
+    </div>}
   </div>
 }
 export function ForsicRelationMap({data, onSource}: Props) {
@@ -47,7 +49,7 @@ export function ForsicRelationMap({data, onSource}: Props) {
   const sourceY = (index: number) => 58 + index * 64
   const observationY = (index: number) => 58 + index * 64
   return <div className="fi-map-workspace"><div className="fi-chart-toolbar"><div><span className="fi-eyebrow">판단과 근거</span><strong>질문을 중심으로 연결 보기</strong></div><span className="fi-map-count">출처 {sources.length} · 관측 {observations.length}</span></div><label className="fi-question-picker">기준 질문<select aria-label="연결 지도 기준 질문" value={recordKey(question)} onChange={event => {setQuestionKey(event.target.value); setSelected('')}}>{data.questions.map(item => <option key={recordKey(item)} value={recordKey(item)}>{item.question}</option>)}</select></label>
-    <section aria-label="사건의 현재 답"><QuestionJudgment question={question}/></section>
+    <section aria-label="사건의 현재 답"><QuestionJudgment question={question} onSource={onSource}/></section>
     <p className="fi-caption">선은 저장된 근거 참조와 출처 연결입니다. 위치와 거리는 인과관계나 신뢰도를 뜻하지 않아요.</p>
     {sourceRefs.length > 0 && <section className="fi-evidence-chain" aria-label="판단에 연결된 근거"><h4>이 판단에 연결된 근거</h4>{sourceRefs.map((ref,index) => {
       const source = data.sources.find(item => sameRef(ref,{kind:'source',...item}))

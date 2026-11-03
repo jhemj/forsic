@@ -352,8 +352,8 @@
 @media(max-width:1000px){.forsic-relation-lanes{grid-template-columns:1fr}.forsic-relation-answer{padding:16px}}
 
 /* Quiet workspace chrome: clear destinations, soft surfaces and generous reading space. */
-.forsic-sidebar{gap:24px;padding:20px 16px 16px}
-.forsic-global-nav{display:grid;grid-template-columns:1fr;gap:8px}
+.forsic-sidebar{gap:20px;padding:20px 16px 16px;container-type:inline-size}
+.forsic-global-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .forsic-global-nav .forsic-action-secondary{justify-content:flex-start;padding-left:14px;background:var(--forsic-primary);border-color:var(--forsic-primary);color:var(--forsic-primary-text);min-height:42px;font-weight:600}
 .forsic-global-nav .forsic-action-secondary:hover{background:var(--forsic-primary-hover);color:var(--forsic-primary-text)}
 .forsic-action-secondary>small{font-size:12px;font-weight:500;margin-left:auto;white-space:nowrap;opacity:.85}
@@ -485,3 +485,18 @@
 .forsic-model-test>small{flex:1;min-width:15rem;color:var(--text-muted,#888);line-height:1.6}
 .forsic-model-test>p{flex-basis:100%;margin:.15rem 0;line-height:1.6}
 .forsic-model-test-ok{color:inherit;font-weight:600}
+
+/* Main destinations remain explicit controls at every sidebar width. */
+.forsic-global-nav :is(.forsic-nav-item,.forsic-action-secondary){display:flex;align-items:center;justify-content:flex-start;gap:10px;min-height:76px;padding:14px 12px;border:1px solid var(--forsic-border);border-radius:12px;text-decoration:none;text-align:left;box-sizing:border-box}
+.forsic-global-nav .forsic-nav-item{background:var(--forsic-surface);color:var(--forsic-text)}
+.forsic-global-nav .forsic-nav-item:hover{background:var(--forsic-hover);border-color:var(--forsic-muted)}
+.forsic-global-nav .forsic-nav-item[aria-current=page]{border-color:var(--forsic-text);background:var(--forsic-inset)}
+.forsic-global-nav .forsic-action-secondary,.forsic-global-nav .forsic-action-secondary[aria-current=page]{background:var(--forsic-text);border-color:var(--forsic-text);color:var(--forsic-canvas)}
+.forsic-global-nav .forsic-action-secondary:not(:disabled):hover{background:var(--forsic-muted);border-color:var(--forsic-muted);color:var(--forsic-canvas)}
+.forsic-global-nav .forsic-action-secondary:disabled{background:var(--forsic-inset);border-color:var(--forsic-border);color:var(--forsic-muted);opacity:1;cursor:not-allowed}
+.forsic-global-nav .forsic-nav-copy{display:flex;flex-direction:column;gap:4px;min-width:0}
+.forsic-global-nav .forsic-nav-copy strong{font-size:15px;font-weight:650;line-height:1.4;white-space:normal;color:inherit}
+.forsic-global-nav .forsic-nav-copy small{font-size:12px;font-weight:400;line-height:1.4;color:inherit;opacity:.8}
+.forsic-global-nav :is(a,button):focus-visible{outline:2px solid var(--forsic-focus);outline-offset:3px}
+#forsic-progress-target:empty{display:none}
+@container(max-width:340px){.forsic-global-nav{grid-template-columns:1fr}.forsic-global-nav :is(.forsic-nav-item,.forsic-action-secondary){min-height:64px;padding:12px 14px}}

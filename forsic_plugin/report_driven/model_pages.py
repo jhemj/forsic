@@ -1,4 +1,7 @@
 """Bounded model views; full state, evidence and report/API outputs stay intact."""
+import base64
+import binascii
+import hashlib
 import json
 import re
 
@@ -10,6 +13,91 @@ def source_read_call(source, path, source_handle=None):
     selection = ({'source_handle': source_handle} if source_handle else
                  {'source_id': source['id'], 'source_version': source['version']})
     return {'action': 'source', **selection, 'pointer': path, 'offset': 0}
+
+
+def state_read_call(snapshot, path, args):
+    selection = {key: args[key] for key in ('question_id', 'question_ids') if key in args}
+    return {'tool': 'forsic_reporting', 'arguments': {
+        'action': args.get('action', 'state'), 'snapshot_id': snapshot,
+        **selection, 'pointer': path, 'offset': 0}}
+
+
+def shell_text_call(source, path, source_handle=None):
+    return {**source_read_call(source, path, source_handle), 'representation': 'shell_utf8', 'limit': 4096}
+
+
+def shell_text_page(source, data, args, handle):
+    """Decode one retained stream for reading without changing citation coordinates."""
+    if args['representation'] != 'shell_utf8':
+        raise ValueError('Unsupported retained source representation')
+    if 'query' in args or 'locator_cursor' in args:
+        raise ValueError('shell_utf8 requires a stream pointer; query uses retained scalar coordinates')
+    path = args.get('pointer')
+    if data.get('tool') != 'forsic_shell' or path not in (
+            '/raw_output/stdout_base64', '/raw_output/stderr_base64'):
+        raise ValueError('shell_utf8 requires a retained forsic_shell raw_output stream pointer')
+    encoded = select_source(source, data, path, args, handle)
+    if not isinstance(encoded, str):
+        raise ValueError('Retained shell stream is not a base64 scalar')
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        raise ValueError('Retained shell stream is not valid base64; no decoded output returned') from None
+    offset = integer(args, 'offset', 0)
+    limit = integer(args, 'limit', 2048, 4096)
+    if offset > len(raw):
+        raise ValueError('offset is beyond the decoded retained stream')
+    result = {
+        'source_ref': {'id': source['id'], 'version': source['version']},
+        **({'source_handle': handle} if handle else {}),
+        'view_kind': 'retained_shell_text', 'representation': 'shell_utf8',
+        'derived': True, 'original_evidence': False, 'coverage_not_established': True,
+        'pointer': path, 'partial_view': True,
+        'coordinate_basis': 'Decoded captured stream bytes; not UTF-8 byte coordinates of the retained base64 scalar',
+        'citation_contract': 'Readable derived projection only; no exact retained-scalar citation is issued. Use raw_read_call for unchanged base64 scalar coordinates.',
+        'raw_read_call': source_read_call(source, path, handle),
+        'decoded_total_bytes': len(raw), 'decoded_sha256': hashlib.sha256(raw).hexdigest(),
+        'capture': {key: data['raw_output'][key] for key in ('complete', 'truncated', 'limit_bytes')
+                    if key in data['raw_output']},
+        'next_call': None,
+    }
+    if size(result) > MAX_BYTES - 1000:
+        raise ValueError('Field identity exceeds the page budget')
+    try:
+        raw.decode('utf-8')
+    except UnicodeDecodeError as exc:
+        return {**result, 'status': 'not_utf8', 'invalid_byte_start': exc.start,
+                'invalid_byte_end': exc.end,
+                'meaning': 'Captured stream is not valid UTF-8. No replacement text or decoded span returned; exact bytes remain available through raw_read_call.'}
+    if any(byte < 32 and byte not in (9, 10, 13) or byte == 127 for byte in raw):
+        return {**result, 'status': 'binary_controls',
+                'meaning': 'Valid UTF-8 stream contains binary control bytes. No readable span returned; exact bytes remain available through raw_read_call.'}
+    try:
+        raw[:offset].decode('utf-8')
+    except UnicodeDecodeError:
+        raise ValueError('offset must be a decoded UTF-8 character boundary; use next_call') from None
+    # Keep decoded offsets out of the retained-scalar fields used by C1 citations.
+    continuation = {**shell_text_call(source, path, handle), 'offset': 9999999999999999999,
+                    'limit': limit}
+    end = min(len(raw), offset + limit)
+    while True:
+        try:
+            text = raw[offset:end].decode('utf-8')
+        except UnicodeDecodeError:
+            end -= 1
+            continue
+        result.update(status='readable', decoded_text=text, decoded_byte_start=offset,
+                      decoded_byte_end=end, decoded_next_offset=end if end < len(raw) else None,
+                      full_decoded_stream=offset == 0 and end == len(raw),
+                      next_call=continuation if end < len(raw) else None)
+        if size(result) <= MAX_BYTES:
+            break
+        end = offset + (end - offset) // 2
+    if end == offset and offset < len(raw):
+        raise ValueError('limit is too small for the next decoded UTF-8 character')
+    if result['next_call']:
+        result['next_call']['offset'] = end
+    return result
 
 
 def size(value):
@@ -118,6 +206,9 @@ def page(value, path, args, envelope):
         source_ref = envelope.get('source_ref')
         if source_ref and envelope.get('source_coordinate_contract'):
             entry['read_call'] = source_read_call(source_ref, pointer, envelope.get('source_handle'))
+        if envelope.get('state_coordinate_contract'):
+            entry['read_call'] = state_read_call(envelope['snapshot_id'], pointer,
+                                                envelope['read_call']['arguments'])
         if isinstance(value, dict):
             entry['key'] = key
         trial = {**result, 'items': result['items'] + [entry], 'next_offset': offset + len(result['items']) + 1}
@@ -127,6 +218,9 @@ def page(value, path, args, envelope):
             entry = descriptor(item, pointer)
             if source_ref and envelope.get('source_coordinate_contract'):
                 entry['read_call'] = source_read_call(source_ref, pointer, envelope.get('source_handle'))
+            if envelope.get('state_coordinate_contract'):
+                entry['read_call'] = state_read_call(envelope['snapshot_id'], pointer,
+                                                    envelope['read_call']['arguments'])
             if size({**result, 'items': [entry]}) > MAX_BYTES:
                 raise ValueError('Field identity exceeds the page budget')
         result['items'].append(entry)
@@ -151,6 +245,22 @@ def audit_view(audit):
 
 
 def state_view(state, audit, args):
+    try:
+        return _state_view(state, audit, args)
+    except ValueError as exc:
+        message = str(exc)
+        if isinstance(exc, RetainedSourceError):
+            raise
+        if message.startswith('State changed or snapshot_id missing'):
+            raise StateReadError(state, args, 'state_snapshot_mismatch', message) from None
+        if message in ('Pointer is absent from this retained view', 'Pointer continues beyond a scalar field') or message.startswith('Pointer is outside the selected question'):
+            raise StateReadError(state, args, 'state_pointer_absent', message) from None
+        if message.startswith(('offset is beyond', 'offset must be a UTF-8', 'Scalar values have no record offset')):
+            raise StateReadError(state, args, 'state_page_invalid', message) from None
+        raise
+
+
+def _state_view(state, audit, args):
     snapshot = state['meta']['snapshot_id']
     goal_id,session_id=args.get('_goal_id'),args.get('_session_id')
     bound=bool(goal_id and session_id)
@@ -183,7 +293,8 @@ def state_view(state, audit, args):
             'offset': 9999999999999999999, **research_selection}}
         result = page(select({'report_research': review}, path), path, args,
             {'snapshot_id': snapshot, 'view_kind': 'report_research',
-             'execution_authorized': False, 'read_call': research_call,
+             'state_coordinate_contract': 'state-coordinates-v1',
+             'execution_authorized': False, 'read_call': state_read_call(snapshot, path, args),
              'next_call': continuation_call})
         if result.get('next_offset') is not None:
             result['next_call']['arguments']['offset'] = result['next_offset']
@@ -191,19 +302,31 @@ def state_view(state, audit, args):
             result['next_call'] = None
         return result
     if question_id and args['action'] == 'state':
+        from .current_judgment import current_judgment, judgment_read_call
         index = next(i for i,q in enumerate(state['questions']) if q['id'] == question_id)
+        question = state['questions'][index]
         root = '/questions/'+str(index)
         path = args.get('pointer',root)
         if path != root and not path.startswith(root+'/'):
             raise ValueError('Pointer is outside the selected question; use its returned canonical pointer')
         if ('pointer' in args or args.get('offset',0)) and args.get('snapshot_id') != snapshot:
             raise ValueError('State changed or snapshot_id missing; read this question again before paging')
+        judgment_call = judgment_read_call(state, question)
+        judgment_path = judgment_call['arguments']['pointer']
+        derived = path == judgment_path or path.startswith(judgment_path+'/')
+        selected = (select(current_judgment(state, question), path[len(judgment_path):])
+                    if derived else select(state,path))
         continuation_call = {'tool':'forsic_reporting','arguments':{
-            'action':'state','question_id':question_id,'snapshot_id':snapshot,'pointer':path,'offset':9999999999999999999}}
-        result=page(select(state,path),path,args,{'snapshot_id':snapshot,'view_kind':'question_state',
+            'action':'state','question_id':question_id,'snapshot_id':snapshot,'pointer':path,'offset':9999999999999999999,
+            **({'limit':args['limit']} if 'limit' in args else {})}}
+        result=page(selected,path,args,{'snapshot_id':snapshot,
+            'view_kind':'current_judgment' if derived else 'question_state',
+            **({'derived':True,'original_evidence':False} if derived else {}),
+            'state_coordinate_contract':'state-coordinates-v1',
             'conversation_scope':context,'next_call':continuation_call,
-            'editable_in_current_conversation':owned(state['questions'][index]),
-            'read_call':{'tool':'forsic_reporting','arguments':{'action':'state','question_id':question_id}},
+            'editable_in_current_conversation':owned(question),
+            'read_call':state_read_call(snapshot,path,args),
+            'judgment_read_call':judgment_call,
             'gap_lookup':{'tool':'forsic_reporting','arguments':{'action':'gaps','question_id':question_id}}})
         if result.get('next_offset') is not None:
             result['next_call']['arguments']['offset']=result['next_offset']
@@ -226,6 +349,7 @@ def state_view(state, audit, args):
                 raise ValueError('Pointer is outside the selected question gaps; use its returned canonical pointer')
             selected = select(state, path)
         envelope = {'snapshot_id': snapshot, 'view_kind': 'report_state', 'conversation_scope': context,
+                    'state_coordinate_contract': 'state-coordinates-v1', 'read_call': state_read_call(snapshot, path, args),
                     'audit': audit_view(audit), 'audit_scope': 'case-wide summary, independent of this gap filter',
                     'requirement_count': len(state['requirements']), 'requirements_pointer': '/requirements',
                     'gap_scope': {'question_id': question_id, 'mode': 'explicit_question' if question_id else 'current_conversation' if bound else 'case',
@@ -247,14 +371,31 @@ def state_view(state, audit, args):
     if continuation:
         path = args.get('pointer', '/gaps' if args['action'] == 'gaps' else '')
         selected=select(state,path)
-        envelope={'snapshot_id': snapshot, 'view_kind': 'report_state','conversation_scope':context}
+        read_call = state_read_call(snapshot, path, args)
+        envelope={'snapshot_id': snapshot, 'view_kind': 'report_state','conversation_scope':context,
+                  'state_coordinate_contract': 'state-coordinates-v1', 'read_call': read_call,
+                  'next_call': {**read_call, 'arguments': {**read_call['arguments'],
+                                'offset': 9999999999999999999,
+                                **({'limit': args['limit']} if 'limit' in args else {})}}}
+        mission_call = None
         # Existing saved missions also get today's exact native entry call on lookup.
         if re.fullmatch(r'/missions/(0|[1-9][0-9]*)',path) and isinstance(selected,dict):
             from .investigation_state import image_read_reference_call
             question=next((q for q in state['questions'] if q['id']==selected['question_ref']['id']),None)
             call=image_read_reference_call(selected) if question and owned(question) and question['work_state'] in ('open','active') else None
-            if call and size(call)<MAX_BYTES-2000:envelope['next_call']=call
-        return page(selected, path, args, envelope)
+            if call and size(call)<MAX_BYTES-2000:mission_call=call
+        if mission_call:
+            # Preserve the existing mission entry contract; this change adds
+            # read navigation without replacing a previously exposed action.
+            envelope['next_call'] = mission_call
+        result = page(selected, path, args, envelope)
+        if mission_call:
+            return result
+        if result.get('next_offset') is not None:
+            result['next_call']['arguments']['offset'] = result['next_offset']
+        else:
+            result['next_call'] = mission_call
+        return result
     from .current_judgment import navigation_view
     visible_questions = [q for q in state['questions'] if owned(q) or not bound]
     questions = [dict(editable_in_current_conversation=owned(q),current_judgment=navigation_view(state,q), id=q['id'], version=q['version'], revision=q['revision'], definition_version=q['definition_version'], question_preview=q['question'][:120],
@@ -265,7 +406,9 @@ def state_view(state, audit, args):
               'status': {k: v for k, v in state['status'].items() if not isinstance(v, list)},
               'scope': descriptor(state['scope'], '/scope'), 'questions': questions},
               'audit': audit_view(audit), 'view_kind': 'overview', 'partial_view': True,
-              'sections': {k: {'count': len(v), 'pointer': '/' + k} for k, v in state.items() if isinstance(v, list)},
+              'sections': {k: {'count': len(v), 'pointer': '/' + k,
+                  'read_call': state_read_call(snapshot, '/' + k, {'action': 'state'})}
+                  for k, v in state.items() if isinstance(v, list)},
               'omitted_counts': {k: len(v) - (len(questions) if k == 'questions' else 0)
                                  for k, v in state.items() if isinstance(v, list)},
               'next_step': 'Read needed pointer with this snapshot_id, offset and limit. Previews/indexes are not original evidence; omitted records are not shown on this page; their review status belongs to the records.'}
@@ -279,7 +422,69 @@ def state_view(state, audit, args):
 
 
 class RetainedSourceError(ValueError):
-    """A rejected source read with explicit, non-executing recovery inputs."""
+    """A rejected retained-view read with explicit, non-executing recovery inputs."""
+
+
+class StateReadError(RetainedSourceError):
+    def __init__(self, state, args, code, message):
+        snapshot = state['meta']['snapshot_id']
+        selection = {key: args[key] for key in ('question_id', 'question_ids') if key in args}
+        discovery = {'tool': 'forsic_reporting', 'arguments': {
+            'action': args.get('action', 'state'), **selection}}
+        default_path = '/gaps' if args.get('action') == 'gaps' else ''
+        if args.get('action') == 'state' and args.get('question_id'):
+            default_path = next(('/questions/' + str(i) for i, question in enumerate(state['questions'])
+                                 if question['id'] == args['question_id']), '')
+        path = args.get('pointer', default_path)
+        call = discovery
+        if code == 'state_page_invalid':
+            # The path and snapshot were already validated. Reset only paging;
+            # keep the selected scope and do not substitute another record.
+            call = state_read_call(snapshot, path, args)
+        elif code == 'state_pointer_absent' and args.get('action') == 'state' and not selection:
+            parent = ''
+            for part in path[1:].split('/'):
+                candidate = parent + '/' + part
+                try:
+                    select(state, candidate)
+                except ValueError:
+                    break
+                if size(state_read_call(snapshot, candidate, args)) > 1200:
+                    break
+                parent = candidate
+            call = state_read_call(snapshot, parent, args)
+        self.details = {
+            'error_code': code,
+            'failed_state': {key: args[key] for key in
+                ('action', 'snapshot_id', 'question_id', 'question_ids', 'pointer', 'offset') if key in args},
+            'next_call': call,
+            'write_applied': False,
+            'next_step': 'Use next_call to rediscover the selected state or verified parent, then copy a returned child read_call/next_call. State indexes are navigation, not original evidence. No judgment, selected record or citation was replaced.'}
+        if args.get('action') == 'state' and args.get('question_id'):
+            question = next((q for q in state['questions'] if q['id'] == args['question_id']), None)
+            if question is not None:
+                from .current_judgment import judgment_read_call
+                self.details['judgment_read_call'] = judgment_read_call(state, question)
+        super().__init__(message + '; no state page was returned. Use the exact recovery call.')
+
+
+class SourcePageError(RetainedSourceError):
+    def __init__(self, source, args, message, handle=None):
+        self.details = {
+            'error_code': 'source_page_invalid',
+            'failed_source': failed_source(args, source['id']),
+            'next_call': source_read_call(source, args.get('pointer', ''), handle),
+            'next_step': 'The exact source version and pointer are unchanged. Read from offset 0, then copy next_call; collection offsets count children, scalar offsets count UTF-8 bytes. No citation or requested offset was silently changed.'}
+        super().__init__(message + '; no source page was returned. Use the exact recovery call.')
+
+
+def source_page(source, selected, path, args, envelope, handle):
+    try:
+        return page(selected, path, args, envelope)
+    except ValueError as exc:
+        if str(exc).startswith(('offset is beyond', 'offset must be a UTF-8', 'Scalar values have no record offset')):
+            raise SourcePageError(source, args, str(exc), handle) from None
+        raise
 
 
 def failed_source(args, source_id):
@@ -364,6 +569,10 @@ def source_view(source, data, args, *, include_acquisition_context=True, include
     if case is not None:
         from .source_handles import source_handle
         handle = source_handle(case, source)
+    if 'representation' in args:
+        if args.get('source_version') != source['version']:
+            raise SourceVersionMismatch(source['id'], args)
+        return shell_text_page(source, data, args, handle)
     if 'query' in args:
         from .source_locator import locate
         return locate(source, data, args, source_handle=handle)
@@ -393,12 +602,12 @@ def source_view(source, data, args, *, include_acquisition_context=True, include
     path = args.get('pointer', '')
     selected = select_source(source, data, path, args, handle)
     if not include_continuation:
-        return page(selected, path, args, envelope)
+        return source_page(source, selected, path, args, envelope, handle)
     # Reserve the exact continuation within the page budget, as for gap pages.
     next_call = {**source_read_call(source, path, handle), 'offset': 9999999999999999999,
                  **({'limit': args['limit']} if 'limit' in args else {})}
-    result = page(selected, path, args,
-                  {**envelope, 'paging_contract': 'source-continuation-v1', 'next_call': next_call})
+    result = source_page(source, selected, path, args,
+                  {**envelope, 'paging_contract': 'source-continuation-v1', 'next_call': next_call}, handle)
     if result.get('next_offset') is not None:
         result['next_call']['offset'] = result['next_offset']
     else:

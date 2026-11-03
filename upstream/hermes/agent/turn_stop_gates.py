@@ -31,6 +31,7 @@ class StopGateVerdict:
     final_response: Any
     pending_verification_response: Any
     pending_verification_response_previewed: Any
+    stop_reason: Optional[str] = None
 
 
 def _verify_on_stop_nudge(agent) -> Optional[str]:
@@ -92,7 +93,7 @@ def _kanban_stop_nudge(agent, messages) -> Optional[str]:
         return None
 
 
-def _goal_advisory_stop(agent, final_response):
+def _goal_advisory_stop(agent, final_response, messages=None):
     """Consult the optional goal provider before committing a final candidate.
 
     SessionDB is the native goal binding, including its owning profile. A paused,
@@ -102,11 +103,16 @@ def _goal_advisory_stop(agent, final_response):
     session_id = getattr(agent, "session_id", None)
     if db is None or not isinstance(session_id, str) or not session_id:
         return None
+    from agent.conversation_loop import _run_budget_phase
+    if _run_budget_phase(agent) in {"handoff", "exhausted"}:
+        # The reserved handoff has no further review budget. The finalizer
+        # obtains its own checkpoint if this candidate never saw that notice.
+        return None
     token = None
     try:
         from hermes_constants import set_hermes_home_override, reset_hermes_home_override
         from hermes_cli.goals import GoalState, goal_identity
-        from hermes_cli.goals_advisory import goal_advisory_result, advisory_followup_prompt
+        from hermes_cli.goals_advisory import goal_advisory_result, advisory_followup_prompt, advisory_continuation
         from agent.i18n import t
 
         expected = db.get_meta("goal:" + session_id)
@@ -130,8 +136,24 @@ def _goal_advisory_stop(agent, final_response):
             stage="final", draft_response=final_response)
         if cancelled() or not advisory["requires_followup"]:
             return None
-        return (advisory_followup_prompt(advisory["context"]),
-                t("display.notice.goal_advisory_incomplete"))
+        verdict, reason = advisory_continuation(state, advisory, final_boundary=True)
+        stopped = verdict != 'continue'
+        if stopped:
+            from hermes_cli.goals_runtime import settle_runtime
+            settle_runtime(state)
+            state.status, state.pause_requested = 'paused', False
+            state.runtime_started_at = None
+            state.last_verdict = verdict
+            state.last_reason = state.paused_reason = reason
+        # Persist against the same native goal snapshot used for dispatch. A
+        # user's pause/replacement always wins, including a race after review.
+        if not db.compare_and_swap_meta('goal:' + session_id, expected, state.to_json()):
+            return None
+        checkpoint = t("display.notice.goal_advisory_incomplete")
+        if stopped:
+            checkpoint += '\n' + reason + '\n' + advisory['context']
+        return (advisory_followup_prompt(advisory["context"], goal_text=state.goal,
+                                         followup_actions=advisory['followup_actions']), checkpoint, stopped)
     except Exception:
         logger.debug("goal advisory stop check failed", exc_info=True)
         return None
@@ -178,9 +200,9 @@ def apply_stop_gates(
             ),
         )
 
-    advisory_stop = _goal_advisory_stop(agent, final_response)
+    advisory_stop = _goal_advisory_stop(agent, final_response, messages)
     if advisory_stop:
-        nudge, checkpoint = advisory_stop
+        nudge, checkpoint, stopped = advisory_stop
         final_msg["finish_reason"] = "goal_advisory_required"
         _append_interim_answer(
             agent, final_msg, messages, conversation_history, "goal advisory interim flush failed"
@@ -191,6 +213,10 @@ def apply_stop_gates(
         # An unresolved candidate is never the budget fallback: it remains interim.
         verdict.pending_verification_response = checkpoint
         verdict.pending_verification_response_previewed = False
+        if stopped:
+            verdict.continue_turn = False
+            verdict.final_response = checkpoint
+            verdict.stop_reason = 'goal_advisory_paused'
         return verdict
 
     _verify_nudge = _verify_on_stop_nudge(agent)

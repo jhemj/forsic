@@ -352,6 +352,9 @@ def test_invalid_inflight_response_keeps_provider_diagnostic_when_pause_prevents
     manager.request_pause()
     agent.quiet_mode, agent.verbose_logging = True, False
     agent.thinking_callback = None
+    agent.context_compressor = NS()
+    agent.session_api_calls = 0
+    agent.model, agent.provider = "synthetic", "synthetic"
     agent.api_mode = "chat_completions"
     agent._get_transport = lambda: NS(validate_response=lambda response: False)
     agent._clean_error_message = lambda text: text

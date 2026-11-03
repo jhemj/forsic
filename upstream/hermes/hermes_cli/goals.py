@@ -480,11 +480,17 @@ class GoalState:
     # Binds a plugin-backed completion to what was read and revalidated. This is not a
     # transaction spanning the plugin's storage and the native goal database.
     evaluation_receipt: Optional[Dict[str, Any]] = None
+    # Native final-review re-entry fence, shared with the text stop boundary.
+    advisory_progress: Optional[Dict[str, Any]] = None
     # Pinned once per goal, never reset by turn continuation or /goal resume.
     runtime_budget_seconds: Optional[float] = None
     runtime_elapsed_seconds: float = 0.0
     runtime_started_at: Optional[float] = None
     runtime_accounting_known: bool = True
+    runtime_checkpoints: List[Dict[str, Any]] = field(default_factory=list)
+    # Explicit fresh-human follow-up origin; a new objective, never /goal resume.
+    runtime_followup_of: Optional[str] = None
+    runtime_followup_user_row_id: Optional[int] = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -514,10 +520,18 @@ class GoalState:
             waiting_reason=data.get("waiting_reason"),
             contract=GoalContract.from_dict(data.get("contract")),
             evaluation_receipt=data.get("evaluation_receipt") if isinstance(data.get("evaluation_receipt"), dict) else None,
+            advisory_progress=data.get("advisory_progress") if isinstance(data.get("advisory_progress"), dict) else None,
             runtime_budget_seconds=normalize_runtime_budget(data.get("runtime_budget_seconds")),
             runtime_elapsed_seconds=elapsed or 0.0,
             runtime_started_at=started,
             runtime_accounting_known=runtime_known,
+            runtime_checkpoints=[dict(item) for item in (data.get("runtime_checkpoints") or [])
+                                 if isinstance(item, dict) and item.get("decision") in {"continue", "finish"}
+                                 and item.get("threshold_seconds") in (43200, 64800)
+                                 and isinstance(item.get("source_message_id"), str)],
+            runtime_followup_of=(str(data["runtime_followup_of"]) if data.get("runtime_followup_of") else None),
+            runtime_followup_user_row_id=(int(data["runtime_followup_user_row_id"])
+                                         if data.get("runtime_followup_user_row_id") else None),
             gates=[
                 GoalGate.from_dict(g) for g in (data.get("gates") or [])
                 if isinstance(g, dict) and str(g.get("command") or "").strip()
@@ -1376,7 +1390,9 @@ class GoalManager:
         return _decision("paused", False, None, verdict, reason, message)
 
     @_goal_state_mutation
-    def set(self, goal: str, *, max_turns: Optional[int] = None, contract: Optional[GoalContract] = None) -> GoalState:
+    def set(self, goal: str, *, max_turns: Optional[int] = None, contract: Optional[GoalContract] = None,
+            runtime_followup_of: Optional[str] = None,
+            runtime_followup_user_row_id: Optional[int] = None) -> GoalState:
         goal = (goal or "").strip()
         if not goal:
             raise ValueError("goal text is empty")
@@ -1384,6 +1400,8 @@ class GoalManager:
             goal=goal, status="active", turns_used=0, created_at=time.time(), last_turn_at=0.0,
             max_turns=int(max_turns) if max_turns else self.default_max_turns,
             contract=contract if contract is not None else GoalContract(),
+            runtime_followup_of=runtime_followup_of,
+            runtime_followup_user_row_id=runtime_followup_user_row_id,
         )
         attach_runtime_budget(self._state, self._runtime_budget)
         return self._save()
@@ -1833,12 +1851,34 @@ class GoalManager:
             return _decision(state.status if state else None, False, None, "inactive", "no active goal", "")
         self._assert_evaluation_current()
 
+        if (turn_result or {}).get("turn_exit_reason") in {
+                "runtime_budget_handoff", "runtime_budget_checkpoint_failed", "runtime_budget_handoff_superseded"}:
+            # The native finalizer owns this partial stop and its durable CAS. It is
+            # neither DONE nor input for another advisory/judge/continuation cycle.
+            return _decision(state.status, False, None, "runtime_handoff",
+                             "Native runtime closing checkpoint; investigation remains partial.", "")
+
         # Parked on a live process or an unexpired deadline: quiesce without burning a turn.
         if self.is_waiting():
             return self._waiting_decision(state)
 
         state.turns_used += 1
         state.last_turn_at = time.time()
+
+        if (turn_result or {}).get("turn_exit_reason") == "runtime_checkpoint_decided":
+            # The main model already made this bounded milestone decision. Keep the
+            # ordinary goal dispatcher and turn limit, without a second judge call.
+            receipt = state.runtime_checkpoints[-1] if state.runtime_checkpoints else None
+            if (not receipt or receipt.get("decision") not in {"continue", "finish"}
+                    or receipt.get("source_message_id") != (turn_result or {}).get("runtime_checkpoint_source_message_id")):
+                return self._pause_decision("runtime checkpoint receipt unavailable", "checkpoint_failed",
+                                            "runtime checkpoint receipt unavailable", "")
+            state.last_verdict = "closing" if receipt["decision"] == "finish" else "continue"
+            state.last_reason = receipt["reason"]
+            if state.turns_used >= state.max_turns:
+                return self._budget_pause(state, "continue", receipt["reason"])
+            self._save()
+            return _decision("active", True, self.next_continuation_prompt(), "continue", receipt["reason"], "")
 
         # Gates run BEFORE the judge: a failing gate is deterministic evidence the goal is not done,
         # so the judge is skipped and the gate's output drives the next turn (same turn budget).
@@ -1855,19 +1895,24 @@ class GoalManager:
                 return False
             except (_StaleGoalEvaluation, _GoalRuntimeExpired):
                 return True
-        from hermes_cli.goals_advisory import goal_advisory_result, advisory_followup_prompt
+        from hermes_cli.goals_advisory import goal_advisory_result, advisory_followup_prompt, advisory_continuation, advisory_followup_reason
         advisory = goal_advisory_result(session_id=self.session_id, goal_id=goal_id,
             goal_text=state.goal, turns_used=state.turns_used, cancel_check=cancelled)
         self._assert_evaluation_current()
         advice = advisory['context']
         if advisory['requires_followup']:
-            reason = "Independent advisory findings await main-agent handling."
+            verdict, diagnostic = advisory_continuation(state, advisory)
+            if verdict != 'continue':
+                return self._pause_decision(diagnostic, verdict, diagnostic,
+                    '⏸ Goal incomplete — ' + diagnostic + '\n' + advice)
+            reason = advisory_followup_reason(advisory)
             state.last_verdict, state.last_reason = "continue", reason
             if state.turns_used >= state.max_turns:
                 return self._budget_pause(state, "continue", reason)
             self._save()
             return _decision("active", True, self.next_continuation_prompt()
-                             + "\n\n" + advisory_followup_prompt(advice), "continue", reason,
+                             + "\n\n" + advisory_followup_prompt(advice, goal_text=state.goal,
+                                                               followup_actions=advisory['followup_actions']), "continue", reason,
                              f"↻ Continuing toward goal ({state.turns_used}/{state.max_turns}): {reason}")
         try:
             # Advisory and durable state share the existing judge input budget.

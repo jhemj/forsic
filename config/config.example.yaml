@@ -12,6 +12,8 @@ providers:
 tools:
   tool_search: {enabled: off}
 reasoning: {enabled: false}
+# Native human-input wait: timeout leaves the question unanswered, never approved.
+clarify: {background: true, ui_timeout: 3600}
 auxiliary:
   report_review: {timeout: 1800}
   goal_judge: {provider: custom, model: qwen3.8:latest, base_url:
@@ -37,7 +39,7 @@ agent:
   api_max_retries: 1
   auto_recovery_cycles: 0
   # Whole native goal allowance; continuation/restart do not renew it. Pause freezes it.
-  run_budget_seconds: 43200
+  run_budget_seconds: 86400
   local_stream_stale_timeout: 1800
 goals: {max_turns: 32}
 tool_loop_guardrails:

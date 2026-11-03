@@ -28,6 +28,15 @@ class QuestionReferenceIntegrationTests(unittest.TestCase):
     def call(self, name, args):
         return json.loads(self.handlers[name](args, session_id=self.f.sid))
 
+    def read_items(self,call):
+        items=[]
+        while call is not None:
+            page=self.call(call['tool'],call['arguments'])
+            self.assertNotIn('error',page,page)
+            items.extend(page['items'])
+            call=page.get('next_call')
+        return items
+
     def test_real_registered_turn_seeds_once_but_status_and_projection_do_not(self):
         f = self.f
         self.before(session_id=f.sid, user_message='진행 상황만 알려줘', platform='tui', turn_id='status')
@@ -41,7 +50,19 @@ class QuestionReferenceIntegrationTests(unittest.TestCase):
         self.assertEqual(q['answer'], question_fixture.bootstrap.PROVISIONAL_ANSWER)
         self.assertEqual(q['claim_refs'], [])
         self.assertIn(q['id'], out['context'])
-        self.assertIn(q['id'], json.dumps(self.call('forsic_reporting', {'action': 'state'})))
+        overview=self.call('forsic_reporting',{'action':'state'})
+        self.assertEqual(overview['conversation_scope']['owned_question_count'],1)
+        section=overview['sections']['questions']
+        self.assertEqual(section['count'],1)
+        rows=self.read_items(section['read_call'])
+        self.assertEqual(len(rows),1)
+        selected=rows[0]
+        self.assertEqual(selected.get('value',selected.get('ref',{}))['id'],q['id'])
+        fields={item['key']:item.get('value') for item in self.read_items(selected['read_call'])}
+        self.assertEqual(fields['id'],q['id'])
+        self.assertEqual(fields['answer'],question_fixture.bootstrap.PROVISIONAL_ANSWER)
+        self.assertEqual((fields['goal_id'],fields['session_id']),(q['goal_id'],f.sid))
+        self.assertEqual(fields['claim_refs'],[])
         self.before(session_id=f.sid, user_message=f.goal.goal, platform='tui', turn_id='resume')
         self.assertEqual(host.current(f.case)['questions'], state['questions'])
         from forsic_plugin.investigation_context import post_context_compaction

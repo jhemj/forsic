@@ -115,7 +115,9 @@ class Intake:
         if state['stage'] == 'goal_manual':
             return 'This host does not support automatic goal submission. Ask the user in Korean to enter /goal 종합 침해 분석 in the Forsic chat. Do not claim that execution started automatically.'
         if state['stage'] in ('goal_queued', 'goal_active'):
-            return 'The session has a selected comprehensive investigation and a bound case. Continue the existing question; follow native goal execution and pause state.'
+            # Intake survives later native goals. It owns the evidence binding,
+            # not the current objective, so it must not revive the first task.
+            return 'Evidence intake is complete and the case is bound to this session. Current work and pause state are defined by the native goal.'
         return 'Intake stage: ' + state['stage'] + '. Check the current case with forsic_reporting(action="case"). When awaiting a question, show these Korean options verbatim and also accept a free-form question: ' + json.dumps(OPTIONS, ensure_ascii=False)
 
     def inspect(self, session, args, *, allowed_root=None):

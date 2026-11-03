@@ -4,14 +4,15 @@ import {fetchJSON} from '@/lib/api'
 import type {InvestigationSourcePage, InvestigationSourceRequest, InvestigationView} from '@/lib/forsic-investigation'
 
 interface Options {sessionId?: string; profile?: string; caseId?: string; active: boolean}
-interface Snapshot {scope: string; data: InvestigationView | null; loading: boolean; error: string | null}
-const empty = (scope: string): Snapshot => ({scope, data: null, loading: false, error: null})
+interface Snapshot {scope: string; data: InvestigationView | null; loading: boolean; error: string | null; lastCheckedAt: string | null}
+const empty = (scope: string): Snapshot => ({scope, data: null, loading: false, error: null, lastCheckedAt: null})
 
 /** A real conversation authorizes a read-only, case-wide snapshot. */
 export function useForsicInvestigation({sessionId, profile, caseId: expectedCaseId, active}: Options) {
   const tenant=useTenant()
   const scope = `${profile ?? ''}\0${tenant?.tenant_id??''}\0${sessionId ?? ''}`
   const [snapshot, setSnapshot] = useState<Snapshot>(() => empty(scope))
+  const inFlight = useRef<{generation: number; controller: AbortController; promise: Promise<void>} | null>(null)
   const generation = useRef(0)
   const sourceEpoch = useRef(0)
   const selected = useRef({scope, active})
@@ -24,15 +25,22 @@ export function useForsicInvestigation({sessionId, profile, caseId: expectedCase
     selected.current = {scope, active}
     ++generation.current
     const epoch = ++sourceEpoch.current
-    return () => {selected.current = {scope, active: false}; sourceEpoch.current = epoch + 1}
+    return () => {selected.current = {scope, active: false}; sourceEpoch.current = epoch + 1; inFlight.current?.controller.abort()}
   }, [scope, active, expectedCaseId])
-  const refresh = useCallback(async () => {
-    if (!active || !sessionId || profile === undefined) return
-    const current = ++generation.current
+  const refresh = useCallback((): Promise<void> => {
+    if (!active || !sessionId || profile === undefined) return Promise.resolve()
+    if (inFlight.current?.generation === generation.current) return inFlight.current.promise
+    const current = generation.current
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 45000)
+    const promise = (async () => {
     setSnapshot(previous => ({...(sameCase(previous) ? previous : empty(scope)), loading: true, error: null}))
     const query = new URLSearchParams({session_id: sessionId, profile})
     try {
-      const data = await fetchJSON<InvestigationView>(`/api/plugins/forsic/investigation-view?${query}`)
+      const data = await Promise.race([
+        fetchJSON<InvestigationView>(`/api/plugins/forsic/investigation-view?${query}`, {signal: controller.signal}),
+        new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('State check cancelled or timed out')), {once: true})),
+      ])
       if (current !== generation.current || selected.current.scope !== scope || !selected.current.active) return
       if (!data.case_id || !Array.isArray(data.questions) || !Array.isArray(data.observations) || !Array.isArray(data.sources) || !Array.isArray(data.timeline) ||
         (data.session_id !== undefined && data.session_id !== sessionId) || (data.profile !== undefined && data.profile !== profile) ||
@@ -40,11 +48,17 @@ export function useForsicInvestigation({sessionId, profile, caseId: expectedCase
         setSnapshot({...empty(scope), error: 'Investigation identity mismatch'})
         return
       }
-      setSnapshot({scope, data, loading: false, error: null})
+      setSnapshot({scope, data, loading: false, error: null, lastCheckedAt: new Date().toISOString()})
     } catch {
       if (current !== generation.current || selected.current.scope !== scope || !selected.current.active) return
       setSnapshot(previous => ({...(sameCase(previous) ? previous : empty(scope)), loading: false, error: 'Investigation records unavailable'}))
+    } finally {
+      clearTimeout(timeout)
+      if (inFlight.current?.generation === current) inFlight.current = null
     }
+    })()
+    inFlight.current = {generation: current, controller, promise}
+    return promise
   }, [active, profile, scope, sessionId, expectedCaseId, sameCase])
   useEffect(() => {
     if (!active) return

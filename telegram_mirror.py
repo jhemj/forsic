@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
+import uuid
 
 from forsic_plugin.intake import write_json
 from forsic_plugin.investigations import Investigations, readonly
@@ -16,13 +17,12 @@ from forsic_plugin.investigations import Investigations, readonly
 POLICY = 'important-only-v1'
 
 
-def record_clarification(case, phase, tool_name, args=None, result=None, tool_call_id='', session_id='', **kwargs):
-    """Observe the native user-input tool; investigation notes are not requests.
-
-    This hook never approves, changes a tool call, answers a form or starts work.
-    The terminal observer resolves even blocked/cancelled requests.
-    """
-    if tool_name != 'clarify' or phase not in ('requested', 'resolved') or not tool_call_id or not session_id:
+def record_clarification(case, phase, tool_name, args=None, result=None, tool_call_id='', session_id='',
+                         server_request_id='', **kwargs):
+    """Observe native clarification without storing answers or changing its lifecycle."""
+    if tool_name != 'clarify' or not session_id or phase not in ('requested', 'resolved', 'settled'):
+        return
+    if phase != 'settled' and not tool_call_id:
         return
     native = {key: kwargs.get(key, '') for key in ('turn_id', 'api_request_id')}
     native.update(tool_call_id=tool_call_id, session_id=session_id)
@@ -33,7 +33,49 @@ def record_clarification(case, phase, tool_name, args=None, result=None, tool_ca
         questions, error = _normalize_questions((args or {}).get('questions'))
         if error: return
         value['questions'] = [{key: item[key] for key in ('question', 'choices')} for item in questions]
-    case.record('user_input_' + phase, value, session_id)
+        case.record('user_input_requested', value, session_id)
+        return
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            result = {}
+    result = result if isinstance(result, dict) else {}
+    server_request_id = server_request_id or result.get('server_request_id')
+    if phase == 'settled' and (not server_request_id or result.get('outcome') == 'pending'):
+        return
+    if server_request_id:
+        value['server_request_id'] = server_request_id
+    # Metadata only: user responses remain in native session history.
+    settlement = {'outcome': result['outcome']} if 'outcome' in result else {}
+    if phase == 'resolved' and result.get('outcome') != 'pending':
+        case.record('user_input_resolved', {**value, **settlement}, session_id)
+        return
+    if not server_request_id:
+        return
+    with case.connect() as db:
+        # The native callback can finish before the tool-return hook links its id.
+        # Serialize both observers using the existing case event transaction.
+        db.execute('BEGIN IMMEDIATE')
+        def append(kind, data):
+            db.execute('INSERT INTO events VALUES (?,?,?,?,?)',
+                       (uuid.uuid4().hex, time.time(), kind, session_id, json.dumps(data, ensure_ascii=False)))
+        def matching(kind):
+            row = db.execute("SELECT data FROM events WHERE kind=? AND session=? "
+                "AND json_extract(data,'$.server_request_id')=? ORDER BY rowid DESC LIMIT 1",
+                (kind, session_id, server_request_id)).fetchone()
+            return json.loads(row['data']) if row else None
+        if phase == 'resolved':
+            append('user_input_pending', value)
+            received = matching('user_input_resolution_received')
+            if received and not matching('user_input_resolved'):
+                append('user_input_resolved', {**value, 'outcome': received.get('outcome')})
+        elif not matching('user_input_resolved'):
+            pending = matching('user_input_pending')
+            if pending:
+                append('user_input_resolved', {**pending, **settlement})
+            elif not matching('user_input_resolution_received'):
+                append('user_input_resolution_received', {'server_request_id': server_request_id, **settlement})
 
 
 def important_judgment(current, previous):
@@ -266,7 +308,8 @@ class Mirror:
                     if row['kind'] == 'user_input_requested':
                         if row['session'] not in sessions: continue
                         resolved = db.execute("SELECT 1 FROM events WHERE kind='user_input_resolved' "
-                            "AND json_extract(data,'$.request_id')=? LIMIT 1", (data['request_id'],)).fetchone()
+                            "AND session=? AND json_extract(data,'$.request_id')=? LIMIT 1",
+                            (row['session'], data['request_id'])).fetchone()
                         if resolved: continue
                         questions = data.get('questions') or []
                         text = '\n\n'.join(q['question'] + ('\n' + '\n'.join('• ' + c for c in q['choices']) if q.get('choices') else '') for q in questions)

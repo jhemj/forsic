@@ -529,6 +529,15 @@ class WaitBarrierTarget(Result):
     reason: str = ""
 
 
+class RuntimeCheckpointSnapshot(Result):
+    threshold_seconds: int
+    decision: Literal["continue", "finish"]
+    reason: str
+    decided_at: float
+    elapsed_seconds: float
+    source_message_id: str
+
+
 class GoalSnapshot(Result):
     """``methods_session_control.py::_safe_goal_snapshot`` — the frontend-safe GoalState subset."""
 
@@ -536,6 +545,13 @@ class GoalSnapshot(Result):
     status: str
     turns_used: int
     max_turns: int
+    runtime_budget_seconds: float | None = None
+    runtime_elapsed_seconds: float = 0
+    runtime_started_at: float | None = None
+    runtime_accounting_known: bool = False
+    runtime_checkpoints: list[RuntimeCheckpointSnapshot] = Field(default_factory=list)
+    runtime_phase: str | None = None
+    runtime_checkpoint_due_seconds: int | None = None
     contract: GoalContractSnapshot
     subgoals: list[str]
     gates: list[GoalGateSnapshot]

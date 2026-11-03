@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Download, ExternalLink, X} from 'lucide-react';
+import {useTenant} from '@/contexts/tenant-context';
 import {authedFetch} from '@/lib/api';
 import type {InvestigationReportFile} from '@/lib/forsic-investigation';
 import './ForsicReportLink.css';
@@ -9,6 +10,13 @@ interface Props {
   file: InvestigationReportFile;
   profile?: string;
   label?: string;
+  metadata?: {version: string; status: string; createdAt?: string; draftRevision?: number};
+}
+
+function readerTime(value?: string) {
+  if (!value) return '저장 시각 미확인';
+  const instant = new Date(value);
+  return Number.isFinite(instant.getTime()) ? new Intl.DateTimeFormat('ko-KR', {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Asia/Seoul'}).format(instant) + ' KST' : value;
 }
 
 function downloadName(disposition: string | null, fallback: string): string {
@@ -20,10 +28,11 @@ function downloadName(disposition: string | null, fallback: string): string {
   return Array.from(name, character => /[\\/]/.test(character) || character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127 ? '_' : character).join('');
 }
 
-export function ForsicReportLink({file, profile, label}: Props) {
+export function ForsicReportLink({file, profile, label, metadata}: Props) {
+  const tenant = useTenant();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [preview, setPreview] = useState<{html: string; downloadUrl: string; name: string} | null>(null);
+  const [preview, setPreview] = useState<{html: string; downloadUrl: string; name: string; url: string; metadata?: Props['metadata']} | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const request = useRef<AbortController | null>(null);
@@ -39,7 +48,11 @@ export function ForsicReportLink({file, profile, label}: Props) {
       if (blobUrl.current) URL.revokeObjectURL(blobUrl.current);
       blobUrl.current = '';
     };
-  }, [file.url, file.name, file.method, profile]);
+  }, [profile, tenant?.tenant_id]);
+
+  useEffect(() => {
+    request.current?.abort(); request.current = null; pending.current = false; setBusy(false); setError('');
+  }, [file.url, file.name, file.method]);
 
   useEffect(() => {
     if (!preview) return;
@@ -85,7 +98,7 @@ export function ForsicReportLink({file, profile, label}: Props) {
       if (html) {
         // srcDoc needs its own restrictive policy; the original Blob remains the download.
         const policy = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'">`;
-        setPreview({html: policy + content, downloadUrl: blobUrl.current, name});
+        setPreview({html: policy + content, downloadUrl: blobUrl.current, name, url: file.url, metadata});
       }
       else {
         const anchor = document.createElement('a');
@@ -103,9 +116,10 @@ export function ForsicReportLink({file, profile, label}: Props) {
   return <>
     <button ref={trigger} type="button" className="forsic-report-file" disabled={busy} onClick={() => void open()}><span>{busy ? word ? 'Word 변환 중…' : '보고서를 불러오고 있어요…' : label || file.name}</span>{html ? <ExternalLink size={13} aria-hidden="true"/> : <Download size={13} aria-hidden="true"/>}</button>
     {error && <p className="forsic-report-file-error" role="status">{error}</p>}
-    {preview && createPortal(<div className="forsic-report-reader" role="dialog" aria-modal="true" aria-label={file.name} onKeyDown={event => {if (event.key === 'Escape') {event.stopPropagation(); closePreview();}}}>
-      <header><strong>{file.name}</strong><a href={preview.downloadUrl} download={preview.name}>HTML 내려받기</a><button ref={close} type="button" onClick={closePreview} aria-label="보고서 닫기"><X size={18}/></button></header>
-      <iframe title={file.name} srcDoc={preview.html} sandbox=""/>
+    {preview && createPortal(<div className="forsic-report-reader" role="dialog" aria-modal="true" aria-label={preview.name} onKeyDown={event => {if (event.key === 'Escape') {event.stopPropagation(); closePreview();}}}>
+      <header><div><strong>{preview.name}</strong><p className="forsic-report-reader-meta">{preview.metadata?.status || '저장본 · 최종 선택 여부 미확인'} · {preview.metadata?.draftRevision !== undefined ? `초안 v${preview.metadata.draftRevision}` : '초안 버전 미확인'} · {readerTime(preview.metadata?.createdAt)}</p><details className="forsic-report-reader-version"><summary>저장 버전 {preview.metadata?.version ? preview.metadata.version.slice(0, 12) : '미확인'}</summary><small>{preview.metadata?.version || preview.url}</small></details></div><a href={preview.downloadUrl} download={preview.name}>HTML 내려받기</a><button ref={close} type="button" onClick={closePreview} aria-label="보고서 닫기"><X size={18}/></button></header>
+      {(preview.url !== file.url || preview.metadata?.version !== metadata?.version) && <p className="forsic-report-reader-update" role="status">새 저장 버전이 조회되었습니다. 현재 읽는 버전은 유지됩니다. 닫은 뒤 웹에서 읽기를 눌러 새 버전을 여세요.</p>}
+      <iframe title={preview.name} srcDoc={preview.html} sandbox=""/>
     </div>, document.body)}
   </>;
 }

@@ -1,5 +1,5 @@
 """Response intake for the conversation turn loop: normalize the raw provider response into
-the assistant message, splice agent-as-provider projections, fire ``post_api_request``, relay
+the assistant message, splice agent-as-provider projections, relay
 reasoning to the progress callback, and apply the incomplete-scratchpad / Codex-incomplete
 continuation guards. Nothing here imports ``agent.conversation_loop`` at module level (cycle).
 """
@@ -124,7 +124,7 @@ def normalize_model_response(
     effective_task_id: Any, turn_id: Any, active_system_prompt: Any = None,
 ) -> ResponseIntakeVerdict:
     """Normalize ``response`` into ``assistant_message`` (str content, never dict/list) and run
-    the post-response hooks and continuation guards, in the original order."""
+    the content metrics and continuation guards, in the original order."""
     assistant_message = normalize_response_for_agent(agent, response)
     finish_reason = assistant_message.finish_reason
 
@@ -141,11 +141,6 @@ def normalize_model_response(
     # call/result rows before this turn's assistant message; no-op for ordinary providers.
     splice_provider_projection(agent, response, messages)
 
-    _fire_post_api_request_hook(
-        agent, response, assistant_message, finish_reason, api_messages=api_messages,
-        api_call_count=api_call_count, api_duration=api_duration, api_start_time=api_start_time,
-        api_request_id=api_request_id, effective_task_id=effective_task_id, turn_id=turn_id,
-    )
     from hermes_cli.observability.shared_metrics_harness import record_reply_content
     record_reply_content(agent, response, assistant_message)
 

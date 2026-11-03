@@ -51,7 +51,9 @@ def _is_successful_goal_turn(result: Any, status: str, raw: Any) -> bool:
 
     A non-failed ``max_iterations_reached(...)`` handoff is a resumable turn boundary, not a
     failure: its summary must reach the judge so an active goal continues (#102213). Failed,
-    interrupted and other ``completed is False`` turns still stay out (cf. #63180)."""
+    interrupted and other ``completed is False`` turns still stay out (cf. #63180).
+    A persisted runtime milestone is also an incomplete native turn boundary;
+    GoalManager validates its current source receipt before dispatching work."""
     from agent.turn_failure_copy import is_max_iteration_handoff
     if status != "complete" or not isinstance(raw, str) or not raw.strip():
         return False
@@ -63,7 +65,8 @@ def _is_successful_goal_turn(result: Any, status: str, raw: Any) -> bool:
     # the goal judge can restart the same failed calls with fresh per-turn counters.
     if (result.get("guardrail") or {}).get("action") in {"block", "halt"}:
         return False
-    return result.get("completed") is not False or is_max_iteration_handoff(result)
+    return (result.get("completed") is not False or is_max_iteration_handoff(result)
+            or result.get("turn_exit_reason") == "runtime_checkpoint_decided")
 
 
 def _active_goal_manager(session: dict):
@@ -432,6 +435,10 @@ def _goal_followup_after_turn(
         return goal_followup
     try:
         if session.get("session_key") and (goal_mgr := _active_goal_manager(session)) is not None:
+            if isinstance(result, dict) and result.get("turn_exit_reason") == "runtime_checkpoint_decided":
+                from hermes_cli.goals import goal_identity
+                if expected_goal_identity is None or goal_identity(goal_mgr.state) != expected_goal_identity:
+                    return goal_followup  # a replacement scope never inherits the old checkpoint
             _active_deleg = 0
             try:
                 from hermes_cli.goals import count_active_delegations, gather_background_processes as _gather_bg
@@ -819,6 +826,8 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
     if take_speech_interrupted():
         run_message = _prepend_note(run_message, SPEECH_INTERRUPTED_NOTE)
     run_message = _prepend_note(run_message, _pending_reaction_notes(session))
+    from tui_gateway.clarify_requests import take_background_context
+    run_message = _prepend_note(run_message, take_background_context(sys.modules[__name__], session))
     return prompt, _prepend_note(run_message, _hud_surface_note(session)), cols, streamer
 
 
