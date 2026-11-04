@@ -1171,7 +1171,7 @@ def _parse(text,refs,review_id='',rejected=None,*,review_refs=None,executive_rou
     return findings
 
 
-def _budget_executive_body(body):
+def _budget_executive_body(body,input_limit):
     """Allocate history/current judgments before optional packet presentation.
 
     Reuse the bounded current views selected by _collect. Never shorten an
@@ -1216,7 +1216,7 @@ def _budget_executive_body(body):
         required=[field for field in source['fields'] if selected(source,field)]
         pending.extend((source,field) for field in source['fields'] if field not in required)
         if required:body['sources'].append({**source,'fields':required})
-    def fits():return len(_json(body))+len(EXECUTIVE_SYSTEM)<=MAX_INPUT
+    def fits():return len(_json(body))+len(EXECUTIVE_SYSTEM)<=input_limit
     presentation['source_fields_omitted']=len(pending)
     original_omitted=body['omitted']['sources']
     def source_omissions():
@@ -1258,6 +1258,9 @@ def _executive_snapshot(resolved,snapshot,round_number,projection):
     the five questions. Source excerpts may shrink; their exact handles survive.
     """
     body=json.loads(snapshot['prompt'])
+    # Keep the collector's existing contract: authored reports use the report
+    # bound, while general review keeps the smaller ordinary input bound.
+    input_limit=snapshot.get('input_limit',MAX_INPUT)
     previous=[f for f in projection['findings'] if f.get('kind')=='executive_question'
               and f.get('executive_policy_role') != 'historical_handoff_restart']
     dispositions={(d['review_id'],d['finding_id']):d for d in projection['dispositions']}
@@ -1279,17 +1282,17 @@ def _executive_snapshot(resolved,snapshot,round_number,projection):
         'previous_questions':[f['question'] for f in previous],
         'previous_round':{'role':'main_answers_and_dispositions_not_source_evidence',
                           'questions':history,'main_answers':list(main_answers.values())}}
-    if len(_json(body))+len(EXECUTIVE_SYSTEM)>MAX_INPUT:
-        _budget_executive_body(body)
+    if len(_json(body))+len(EXECUTIVE_SYSTEM)>input_limit:
+        _budget_executive_body(body,input_limit)
     prompt=_prompt_json(body)
-    if len(prompt)+len(EXECUTIVE_SYSTEM)>MAX_INPUT:
+    if len(prompt)+len(EXECUTIVE_SYSTEM)>input_limit:
         raise ValueError('Complete executive question/answer history exceeds the review input bound')
     retained={f['review_ref'] for source in body['sources'] for f in source['fields']}
     refs={}
     for source in body['sources']:
         for field in source['fields']:
             _remember_field(refs.setdefault(source['source_id'],{}),field['pointer'],field['value'])
-    return {**snapshot,'prompt':prompt,'input_limit':MAX_INPUT,
+    return {**snapshot,'prompt':prompt,'input_limit':input_limit,
             'refs':refs,
             'review_refs':{k:v for k,v in snapshot['review_refs'].items() if k in retained},
             'input_fingerprint':_input_fingerprint(EXECUTIVE_SYSTEM,body),

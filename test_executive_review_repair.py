@@ -5,8 +5,63 @@ import unittest
 from types import SimpleNamespace
 
 from forsic_plugin import independent_review as review
-from forsic_plugin.independent_review_repair import ordinary_receipts
+from forsic_plugin.independent_review_repair import ordinary_receipts, snapshot as repair_snapshot
 import test_executive_followup as fixtures
+
+
+class ExecutiveRepairPacketBudgetTests(unittest.TestCase):
+    def packet(self, limit):
+        source={'source_id':'synthetic-source','source_version':'event-sha256:synthetic',
+                'source_version_basis':'retained_event_json_bytes_sha256','fields':[]}
+        field={'pointer':'/text','value':'Configuration is not execution.'}
+        field['review_ref']=review._field_handle(source,field);source['fields'].append(field)
+        body={'sources':[source],'analyst_state':{'report_draft':{'content':'Preserved report. '*2500}},
+              'executive_followup':{'round':1,'previous_questions':[],'questions_required':5}}
+        original={'schema_version':3,'request_id':'original-round','material_fingerprint':'material',
+                  'evaluation_fingerprint':'evaluation','executive_round':1,
+                  'messages':[{'role':'system','content':review.EXECUTIVE_SYSTEM},
+                              {'role':'user','content':review._prompt_json(body)}]}
+        if limit is not None:original['input_manifest']={'input_limit':limit}
+        projection={'review_repair':{'round':1,'missing_count':1},'findings':[
+            {'kind':'executive_question','executive_round':1,'question':f'Accepted question {i}?'}
+            for i in range(4)]}
+        return original,projection
+
+    def test_repair_inherits_original_report_bound_and_exact_presented_body(self):
+        original,projection=self.packet(review.MAX_REPORT_INPUT)
+        before=deepcopy((original,projection))
+        result=repair_snapshot({},original,projection,{'input_limit':review.MAX_INPUT})
+        self.assertEqual(result['input_limit'],review.MAX_REPORT_INPUT)
+        self.assertGreater(len(result['prompt'])+len(result['system']),review.MAX_INPUT)
+        self.assertLessEqual(len(result['prompt'])+len(result['system']),review.MAX_REPORT_INPUT)
+        self.assertEqual((original,projection),before)
+        body=json.loads(result['prompt']);prior=json.loads(original['messages'][1]['content'])
+        for key in ('sources','analyst_state'):self.assertEqual(body[key],prior[key])
+        self.assertEqual(body['executive_followup']['previous_questions'],
+                         [f['question'] for f in projection['findings']])
+        self.assertEqual(result['executive_repair_count'],1)
+        self.assertEqual(result['executive_repair_of'],original['request_id'])
+        for source in body['sources']:
+            for field in source['fields']:
+                self.assertEqual(result['review_refs'][field['review_ref']],review._review_coordinate(source,field))
+
+    def test_repair_cannot_borrow_current_cap_or_overflow_original_bound(self):
+        for mode in ('legacy','ordinary','added_metadata','invalid_cap'):
+            with self.subTest(mode=mode):
+                limit={'legacy':None,'ordinary':review.MAX_INPUT,'added_metadata':review.MAX_REPORT_INPUT,
+                       'invalid_cap':review.MAX_REPORT_INPUT+1}[mode]
+                original,projection=self.packet(limit)
+                if mode=='added_metadata':
+                    body=json.loads(original['messages'][1]['content'])
+                    body['analyst_state']['report_draft']['content']=''
+                    room=limit-len(review.EXECUTIVE_SYSTEM)-len(review._prompt_json(body))-100
+                    body['analyst_state']['report_draft']['content']='x'*room
+                    original['messages'][1]['content']=review._prompt_json(body)
+                    self.assertLess(sum(len(m['content']) for m in original['messages']),limit)
+                before=deepcopy((original,projection))
+                with self.assertRaisesRegex(ValueError,'input bound'):
+                    repair_snapshot({},original,projection,{'input_limit':review.MAX_REPORT_INPUT})
+                self.assertEqual((original,projection),before)
 
 
 class ExecutiveRepairTests(unittest.TestCase):

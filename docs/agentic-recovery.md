@@ -19,6 +19,11 @@ of missing items may append a separate receipt using the ordinary review allowan
 responses, valid finding IDs, answers and consumed calls are preserved. Unknown delivery is
 not a format error and must not trigger an automatic resend.
 
+Executive follow-ups keep the collector's existing input bound: 40,000 characters for
+general review and 56,000 for an authored report. Missing-item repair inherits the immutable
+original request's bound, never a newer draft's allowance. Optional packet views may be
+omitted, but complete authored text and prior answers stay intact; true overflow remains blocked.
+
 Operational progress belongs to existing work-state/reason and report receipts. An incident
 answer, analytical next checks and selected evidence remain semantic inputs. Directly selected
 source/claim groups retain their own dependencies; groups using a question's synthesis select

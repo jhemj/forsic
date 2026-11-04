@@ -135,5 +135,61 @@ class ExecutivePacketCompositionTests(unittest.TestCase):
         for item in actual['executive_followup']['previous_round']['questions']:
             self.assertTrue(item['main_response']['citations'])
 
+    def test_authored_report_contract_survives_executive_history_allocation(self):
+        snapshot,notes,projection=self.packet()
+        body=json.loads(snapshot['prompt'])
+        body['analyst_state']['report_draft']['content']='Required authored prose. '*1125
+        snapshot.update(prompt=review._json(body),input_limit=review.MAX_REPORT_INPUT)
+        before=deepcopy((snapshot,notes,projection))
+        result=self.compose(snapshot,notes,projection)
+        actual=json.loads(result['prompt'])
+        self.assertEqual(result['input_limit'],snapshot['input_limit'])
+        self.assertGreater(len(result['prompt'])+len(result['system']),review.MAX_INPUT)
+        self.assertLessEqual(len(result['prompt'])+len(result['system']),review.MAX_REPORT_INPUT)
+        self.assertEqual((snapshot,notes,projection),before)
+        for key in ('questions','grounding','report_draft'):
+            self.assertEqual(actual['analyst_state'][key],body['analyst_state'][key])
+        history=actual['executive_followup']['previous_round']
+        self.assertEqual(history['main_answers'],notes)
+        self.assertEqual([item['question'] for item in history['questions']],
+                         [item['question'] for item in projection['findings']])
+        for item,expected in zip(history['questions'],projection['dispositions']):
+            self.assertEqual({k:v for k,v in item['main_response'].items() if k!='citations'},
+                             {k:v for k,v in expected.items() if k!='citations'})
+        expected_refs={}
+        for source in actual['sources']:
+            for field in source['fields']:
+                handle=review._field_handle(source,field)
+                self.assertEqual(field['review_ref'],handle)
+                self.assertEqual(result['review_refs'][handle],snapshot['review_refs'][handle])
+                review._remember_field(expected_refs.setdefault(source['source_id'],{}),
+                                       field['pointer'],field['value'])
+        handles={f['review_ref'] for s in actual['sources'] for f in s['fields']}
+        self.assertEqual(set(result['review_refs']),handles)
+        self.assertEqual(result['refs'],expected_refs)
+        self.assertIn(body['sources'][2]['fields'][2]['review_ref'],handles)
+
+    def test_general_and_authored_contracts_keep_irreducible_input_fail_closed(self):
+        for limit,repeats in ((review.MAX_INPUT,1125),(review.MAX_REPORT_INPUT,2500)):
+            with self.subTest(input_limit=limit):
+                snapshot,notes,projection=self.packet()
+                body=json.loads(snapshot['prompt'])
+                body['analyst_state']['report_draft']['content']='Required authored prose. '*repeats
+                snapshot.update(prompt=review._json(body),input_limit=limit)
+                before=deepcopy((snapshot,notes,projection))
+                with self.assertRaisesRegex(ValueError,'Complete executive question/answer history exceeds'):
+                    self.compose(snapshot,notes,projection)
+                self.assertEqual((snapshot,notes,projection),before)
+
+    def test_budget_cannot_pass_without_any_presented_source(self):
+        snapshot,notes,projection=self.packet()
+        body=json.loads(snapshot['prompt']);body['sources']=[]
+        body['candidate_response']['text']='Optional duplicate prose. '*3000
+        snapshot.update(prompt=review._json(body),input_limit=review.MAX_REPORT_INPUT)
+        before=deepcopy((snapshot,notes,projection))
+        with self.assertRaisesRegex(ValueError,'Complete executive question/answer history exceeds'):
+            self.compose(snapshot,notes,projection)
+        self.assertEqual((snapshot,notes,projection),before)
+
 
 if __name__=='__main__':unittest.main()

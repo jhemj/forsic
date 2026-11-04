@@ -56,8 +56,13 @@ def snapshot(resolved, original, projection, base):
     system=original['messages'][0]['content'].replace('exactly 5 findings:',
         f"exactly {repair['missing_count']} findings:")
     prompt=review._prompt_json(body)
-    if len(system)+len(prompt)>review.MAX_INPUT:raise ValueError('Executive validation repair exceeds input bound')
-    return {**base,'prompt':prompt,'system':system,'input_limit':review.MAX_INPUT,
+    # Repair inherits the immutable original contract, never a newer base packet's
+    # allowance. Older receipts without a declared bound retain the ordinary cap.
+    input_limit=original.get('input_manifest',{}).get('input_limit',review.MAX_INPUT)
+    if type(input_limit) is not int or input_limit not in (review.MAX_INPUT,review.MAX_REPORT_INPUT):
+        raise ValueError('Invalid executive validation repair input bound')
+    if len(system)+len(prompt)>input_limit:raise ValueError('Executive validation repair exceeds input bound')
+    return {**base,'prompt':prompt,'system':system,'input_limit':input_limit,
         'refs':_presented(original),'review_refs':_presented_handles(original),
         'fingerprint':original['material_fingerprint'],
         'evaluation_fingerprint':original['evaluation_fingerprint'],
