@@ -839,6 +839,13 @@ export interface GoalSnapshot {
   runtime_started_at?: number | null
   runtime_accounting_known?: boolean
   runtime_checkpoints?: RuntimeCheckpointSnapshot[]
+  runtime_policy?: Record<string, unknown>
+  runtime_control?: Record<string, unknown>
+  runtime_recovery?: Record<string, unknown>
+  runtime_settlement?: Record<string, unknown>
+  wall_deadline?: number | null
+  runtime_completion?: Record<string, unknown> | null
+  runtime_fingerprint?: Record<string, unknown>
   runtime_phase?: string | null
   runtime_checkpoint_due_seconds?: number | null
   contract: GoalContractSnapshot
@@ -4582,7 +4589,7 @@ export interface MessageCompletePayload {
   persisted_turn?: PersistedTurn | null
 }
 /** ``prompt_turn._result_status``. */
-export type TurnStatus = 'complete' | 'error' | 'interrupted'
+export type TurnStatus = 'complete' | 'yielded' | 'error' | 'interrupted'
 /** ``agent/billing_links.py::BillingBlock.to_dict`` (+ ``unverified`` from conversation_loop). */
 export interface BillingBlock {
   provider: string

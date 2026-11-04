@@ -674,13 +674,16 @@ def _derive_stream_stale_timeout(agent, api_kwargs: dict) -> float:
     """Stale-stream patience for a provider that is never a local endpoint (Bedrock):
     the OpenAI/Anthropic stale detector's budget minus its local branch."""
     from agent.turn_recovery_autorecover import cap_recovery_timeout
-    return cap_recovery_timeout(agent, _cloud_stale_timeout_for(agent, api_kwargs))
+    from hermes_cli.goals_completion import operation_timeout
+    return operation_timeout(agent, cap_recovery_timeout(agent, _cloud_stale_timeout_for(agent, api_kwargs)))
 
 
 def cap_to_run_budget(agent, timeout: float) -> float:
     """Cap an IMPLICIT stale timeout at half the remaining --run-budget (>= 60s), so one hung
     call can't outlive the run and the wrap-up notice stays reachable (#97968). Shared by the
     streaming and non-streaming resolvers; callers skip it for explicit user settings."""
+    from hermes_cli.goals_completion import operation_timeout
+    timeout = operation_timeout(agent, timeout)
     run_budget = getattr(agent, "run_budget_seconds", None)
     started = getattr(agent, "_run_budget_started_at", None)
     if not run_budget or not started:
@@ -879,7 +882,8 @@ def _resolve_direct_stale_timeout(agent, api_kwargs: dict) -> float:
     if getattr(agent, "api_mode", None) == "codex_responses" and not (base_url and is_local_endpoint(base_url)):
         value = _bound_openai_codex_stale_timeout(float(value), estimate_request_context_tokens(api_kwargs))
     from agent.turn_recovery_autorecover import cap_recovery_timeout
-    return cap_recovery_timeout(agent, float(value))
+    from hermes_cli.goals_completion import operation_timeout
+    return operation_timeout(agent, cap_recovery_timeout(agent, float(value)))
 
 
 def _inline_nonstream_hard_timeout(stale_timeout: float):
@@ -2290,8 +2294,14 @@ def _iteration_summary_api_messages(agent, messages: list) -> list:
 
 def _managed_summary_call(agent, api_request_id: str, request, callback, *, retry_count: int):
     from agent import relay_llm
+    def dispatch(kwargs):
+        from hermes_cli.goals_completion import admit_model_request
+        from agent.deadline import native_operation_scope
+        admit_model_request(agent, api_request_id)
+        with native_operation_scope(getattr(agent, "_native_operation_deadline", None)):
+            return callback(kwargs)
     return relay_llm.execute_current(
-        request, callback,
+        request, dispatch,
         name=str(getattr(agent, "provider", "") or "provider"), model_name=str(getattr(agent, "model", "") or ""),
         metadata={"api_mode": str(getattr(agent, "api_mode", "") or "chat_completions"),
             "api_request_id": api_request_id, "call_role": "iteration_summary", "retry_count": retry_count},
@@ -2323,7 +2333,11 @@ def _codex_summary_attempt(agent, api_messages: list, api_request_id: str):
         # Route through the same seam as normal Codex turns: a direct _run_codex_stream
         # bypasses the stale/TTFB watchdogs, interrupt handling and client cleanup, so an
         # unattended cron summary could wedge forever (#70943).
-        return _summary_text(agent, agent._interruptible_api_call(codex_kwargs))
+        from hermes_cli.goals_completion import admit_model_request
+        from agent.deadline import native_operation_scope
+        admit_model_request(agent, api_request_id)
+        with native_operation_scope(getattr(agent, "_native_operation_deadline", None)):
+            return _summary_text(agent, agent._interruptible_api_call(codex_kwargs))
     return _attempt
 
 
@@ -2363,8 +2377,53 @@ def _chat_summary_attempt(agent, api_messages: list, api_request_id: str):
 _SUMMARY_ATTEMPT_BUILDERS = {"codex_responses": _codex_summary_attempt, "anthropic_messages": _anthropic_summary_attempt}
 
 
+def _checkpoint_summary_attempt(agent, api_messages: list, api_request_id: str):
+    """An independent, tool-less packet through the configured provider adapter."""
+    from agent.runtime_checkpoint import CheckpointError, OUTPUT_TOKENS, preflight_request
+    if agent.api_mode == "anthropic_messages":
+        kwargs = agent._get_transport().build_kwargs(
+            model=agent.model, messages=api_messages, tools=None, max_tokens=OUTPUT_TOKENS,
+            reasoning_config=agent.reasoning_config, is_oauth=agent._is_anthropic_oauth,
+            preserve_dots=agent._anthropic_preserve_dots(),
+            base_url=getattr(agent, "_anthropic_base_url", None))
+        kwargs = _merge_nous_portal_messages_extra_body(agent, kwargs)
+    else:
+        kwargs = agent._build_api_kwargs(api_messages)
+    # Responses rejects tool_choice/parallel_tool_calls when tools is absent.
+    # A small independent checkpoint has no cache-prefix reason to expose tools.
+    for key in ("tools", "tool_choice", "parallel_tool_calls"):
+        kwargs.pop(key, None)
+    output_key = next((key for key in ("max_output_tokens", "max_completion_tokens", "max_tokens")
+                       if key in kwargs), "max_output_tokens" if agent.api_mode == "codex_responses" else "max_tokens")
+    # Anthropic's native adapter raises max_tokens above a configured manual
+    # thinking budget. Preserve that contract and reserve its actual wire cap.
+    if agent.api_mode != "anthropic_messages":
+        kwargs[output_key] = OUTPUT_TOKENS
+    sanitize_outbound_kwargs(agent, kwargs)
+    agent._runtime_checkpoint_request_budget = preflight_request(agent, kwargs)
+
+    def attempt(retry_count):
+        previous = getattr(agent, "_runtime_checkpoint_request", False)
+        agent._runtime_checkpoint_request = True
+        try:
+            response = _managed_summary_call(agent, api_request_id, kwargs,
+                                             agent._interruptible_api_call, retry_count=retry_count)
+        finally:
+            agent._runtime_checkpoint_request = previous
+        if is_router_timeout_shim(response):
+            raise CheckpointError("provider_timeout", repairable=True)
+        options = ({"strip_tool_prefix": agent._is_anthropic_oauth}
+                   if agent.api_mode == "anthropic_messages" else {})
+        normalized = agent._get_transport().normalize_response(response, **options)
+        if normalized.tool_calls:
+            raise CheckpointError("tool_only_response", repairable=True)
+        return (normalized.content or "").strip()
+    return attempt
+
+
 def handle_max_iterations(agent, messages: list, api_call_count: int, *,
-                          summary_request: str | None = None, max_attempts: int = 2) -> str:
+                          summary_request: str | None = None, max_attempts: int = 2,
+                          checkpoint_packet: dict | None = None) -> str:
     """Request a summary when max iterations are reached. Returns the final response text."""
     warning = ("Preparing the partial runtime checkpoint before the goal deadline."
                if summary_request is not None else
@@ -2386,12 +2445,21 @@ def handle_max_iterations(agent, messages: list, api_call_count: int, *,
     # Shared constant so compaction recognizers can identify this runtime nudge by its stable
     # content after SessionDB projection strips metadata flags.
     from agent.context_compressor import MAX_ITERATIONS_SUMMARY_REQUEST
-    nudge = append_message(messages, {"role": "user", "content": (
-        summary_request if summary_request is not None else MAX_ITERATIONS_SUMMARY_REQUEST)})
+    request_text = summary_request if summary_request is not None else MAX_ITERATIONS_SUMMARY_REQUEST
+    if checkpoint_packet is not None:
+        request_text += "\nSaved checkpoint packet:\n" + json.dumps(checkpoint_packet, ensure_ascii=False, sort_keys=True)
+    nudge = append_message(messages, {"role": "user", "content": request_text})
 
     try:
-        api_messages = _iteration_summary_api_messages(agent, messages)
-        build_attempt = _SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode, _chat_summary_attempt)
+        if checkpoint_packet is not None:
+            from agent.runtime_checkpoint import SYSTEM
+            # No cached system, ephemera, prefills or historical tool payloads. The
+            # original transcript remains intact; only this request is projected.
+            api_messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": request_text}]
+            build_attempt = _checkpoint_summary_attempt
+        else:
+            api_messages = _iteration_summary_api_messages(agent, messages)
+            build_attempt = _SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode, _chat_summary_attempt)
         attempt = build_attempt(agent, api_messages, summary_api_request_id)
 
         # One retry on an empty summary; a summary empty once its <think> block is stripped is NOT retried.
@@ -2419,6 +2487,8 @@ def handle_max_iterations(agent, messages: list, api_call_count: int, *,
             messages.pop()
         raise
     except Exception as e:
+        if checkpoint_packet is not None:
+            raise  # typed checkpoint recovery belongs to its durable episode
         logger.warning("Failed to get summary response: %s", e)
         if summary_request is not None:
             final_response = "The partial runtime checkpoint could not be generated. The investigation remains incomplete."
@@ -4053,11 +4123,13 @@ class _StreamingCall(StreamingWaitMonitor):
         from agent.turn_recovery_autorecover import cap_recovery_timeout
         base = _configured_stale_base(self.agent)
         if base == 180.0 and self.agent.base_url and is_local_endpoint(self.agent.base_url):
-            self._stream_stale_timeout = cap_recovery_timeout(self.agent, _local_stream_stale_timeout_default())
+            from hermes_cli.goals_completion import operation_timeout
+            self._stream_stale_timeout = operation_timeout(self.agent, cap_recovery_timeout(self.agent, _local_stream_stale_timeout_default()))
             logger.debug("Local provider detected (%s) — stale stream timeout set to %.0fs",
                 self.agent.base_url, self._stream_stale_timeout)
             return
-        self._stream_stale_timeout = cap_recovery_timeout(self.agent, _cloud_stale_timeout_for(self.agent, self.api_kwargs))
+        from hermes_cli.goals_completion import operation_timeout
+        self._stream_stale_timeout = operation_timeout(self.agent, cap_recovery_timeout(self.agent, _cloud_stale_timeout_for(self.agent, self.api_kwargs)))
 
     def _partial_stream_stub(self):
         """Tokens already reached the platform: a finish_reason="length" stub fires the

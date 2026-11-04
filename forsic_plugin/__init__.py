@@ -700,6 +700,9 @@ def register(ctx):
     ctx.register_hook("goal_evaluation_context", partial(goal_evaluation_context, **projection_options))
     ctx.register_hook('goal_advisory_context', partial(goal_advisory_context,
         enabled=independent_review_enabled, executive_followup=executive_followup_enabled, **projection_options))
+    from .report_work import goal_work_projection
+    ctx.register_hook('goal_work_projection', partial(goal_work_projection,
+        enabled=independent_review_enabled, executive_followup=executive_followup_enabled, **projection_options))
     from .independent_review import cancel_pending_reviews
     ctx.register_hook('on_session_finalize',partial(cancel_pending_reviews,
         native_db=projection_options['native_db'],dispose=True))

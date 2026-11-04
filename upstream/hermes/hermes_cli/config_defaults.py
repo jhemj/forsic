@@ -1406,6 +1406,9 @@ DEFAULT_CONFIG = {
     # goal is satisfied, else a continuation prompt re-enters the session until done, budget
     # exhausted, or paused. Judge failures fail OPEN; the budget is the backstop.
     "goals": {
+        # Opt-in, pinned per goal; legacy rows retain their original phase policy.
+        "runtime_policy": "legacy-v1",
+        "completion_contract": {},
         # Max continuation turns before auto-pause (/goal resume) — guards against judge false
         # negatives and unbounded spend.
         "max_turns": 20,

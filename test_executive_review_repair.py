@@ -172,6 +172,10 @@ class ExecutiveRepairTests(unittest.TestCase):
         self.goal.status='paused';self.session(self.sid,goal=self.goal)
         self.call();self.assertEqual(len(self.calls),1)
         self.goal.status='active';self.session(self.sid,goal=self.goal)
+        self.call();self.assertEqual(len(self.calls),1)
+        self.assertFalse(review.review_state(self.resolved())['followup_actionable'])
+        # A repair needs its own slot plus the reserved current-body final call.
+        self.config['forsic']['independent_review']['call_budgets'][review._goal_key(self.resolved())]=2
         self.call();self.assertEqual(len(self.calls),2)
 
     def test_legacy_invalid_receipt_preserves_four_valid_items_without_rewriting(self):

@@ -1,6 +1,8 @@
 """Optional bounded advice at native goal checkpoints, never a second executor."""
 import json
 import hashlib
+import math
+import time
 
 
 def goal_advisory_result(*, session_id, goal_id, goal_text, turns_used, cancel_check,
@@ -29,6 +31,7 @@ def goal_advisory_result(*, session_id, goal_id, goal_text, turns_used, cancel_c
     followup_actions = []
     actionable = True
     awaiting_review = False
+    review_waits = []
     for result in results:
         if not isinstance(result, dict) or result.get('status') == 'not_applicable':
             continue
@@ -49,6 +52,14 @@ def goal_advisory_result(*, session_id, goal_id, goal_text, turns_used, cancel_c
                 followup_actions.append(action)
             item['requires_followup'] = True
             awaiting_review |= result.get('status') == 'in_progress'
+            wait = result.get('review_wait')
+            if (isinstance(wait, dict) and wait.get('state') == 'alive'
+                    and isinstance(wait.get('request_id'), str) and wait['request_id']
+                    and isinstance(wait.get('deadline_at'), (int, float))
+                    and not isinstance(wait['deadline_at'], bool) and math.isfinite(wait['deadline_at'])
+                    and isinstance(wait.get('owner_pid'), int) and wait['owner_pid'] > 0
+                    and isinstance(wait.get('thread_id'), int)):
+                review_waits.append(dict(wait))
             can_act = result.get('followup_actionable', result.get('status') not in
                                  ('unavailable', 'unknown', 'in_progress', 'cancelled')) is True
             can_act &= item.get('status') != 'unavailable'
@@ -92,7 +103,7 @@ def goal_advisory_result(*, session_id, goal_id, goal_text, turns_used, cancel_c
     return {'context': value, 'requires_followup': requires_followup,
             'followup_actionable': actionable, 'progress_fingerprint': fingerprint,
             'progress': required_progress, 'awaiting_review': awaiting_review,
-            'followup_actions': followup_actions}
+            'followup_actions': followup_actions, 'review_waits': review_waits}
 
 
 def advisory_continuation(state, advisory, *, final_boundary=False):
@@ -104,6 +115,34 @@ def advisory_continuation(state, advisory, *, final_boundary=False):
     """
     fingerprint = advisory.get('progress_fingerprint', '')
     previous = state.advisory_progress or {}
+    waits = advisory.get('review_waits') or []
+    if (waits and advisory.get('followup_actions') == ['wait']
+            and advisory.get('followup_actionable') is True):
+        from hermes_cli.goals_runtime import runtime_wall_deadline
+        now = time.time()
+        deadline = min(item['deadline_at'] for item in waits)
+        identity=[state.created_at,state.goal]
+        same_wait=(previous.get('status')=='waiting' and previous.get('goal_identity')==identity
+                   and {item['request_id'] for item in previous.get('review_waits',[])}
+                       =={item['request_id'] for item in waits})
+        if same_wait:deadline=min(deadline,float(previous.get('original_deadline') or deadline))
+        wall = runtime_wall_deadline(state)
+        from hermes_cli.goals_completion import enabled
+        if wall is not None and enabled(state):wall -= state.runtime_policy['settlement_seconds']
+        if wall is not None:deadline = min(deadline, wall)
+        if deadline > now:
+            since=state.waiting_since if same_wait and state.waiting_since else now
+            state.clear_wait()
+            state.waiting_until = deadline
+            state.waiting_since = since
+            state.waiting_reason = 'Existing independent review worker; awaiting its original request receipt.'
+            state.advisory_progress = {'fingerprint': fingerprint, 'status': 'waiting',
+                'review_waits': waits, 'final_opportunity': False,
+                'goal_identity': identity, 'original_deadline':deadline,
+                'next_owner':'native_review_wait', 'next_due':now,
+                'claim_id':None, 'receipts':previous.get('receipts',[]) if same_wait else []}
+            return 'wait', state.waiting_reason
+        advisory = {**advisory, 'followup_actionable': False, 'awaiting_review': False}
     unavailable = advisory.get('followup_actionable') is False
     unchanged = final_boundary and previous.get('fingerprint') == fingerprint and previous.get('final_opportunity') is True
     if unavailable or unchanged:
@@ -125,6 +164,120 @@ def advisory_continuation(state, advisory, *, final_boundary=False):
 def goal_advisory_context(**kwargs):
     """Compatibility string view for advisory-only consumers."""
     return goal_advisory_result(**kwargs)['context']
+
+
+def read_review_wait(db, session_id):
+    from hermes_cli.goals import GoalState
+    raw = db.get_meta('goal:' + session_id)
+    state = GoalState.from_json(raw) if raw else None
+    progress = dict(state.advisory_progress or {}) if state else {}
+    return raw, state, progress
+
+
+def review_wait_status(state, session_id):
+    """Inspect immutable requests and live workers; never request a new review."""
+    from hermes_cli import plugins
+    from hermes_cli.goals import goal_identity
+    expected = {item['request_id'] for item in (state.advisory_progress or {}).get('review_waits', [])}
+    if not expected or not plugins.has_hook('goal_advisory_context'):
+        return 'unavailable'
+    results = plugins.invoke_hook('goal_advisory_context', session_id=session_id,
+        goal_id=goal_identity(state), goal_text=state.goal, turns_used=state.turns_used,
+        cancel_check=lambda: False, stage='checkpoint', read_only=True,
+        wait_request_ids=sorted(expected), max_chars=3500)
+    found = {}
+    for result in results:
+        if not isinstance(result, dict) or result.get('status') != 'wait_status':continue
+        for item in result.get('review_waits', []):
+            if isinstance(item, dict) and item.get('request_id') in expected:
+                found[item['request_id']] = item.get('state')
+    if set(found) != expected or any(value not in {'alive','ready'} for value in found.values()):
+        return 'unavailable'
+    return 'alive' if 'alive' in found.values() else 'ready'
+
+
+def settle_review_wait(db, session_id, *, reason=None, claim_id=None):
+    """Persist explicit failed ownership or consumed dispatch without replay."""
+    from hermes_cli.goals_runtime import settle_runtime, runtime_identity
+    raw, state, progress = read_review_wait(db, session_id)
+    if (not state or state.status != 'active' or state.pause_requested
+            or progress.get('goal_identity') != list(runtime_identity(state))
+            or progress.get('status') not in {'waiting','claimed','dispatched'}
+            or claim_id is not None and progress.get('claim_id') != claim_id):return False
+    if reason is None and progress.get('status')!='dispatched':return False
+    now = time.time()
+    progress.update(status='terminal' if reason else 'resumed', next_due=None, next_owner=None,
+                    settled_at=now, terminal_reason=reason)
+    state.advisory_progress = progress
+    state.clear_wait()
+    if reason:
+        settle_runtime(state, now=now)
+        state.status,state.pause_requested='paused',False
+        state.runtime_started_at=None
+        state.last_verdict='advisory_unavailable'
+        state.last_reason=state.paused_reason=reason
+        state.runtime_settlement={**state.runtime_settlement,'status':'settlement_pending',
+                                  'reason':reason,'at':now}
+    saved=db.compare_and_swap_meta('goal:' + session_id, raw, state.to_json())
+    if saved and reason:
+        from hermes_cli.goals_completion import settle_native
+        try:
+            receipt=settle_native(db,session_id,expected_identity=runtime_identity(state),reason=reason)
+            if receipt.get('status')=='settlement_failed':raise RuntimeError('settlement conflict')
+        except Exception:
+            latest,current,_=read_review_wait(db,session_id)
+            if current and runtime_identity(current)==runtime_identity(state):
+                current.runtime_settlement={**current.runtime_settlement,'status':'settlement_failed'}
+                db.compare_and_swap_meta('goal:'+session_id,latest,current.to_json())
+    return saved
+
+
+def claim_review_wait(db, session_id, *, owner):
+    """One durable follow-up claim after the existing request publishes a receipt."""
+    import uuid
+    from hermes_cli.goals_runtime import runtime_identity, runtime_remaining, runtime_wall_deadline
+    raw, state, progress = read_review_wait(db, session_id)
+    if (not state or state.status != 'active' or state.pause_requested
+            or progress.get('goal_identity') != list(runtime_identity(state))
+            or progress.get('status') not in {'waiting','claimed','dispatched'}):return None
+    now=time.time()
+    deadline=float(progress.get('original_deadline') or 0)
+    wall=runtime_wall_deadline(state)
+    from hermes_cli.goals_completion import enabled
+    if wall is not None and enabled(state):wall-=state.runtime_policy['settlement_seconds']
+    if wall is not None:deadline=min(deadline,wall)
+    if state.turns_used>=state.max_turns:
+        settle_review_wait(db,session_id,reason='review_wait_turn_budget');return None
+    if deadline<=now or runtime_remaining(state,now=now) in (None,0):
+        settle_review_wait(db,session_id,reason='review_wait_deadline');return None
+    if progress['status']!='waiting':
+        settle_review_wait(db,session_id,reason='review_wait_delivery_unknown');return None
+    try:status=review_wait_status(state,session_id)
+    except Exception:status='unavailable'
+    if status=='alive':return None
+    if status!='ready':
+        settle_review_wait(db,session_id,reason='review_wait_owner_unavailable');return None
+    progress.update(status='claimed',claim_id=uuid.uuid4().hex,owner=owner,claimed_at=now,
+                    next_due=None,next_owner='native_review_continuation')
+    progress['receipts']=[*(progress.get('receipts') or []),
+        {'event':'claimed','claim_id':progress['claim_id'],'at':now}]
+    state.advisory_progress=progress
+    state.clear_wait()
+    return progress if db.compare_and_swap_meta('goal:'+session_id,raw,state.to_json()) else None
+
+
+def review_wait_turn_started(db, session_id, claim_id):
+    from hermes_cli.goals_runtime import runtime_identity
+    raw,state,progress=read_review_wait(db,session_id)
+    if (not state or state.status!='active' or state.pause_requested
+            or progress.get('goal_identity')!=list(runtime_identity(state))
+            or progress.get('status')!='claimed' or progress.get('claim_id')!=claim_id
+            or float(progress.get('original_deadline') or 0)<=time.time()):return False
+    progress.update(status='dispatched',started_at=time.time())
+    progress['receipts']=[*(progress.get('receipts') or []),
+        {'event':'turn_started','claim_id':claim_id,'at':progress['started_at']}]
+    state.advisory_progress=progress
+    return db.compare_and_swap_meta('goal:'+session_id,raw,state.to_json())
 
 
 # Actions describe the provider's current obligation, not permission to run it.

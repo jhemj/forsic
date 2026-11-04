@@ -139,6 +139,7 @@ class TurnStatus(WireEnum):
     """``prompt_turn._result_status``."""
 
     complete = "complete"
+    yielded = "yielded"
     error = "error"
     interrupted = "interrupted"
 

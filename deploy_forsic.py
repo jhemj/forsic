@@ -25,6 +25,8 @@ from urllib.parse import urlsplit
 PIN = 'bafb42b431fca313471958fdf77f9c30e455f86b'
 DEPENDENCIES = {'python-docx': '1.2.0', 'lxml': '6.1.3', 'python-telegram-bot': '22.8'}
 ROOT_FILES = (
+    'test_report_completion_work.py', 'test_review_completion_reservation.py', 'test_review_wait_owner.py',
+    'test_runtime_completion_integration.py', 'docs/runtime-completion.md',
     'test_api_receipts.py',
     'test_audience_typography.py',
     'test_claim_evidence_binding.py',
@@ -138,6 +140,17 @@ REQUIRED_PUBLIC = ('README.md', 'docs/ARCHITECTURE.md', 'docs/TOOLS_AND_SKILLS.m
 CONFIG_FILES = ('SOUL.md', 'AGENTS.md', 'skin.yaml', 'forsic-theme.yaml', 'config.example.yaml', 'bundled-skills/README.txt')
 FIXTURES = ('notes.txt', 'cron.log', 'change.txt')
 UPSTREAM_ADDITIONS = (
+    'agent/runtime_checkpoint.py', 'agent/turn_outcome.py',
+    'hermes_cli/goals_completion.py', 'hermes_cli/goals_recovery.py',
+    'tui_gateway/goal_recovery.py',
+    'tests/agent/test_native_completion_deadlines.py',
+    'tests/agent/test_runtime_checkpoint_contract.py',
+    'tests/hermes_cli/test_goal_completion_contract.py',
+    'tests/hermes_cli/test_goal_completion_invariants.py',
+    'tests/hermes_cli/test_goal_context_recovery.py',
+    'tests/tui_gateway/test_goal_recovery_wakeup.py',
+    'web/src/components/ForsicExecutionStatus.tsx',
+    'web/src/components/ForsicExecutionStatus.test.tsx',
     'tests/agent/test_bounded_native_recovery.py',
     'tests/hermes_cli/test_goal_resume_preserves_usage.py',
     'web/src/components/ForsicCurrentJudgment.tsx',
@@ -312,7 +325,9 @@ def initial_config(base_url, model, *, wizard=False):
                   'auto_recovery_budget_seconds': 600, 'auto_recovery_request_timeout_seconds': 180,
                   'coding_context': 'off', 'execution_guidance': False,
                   'run_budget_seconds': 86400, 'local_stream_stale_timeout': 1800},
-        'goals': {'max_turns': 32},
+        'goals': {'max_turns': 32, 'runtime_policy': 'report-completion-v2',
+                  'completion_contract': {'required_formats': ['html'],
+                      'layout_required': False, 'completion_target': 'final_ready'}},
         'clarify': {'background': True, 'ui_timeout': 3600},
         'tool_loop_guardrails': {'hard_stop_enabled': True,
                                 'hard_stop_after': {'exact_failure': 8, 'same_tool_failure': 8}},

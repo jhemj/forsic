@@ -530,9 +530,10 @@ class SessionCompressionMixin:
                                session_id, reclaimed_holder)
             return bool(acquired)
         except sqlite3.Error as exc:
-            # False makes the caller skip compression — safe when the lock subsystem is broken.
+            # False means a proven live holder. Storage failure is unknown ownership;
+            # callers must fail closed without reporting confirmed lock contention.
             logger.warning("try_acquire_compression_lock(%s) failed: %s", session_id, exc)
-            return False
+            raise
 
     def release_compression_lock(self, session_id: str, holder: str) -> None:
         """Release the compression lock iff we own it; idempotent when gone/reclaimed."""

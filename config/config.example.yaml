@@ -41,7 +41,10 @@ agent:
   # Whole native goal allowance; continuation/restart do not renew it. Pause freezes it.
   run_budget_seconds: 86400
   local_stream_stale_timeout: 1800
-goals: {max_turns: 32}
+goals:
+  max_turns: 32
+  runtime_policy: report-completion-v2
+  completion_contract: {required_formats: [html], layout_required: false, completion_target: final_ready}
 tool_loop_guardrails:
   hard_stop_enabled: true
   hard_stop_after: {exact_failure: 8, same_tool_failure: 8}

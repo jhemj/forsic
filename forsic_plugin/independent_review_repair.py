@@ -20,7 +20,24 @@ def ordinary_receipts(receipts):
     return [(p,r) for p,r in receipts if not r.get('executive_round') or r.get('executive_repair_of')]
 
 
-def plan(resolved, receipts, rounds):
+def completion_quota(resolved, receipts, *, final_current=False):
+    """Derived from immutable intents, including unknown/in-flight delivery.
+
+    The caller admits and publishes a request under the existing goal receipt
+    lock. This is accounting, not a second reservation store or a budget lift.
+    """
+    from . import independent_review as review
+    limit = review._call_budget(resolved)
+    used = len(ordinary_receipts(receipts))
+    reserved = 0 if final_current else 1
+    remaining = None if limit is None else max(0, limit - used)
+    return {'cap': limit, 'used': used, 'required_reserved': reserved,
+            'remaining': remaining,
+            'available_for_optional_work': None if limit is None else max(0, remaining - reserved),
+            'contract_infeasible': limit is not None and remaining < reserved}
+
+
+def _candidate(receipts, rounds):
     from . import independent_review as review
     for entry in rounds:
         if entry['question_count'] >= review.EXECUTIVE_QUESTIONS:continue
@@ -32,11 +49,24 @@ def plan(resolved, receipts, rounds):
         if not response or response.get('finish_reason')!='stop' or response.get('status') not in ('received','invalid_advice'):
             return None
         if any(r.get('executive_repair_of')==rid for _,r in receipts):return None
-        limit=review._call_budget(resolved)
-        if limit is not None and len(ordinary_receipts(receipts))>=limit:return None
         return {'review_id':rid,'round':request['executive_round'],
                 'missing_count':review.EXECUTIVE_QUESTIONS-entry['question_count'],
                 'attempt_limit':1,'counts_against':'ordinary_review_budget'}
+    return None
+
+
+def reservation_blocker(resolved, receipts, rounds):
+    candidate = _candidate(receipts, rounds)
+    quota = completion_quota(resolved, receipts)
+    return {**candidate, 'quota': quota} if candidate and quota['available_for_optional_work'] == 0 else None
+
+
+def plan(resolved, receipts, rounds):
+    # Missing-only repair does not certify the final authored body. Its
+    # final-stage label must not spend the last current-report review slot.
+    candidate = _candidate(receipts, rounds)
+    if candidate and completion_quota(resolved, receipts)['available_for_optional_work'] != 0:
+        return candidate
     return None
 
 

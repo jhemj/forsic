@@ -10,7 +10,7 @@ and ``methods_session.py`` (``verification.status``).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -550,6 +550,13 @@ class GoalSnapshot(Result):
     runtime_started_at: float | None = None
     runtime_accounting_known: bool = False
     runtime_checkpoints: list[RuntimeCheckpointSnapshot] = Field(default_factory=list)
+    runtime_policy: dict[str, Any] = Field(default_factory=dict)
+    runtime_control: dict[str, Any] = Field(default_factory=dict)
+    runtime_recovery: dict[str, Any] = Field(default_factory=dict)
+    runtime_settlement: dict[str, Any] = Field(default_factory=dict)
+    wall_deadline: float | None = None
+    runtime_completion: dict[str, Any] | None = None
+    runtime_fingerprint: dict[str, Any] = Field(default_factory=dict)
     runtime_phase: str | None = None
     runtime_checkpoint_due_seconds: int | None = None
     contract: GoalContractSnapshot

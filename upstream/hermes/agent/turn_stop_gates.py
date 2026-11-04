@@ -104,7 +104,7 @@ def _goal_advisory_stop(agent, final_response, messages=None):
     if db is None or not isinstance(session_id, str) or not session_id:
         return None
     from agent.conversation_loop import _run_budget_phase
-    if _run_budget_phase(agent) in {"handoff", "exhausted"}:
+    if _run_budget_phase(agent) in {"handoff", "settlement", "exhausted"}:
         # The reserved handoff has no further review budget. The finalizer
         # obtains its own checkpoint if this candidate never saw that notice.
         return None
@@ -138,7 +138,8 @@ def _goal_advisory_stop(agent, final_response, messages=None):
             return None
         verdict, reason = advisory_continuation(state, advisory, final_boundary=True)
         stopped = verdict != 'continue'
-        if stopped:
+        agent._goal_advisory_waiting = verdict == 'wait'
+        if stopped and verdict != 'wait':
             from hermes_cli.goals_runtime import settle_runtime
             settle_runtime(state)
             state.status, state.pause_requested = 'paused', False
@@ -216,7 +217,7 @@ def apply_stop_gates(
         if stopped:
             verdict.continue_turn = False
             verdict.final_response = checkpoint
-            verdict.stop_reason = 'goal_advisory_paused'
+            verdict.stop_reason = 'goal_advisory_waiting' if getattr(agent, '_goal_advisory_waiting', False) else 'goal_advisory_paused'
         return verdict
 
     _verify_nudge = _verify_on_stop_nudge(agent)

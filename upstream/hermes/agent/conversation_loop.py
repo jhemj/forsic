@@ -150,7 +150,12 @@ def _run_budget_phase(agent: Any):
     from hermes_cli.goals_runtime import runtime_phase
     state = _run_budget_state(agent)
     if state is not None:
-        return runtime_phase(state)
+        from hermes_cli.goals_completion import enabled, read_work_projection, refresh_control
+        work = None
+        if enabled(state):
+            work = read_work_projection(agent.session_id, state)
+            state, _ = refresh_control(agent._session_db, agent.session_id, state, work)
+        return runtime_phase(state, work=work)
     budget = getattr(agent, "run_budget_seconds", None)
     started = getattr(agent, "_run_budget_started_at", None)
     if (isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0
@@ -194,6 +199,23 @@ def _run_budget_notice_present(agent, messages) -> bool:
 def _run_budget_checkpoint_due(agent: Any) -> bool:
     from hermes_cli.goals_runtime import runtime_identity, runtime_phase, runtime_checkpoint_due, recover_runtime_milestones
     state = _run_budget_state(agent)
+    original = (getattr(agent, "_runtime_turn_identity", None)
+                or getattr(agent, "_runtime_handoff_identity", None))
+    if (getattr(agent, "_runtime_turn_identity_error", None)
+            or original is not None and (state is None or state.status != "active" or state.pause_requested
+                or runtime_identity(state) != tuple(original))):
+        # A late response belongs to the admitted turn, never a replacement goal.
+        # Cancellation must clear an earlier settlement flag as well as a milestone.
+        agent._runtime_checkpoint_cancelled = True
+        agent._runtime_settlement_due = False
+        agent._runtime_milestone_threshold = None
+        agent._runtime_handoff_identity = original
+        return True
+    if _run_budget_phase(agent) == "settlement":
+        agent._runtime_handoff_identity = runtime_identity(state)
+        agent._runtime_settlement_due = True
+        agent._runtime_milestone_threshold = None
+        return True
     if runtime_checkpoint_due(state) is not None:
         recover_runtime_milestones(agent._session_db, agent.session_id)
         recovered = _run_budget_state(agent)
@@ -203,8 +225,8 @@ def _run_budget_checkpoint_due(agent: Any) -> bool:
             agent._runtime_handoff_identity = runtime_identity(state)
             return True
         state = recovered
-    phase = runtime_phase(state)
-    if phase not in {"checkpoint", "handoff", "exhausted"}:
+    phase = _run_budget_phase(agent)
+    if phase not in {"checkpoint", "handoff", "settlement", "exhausted"}:
         return False
     agent._runtime_handoff_identity = runtime_identity(state)
     agent._runtime_milestone_threshold = runtime_checkpoint_due(state) if phase == "checkpoint" else None
@@ -1182,7 +1204,8 @@ def _partial_turn_result(
 def _compression_deferred_result(agent, messages: List[Dict], api_call_count: int, reason: str = "lock") -> Dict[str, Any]:
     """Soft turn result for a transiently-deferred compression. Both reasons must end as
     ``compression_deferred``, never ``compression_exhausted`` — the gateway wipes the
-    session on exhaustion (#9893/#35809). ``failed`` stays False; the turn persists."""
+    session on exhaustion (#9893/#35809). Known waits keep ``failed=False``; unknown
+    lock-store ownership is a terminal typed failure, never claimed live contention."""
     session = agent.session_id or "none"
     if reason == "transient_block":
         block = getattr(agent, "_compression_blocked_transient", None)
@@ -1208,9 +1231,30 @@ def _compression_deferred_result(agent, messages: List[Dict], api_call_count: in
         agent._flush_status_buffer()
     except Exception:
         pass
+    from agent.turn_outcome import compression_outcome
+    from uuid import uuid4
+    lock_error = getattr(agent, "_compression_lock_state_unknown", False) is True
+    cause = ("compression_lock_state_unknown" if lock_error else
+             "compression_transient_guard" if reason == "transient_block" else "compression_lock_busy")
+    outcome = compression_outcome(cause)
+    if lock_error:
+        _final = "Context compression ownership could not be verified; saved progress is preserved."
+    retry_at = None
+    if cause == "compression_transient_guard":
+        # Existing compressor guards use monotonic time. Persist only a wall due time,
+        # never the process-local absolute monotonic value across a restart.
+        from math import isfinite
+        compressor = getattr(agent, "context_compressor", None)
+        until = [getattr(compressor, name, None) for name in
+                 ("_summary_failure_cooldown_until", "_structural_no_op_backoff_until")]
+        remaining = [value - time.monotonic() for value in until
+                     if isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value)]
+        if remaining:
+            retry_at = time.time() + max(0., max(remaining))
     return _partial_turn_result(
         _final, messages, api_call_count,
-        failed=False, compression_deferred=True, session_id=agent.session_id,
+        failed=outcome.kind == "terminal_error", compression_deferred=True, session_id=agent.session_id,
+        turn_outcome={**outcome.to_dict(), "source_turn": uuid4().hex, "retry_at": retry_at},
     )
 
 

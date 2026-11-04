@@ -138,65 +138,55 @@ def _has_active_native_goal(agent, logger) -> bool:
 
 
 def _resolve_runtime_milestone(agent, messages, api_call_count):
-    """Ask the configured main model once; validate syntax, never infer its judgment."""
-    import json
-    from agent.oneshot import _strip_code_fence
-    from agent.conversation_loop import _run_budget_state
-    from hermes_cli.goals_runtime import runtime_elapsed, runtime_remaining
-    threshold = agent._runtime_milestone_threshold
-    state = _run_budget_state(agent)
-    request = (
-        f"Native investigation checkpoint at {threshold // 3600} active hours. "
-        f"Actual active elapsed: {runtime_elapsed(state) / 3600:.2f} hours; "
-        f"remaining: {runtime_remaining(state) / 3600:.2f} hours of the pinned "
-        f"{state.runtime_budget_seconds / 3600:.2f}-hour cap. "
-        "Using only actual observations and saved results in this conversation, summarize supported findings, "
-        "important limitations, and useful next discriminating tests. Decide whether further investigation "
-        "has enough value to continue within the SAME remaining allowance, or finish discovery and enter "
-        "closing now: compose/save the answer or report and perform its required review/render checks. "
-        "A finish choice is closing intent, not a pause or a claim that report validation is complete. "
-        "There are no tools in this checkpoint. Do not invent evidence, tool outputs, or report files. "
-        "Return ONLY one JSON object with exactly these keys: decision ('continue' or 'finish'), "
-        "reason (nonempty Korean text), findings (nonempty Korean text), limitations (nonempty Korean text), "
-        "next_tests (nonempty Korean text). Keep each text field concise."
-    )
-    text = agent._handle_max_iterations(messages, api_call_count, summary_request=request, max_attempts=1)
-    if not getattr(agent, "_runtime_checkpoint_generated", False):
-        raise ValueError("checkpoint model response unavailable")
-    data = json.loads(_strip_code_fence(text.strip()))
-    if (not isinstance(data, dict) or set(data) != {"decision", "reason", "findings", "limitations", "next_tests"}
-            or data["decision"] not in {"continue", "finish"}
-            or any(not isinstance(data[key], str) or not data[key].strip() or len(data[key]) > 12000
-                   for key in ("reason", "findings", "limitations", "next_tests"))):
-        raise ValueError("invalid checkpoint decision schema")
-    readable = (f"{threshold // 3600}시간 조사 중간 점검\n\n확인한 내용: {data['findings']}\n\n"
-                f"한계와 미확인 범위: {data['limitations']}\n\n유용한 다음 검사: {data['next_tests']}\n\n"
-                f"모델 결정: {'계속 조사' if data['decision'] == 'continue' else '마무리 진행: 답변·보고서 저장과 필요한 검토'}\n"
-                f"이유: {data['reason']}")
-    row = messages[-1]
-    if row.get("role") != "assistant" or row.get("content") != text:
-        raise ValueError("checkpoint response row unavailable")
-    row["content"] = readable
-    row["display_metadata"] = {**(row.get("display_metadata") or {}), "runtime_milestone": {
-        "goal_identity": list(agent._runtime_handoff_identity), "threshold_seconds": threshold,
-        **data, "raw_response": text}}
-    agent._runtime_milestone_decision = data["decision"]
-    return readable
+    """The configured main model receives only the bounded canonical packet."""
+    from agent.runtime_checkpoint import resolve_milestone
+    return resolve_milestone(agent, messages, api_call_count)
 
 
 def _resolve_runtime_checkpoint(agent, final_response, reason, interrupted, failed, messages, api_call_count):
     """One native closing request; it is never a successful goal completion."""
     from agent.conversation_loop import (
-        RUN_BUDGET_CHECKPOINT_REQUEST, _run_budget_closing_answer, _run_budget_phase)
+        RUN_BUDGET_CHECKPOINT_REQUEST, _run_budget_closing_answer, _run_budget_phase,
+        _run_budget_checkpoint_due)
     if interrupted or failed:
         return final_response, reason, interrupted
-    from agent.conversation_loop import _run_budget_checkpoint_due
     if str(reason).startswith("text_response("):
-        _run_budget_checkpoint_due(agent)  # a long final API call may cross a milestone
-    if reason == "runtime_budget_handoff" and getattr(agent, "_interrupt_requested", False):
-        return final_response, interrupted_during_api_call_reason(agent), True
+        # The final API response can cross D_ready as well as a milestone. Refresh
+        # native phase before choosing settlement versus another model request.
+        _run_budget_checkpoint_due(agent)
     if getattr(agent, "_runtime_checkpoint_cancelled", False):
         return "목표 제어 상태가 변경되어 중간 점검을 중단했습니다.", "runtime_budget_handoff_superseded", False
+    if getattr(agent, "_runtime_settlement_due", False):
+        from hermes_cli.goals_completion import settle_native
+        from agent.conversation_loop import _run_budget_state
+        from hermes_cli.goals_runtime import runtime_identity
+        try:
+            current = _run_budget_state(agent)
+            identity = (getattr(agent, "_runtime_turn_identity", None)
+                        or getattr(agent, "_runtime_handoff_identity", None))
+            if (current is None or current.status != "active" or current.pause_requested
+                    or identity is None or runtime_identity(current) != tuple(identity)):
+                return "목표 제어 상태가 변경되어 이전 조사의 정리를 적용하지 않았습니다.", "runtime_budget_handoff_superseded", False
+            receipt = settle_native(agent._session_db, agent.session_id,
+                expected_identity=identity, reason="report_target_settlement", pause=True)
+        except Exception as exc:
+            receipt = {"status": "settlement_failed", "reason": type(exc).__name__}
+        agent._runtime_settlement_receipt = receipt
+        if receipt.get("status") == "superseded":
+            return "목표 제어 상태가 변경되어 이전 조사의 정리를 적용하지 않았습니다.", "runtime_budget_handoff_superseded", False
+        if receipt.get("status") != "preserved":
+            return "산출물 보존 상태를 확인하지 못했습니다. 최종 보고서 완료로 처리하지 않습니다.", "runtime_settlement_failed", False
+        labels = {"final_ready": "최종 보고서 준비 완료", "final_ready_with_limitations": "명시된 한계를 포함한 전달본 준비",
+                  "draft_preserved": "미완성 초안 보존", "partial_checkpoint": "현재 조사 기록 보존"}
+        text = ("보고서 준비 구간 종료. " + labels.get(receipt.get("artifact_status"), "산출물 상태 미확인")
+                + ". 외부 전달 상태: " + str(receipt.get("delivery_status", "unconfirmed")) + ".")
+        for artifact in receipt.get("artifact_paths", []):
+            text += "\n" + artifact["path"]
+        append_message(messages, {"role": "assistant", "content": text,
+            "display_metadata": {"runtime_settlement": receipt}})
+        return text, "runtime_settlement_preserved", False
+    if reason == "runtime_budget_handoff" and getattr(agent, "_interrupt_requested", False):
+        return final_response, interrupted_during_api_call_reason(agent), True
     if getattr(agent, "_runtime_milestone_threshold", None) is not None:
         from agent.conversation_loop import _run_budget_state
         from hermes_cli.goals_runtime import runtime_identity
@@ -214,9 +204,30 @@ def _resolve_runtime_checkpoint(agent, final_response, reason, interrupted, fail
         except InterruptedError:
             return final_response, interrupted_during_api_call_reason(agent), True
         except Exception as exc:
+            from agent.runtime_checkpoint import CheckpointError
             logging.getLogger(__name__).warning("Runtime milestone failed (%s)", type(exc).__name__)
             agent._runtime_checkpoint_generated = False
-            return "중간 점검 결정을 생성하거나 검증하지 못했습니다. 조사는 미완료 상태로 일시정지됩니다.", "runtime_budget_checkpoint_failed", False
+            if isinstance(exc, CheckpointError) and exc.code == "goal_superseded":
+                return "목표 제어 상태가 변경되어 중간 점검을 중단했습니다.", "runtime_budget_handoff_superseded", False
+            recoverable_failure = isinstance(exc, CheckpointError) and (
+                exc.code in {"checkpoint_decision_unavailable", "checkpoint_packet_overflow",
+                             "checkpoint_context_overflow", "checkpoint_context_capacity_unknown",
+                             "checkpoint_output_capacity_unknown", "stale_checkpoint_basis"}
+                or exc.code == "checkpoint_recovery_recovery_episode_exhausted"
+                or exc.code in {"provider_timeout", "provider_server_error", "provider_overloaded"})
+            if recoverable_failure:
+                # This is an explicit native closing notice, never a forged model
+                # finish decision. It only becomes actionable after row persistence.
+                text = "중간 점검 결정 미확정. 새 탐색을 종료하고 저장된 판단으로 보고서 작성·필수 검토·정리를 진행합니다."
+                agent._runtime_checkpoint_degraded = True
+                append_message(messages, {"role": "assistant", "content": text,
+                    "display_metadata": {"runtime_checkpoint_unavailable": {
+                        "goal_identity": list(agent._runtime_handoff_identity),
+                        "threshold_seconds": agent._runtime_milestone_threshold,
+                        "reason": "checkpoint_decision_unavailable", "error_code": exc.code,
+                        "validation_errors": getattr(agent, "_runtime_checkpoint_diagnostics", [])}}})
+                return text, "runtime_budget_handoff", False
+            return "중간 점검의 상태 또는 저장 신뢰성을 확인하지 못했습니다. 조사는 미완료 상태로 일시정지됩니다.", "runtime_budget_checkpoint_failed", False
     if (final_response and str(reason).startswith("text_response(")
             and _run_budget_phase(agent) in {"handoff", "exhausted"}):
         if getattr(agent, "_interrupt_requested", False):
@@ -257,22 +268,51 @@ def _commit_runtime_checkpoint(agent, messages, final_response, reason, cleanup_
     from agent.context_compressor import _DB_PERSISTED_MARKER
     from hermes_cli.goals_runtime import finish_runtime_handoff
     row = getattr(agent, "_runtime_checkpoint_row", None)
-    saved = bool(final_response and getattr(agent, "_runtime_checkpoint_generated", False)
+    saved = bool(final_response and (getattr(agent, "_runtime_checkpoint_generated", False)
+                                   or getattr(agent, "_runtime_checkpoint_degraded", False))
                  and not any(error.startswith("persist_session:") for error in cleanup_errors)
                  and isinstance(row, dict) and any(message is row for message in messages)
                  and row.get("role") == "assistant" and row.get(_DB_PERSISTED_MARKER) is True
                  and (row.get("content") == final_response or row.get("api_content") == final_response))
     db = getattr(agent, "_session_db", None)
     identity = getattr(agent, "_runtime_handoff_identity", None)
+    def uncommitted_reason():
+        from agent.conversation_loop import _run_budget_state
+        from hermes_cli.goals_runtime import runtime_identity
+        current = _run_budget_state(agent)
+        # A lost CAS is not automatically a user-control change. If this exact
+        # goal is still active, fail closed instead of reporting a benign race.
+        if (current is not None and current.status == "active" and not current.pause_requested
+                and runtime_identity(current) == identity):
+            return "runtime_budget_checkpoint_failed"
+        return "runtime_budget_handoff_superseded"
+    if saved and getattr(agent, "_runtime_checkpoint_degraded", False):
+        from hermes_cli.goals_completion import technical_closing
+        uid = row.get("message_uid")
+        source = next((item for item in db.get_messages(agent.session_id)
+                       if uid and item.get("message_uid") == uid), None)
+        if (source is None or source.get("content") != row.get("content")
+                or source.get("display_metadata") != row.get("display_metadata")):
+            raise ValueError("checkpoint closing source row not durable")
+        committed = technical_closing(db, agent.session_id, identity, "checkpoint_decision_unavailable", source_uid=uid)
+        agent._runtime_checkpoint_saved = bool(committed)
+        return "runtime_checkpoint_closing_due" if committed else uncommitted_reason()
     if saved and getattr(agent, "_runtime_milestone_decision", None) is not None:
         from hermes_cli.goals_runtime import commit_runtime_milestone
         decision = commit_runtime_milestone(db, agent.session_id, expected_goal_id=identity, row=row)
         if decision == "invalid":
             committed = finish_runtime_handoff(db, agent.session_id, expected_goal_id=identity, checkpoint_saved=False)
-            return "runtime_budget_checkpoint_failed" if committed else "runtime_budget_handoff_superseded"
+            return "runtime_budget_checkpoint_failed" if committed else uncommitted_reason()
+        if decision in {"continue", "finish"}:
+            from hermes_cli.goals_completion import finish_recovery
+            # Source UID and native milestone CAS remain authoritative after a crash.
+            finish_recovery(db, agent.session_id, "checkpoint", expected_identity=identity,
+                            source_uid=row.get("message_uid"))
         agent._runtime_checkpoint_saved = True
+        if decision is None:
+            return uncommitted_reason()
         return {"continue": "runtime_checkpoint_decided", "finish": "runtime_checkpoint_decided",
-                "exhausted": "runtime_budget_exhausted"}.get(decision, "runtime_budget_handoff_superseded")
+                "exhausted": "runtime_budget_exhausted"}.get(decision, "runtime_budget_checkpoint_failed")
     if db is not None and identity is not None:
         committed = finish_runtime_handoff(db, agent.session_id, expected_goal_id=identity, checkpoint_saved=saved)
         from hermes_cli.goals_runtime import RUNTIME_BUDGET_REASON, RUNTIME_HISTORY_REASON
@@ -281,7 +321,7 @@ def _commit_runtime_checkpoint(agent, messages, final_response, reason, cleanup_
             return "runtime_budget_exhausted" if committed == RUNTIME_BUDGET_REASON else "runtime_budget_history_unavailable"
         if committed is None:
             agent._runtime_checkpoint_saved = saved
-            return "runtime_budget_handoff_superseded"
+            return uncommitted_reason()
     agent._runtime_checkpoint_saved = saved
     return "runtime_budget_handoff" if saved else "runtime_budget_checkpoint_failed"
 
@@ -751,6 +791,8 @@ def finalize_turn(
     # ``turn_exit_reason`` collapsed to code="unknown", retryable=True on every surface.
     # Advisory verdicts (``fails_turn=False``) only add the code: ``failed``/``completed`` keep
     # the loop's values so cron, kanban and transcript persistence behave as before.
+    if _turn_exit_reason == "runtime_settlement_failed":
+        failed = True
     _exit_failure = None if interrupted else exit_reason_failure(_turn_exit_reason)
     if _exit_failure is not None and _exit_failure.fails_turn:
         failed = True
@@ -762,7 +804,7 @@ def finalize_turn(
         and not failed
         and not interrupted
         and _turn_exit_reason not in {"runtime_budget_handoff", "runtime_budget_checkpoint_failed", "runtime_budget_handoff_superseded",
-                                      "goal_advisory_paused"}
+                                      "goal_advisory_paused", "goal_advisory_waiting", "runtime_settlement_preserved", "runtime_settlement_failed"}
         # Shared iteration budgets can run out before the local call limit. Required
         # advisory handoffs remain incomplete when their checkpoint is the fallback.
         and not (preserved_verification_fallback and any(
@@ -781,7 +823,7 @@ def finalize_turn(
     # The model has answered (or the loop gave up): a title upgrade held back because it shares a
     # self-hosted endpoint with the main request (#117296) may go out now.
     from agent.turn_context import start_deferred_title_upgrade
-    if not safe_pause_stopped:
+    if not safe_pause_stopped and not str(_turn_exit_reason).startswith("runtime_settlement_"):
         _guarded_cleanup("start_deferred_title_upgrade", lambda: start_deferred_title_upgrade(agent), _cleanup_errors, logger)
     # ``user_message`` may be a multimodal list of parts; the trajectory format wants a string.
     _guarded_cleanup(
@@ -810,16 +852,20 @@ def finalize_turn(
         # user will see, never the raw model text (#44239).
         if final_response and not interrupted and not safe_pause_stopped:
             final_response, _, _ = apply_llm_output_transform(agent, final_response, turn_id=turn_id, logger=logger)
-        if (getattr(agent, "_runtime_milestone_decision", None) is not None and messages
+        if ((getattr(agent, "_runtime_milestone_decision", None) is not None
+                or getattr(agent, "_runtime_checkpoint_degraded", False)) and messages
                 and not messages[-1].get(_DB_PERSISTED_MARKER)
-                and (messages[-1].get("display_metadata") or {}).get("runtime_milestone")):
+                and any(key in (messages[-1].get("display_metadata") or {})
+                        for key in ("runtime_milestone", "runtime_checkpoint_unavailable"))):
             # This new row has never been persisted or replayed. Bind the durable
             # decision to the output-transform result while retaining raw JSON.
             messages[-1]["content"] = final_response
         _close_transcript_tail(agent, messages, final_response, interrupted, _recovered_from_stream)
         if _turn_exit_reason in {"runtime_budget_handoff", "runtime_budget_checkpoint_failed"}:
             agent._runtime_checkpoint_row = messages[-1] if messages else None
-        if not interrupted and not failed and not safe_pause_stopped:
+        if (not interrupted and not failed and not safe_pause_stopped
+                and _turn_exit_reason not in {"runtime_budget_handoff", "runtime_budget_checkpoint_failed",
+                                              "runtime_settlement_preserved", "runtime_settlement_failed"}):
             _micro_compact_after_turn(agent, messages, final_response, logger, effective_task_id)
         agent._persist_session(messages, conversation_history)
 
@@ -887,6 +933,23 @@ def finalize_turn(
     if isinstance(final_response, str):
         final_response = _sanitize_surrogates(final_response)
 
+    # Every v2 exit records what is actually retained, including pauses and failed
+    # turns. This never resumes work, creates a model call, or replaces user control.
+    settlement = getattr(agent, "_runtime_settlement_receipt", None)
+    identity = getattr(agent, "_runtime_turn_identity", None)
+    if settlement is None and getattr(agent, "_runtime_turn_policy_enabled", False) and identity:
+        try:
+            from hermes_cli.goals_completion import settle_native
+            settlement = settle_native(agent._session_db, agent.session_id,
+                expected_identity=identity, reason=_turn_exit_reason)
+        except Exception as exc:
+            settlement = {"status": "settlement_failed", "reason": type(exc).__name__}
+    if getattr(agent, "_runtime_turn_identity_error", None):
+        settlement = {"status": "settlement_failed", "reason": "goal_identity_unavailable"}
+    if settlement and settlement.get("status") == "settlement_failed":
+        failed, completed = True, False
+        _cleanup_errors.append("runtime_settlement: " + str(settlement.get("reason", "unavailable")))
+
     result = {
         "final_response": final_response,
         "last_reasoning": _last_turn_reasoning(messages),
@@ -896,7 +959,7 @@ def finalize_turn(
         "turn_exit_reason": _turn_exit_reason,
         "runtime_checkpoint_source_message_id": (
             (getattr(agent, "_runtime_checkpoint_row", None) or {}).get("message_uid")
-            if _turn_exit_reason == "runtime_checkpoint_decided" else None),
+            if _turn_exit_reason in {"runtime_checkpoint_decided", "runtime_checkpoint_closing_due"} else None),
         "failed": failed,
         "partial": False,  # True only when stopped due to invalid tool calls
         "interrupted": interrupted,
@@ -921,13 +984,18 @@ def finalize_turn(
             (getattr(agent, "request_overrides", {}) or {}).get("extra_body") or {}
         ).get("service_tier"),
         "session_id": agent.session_id,
+        "runtime_settlement": settlement,
     }
     if agent._tool_guardrail_halt_decision is not None:
         result["guardrail"] = agent._tool_guardrail_halt_decision.to_metadata()
     # Persistence failures already set failed=True; also stamp `error` so the gateway
     # surfaces status="error" (desktop can toast) instead of a quiet complete frame, plus
     # the machine-readable cause 'session_persistence_failed:<locked|compression|...>'.
-    if failed and str(_turn_exit_reason) == "session_persistence_failed":
+    if failed and settlement and settlement.get("status") == "settlement_failed":
+        result["error"] = "native runtime settlement could not be verified"
+        result["failure_reason"] = "runtime_settlement_failed"
+        result["failure_retryable"] = False
+    elif failed and str(_turn_exit_reason) == "session_persistence_failed":
         from hermes_constants import profile_cli_selector
 
         # Never rebind final_response here: the memory sync and the background-review gate
@@ -966,10 +1034,11 @@ def finalize_turn(
         agent._iters_since_skill = 0
 
     # External memory provider: sync the completed turn + queue next prefetch.
-    agent._sync_external_memory_for_turn(
-        original_user_message=original_user_message, final_response=final_response,
-        interrupted=interrupted or safe_pause_stopped, messages=messages,
-    )
+    if not str(_turn_exit_reason).startswith("runtime_settlement_"):
+        agent._sync_external_memory_for_turn(
+            original_user_message=original_user_message, final_response=final_response,
+            interrupted=interrupted or safe_pause_stopped, messages=messages,
+        )
 
     # Background memory/skill review runs AFTER delivery so it never competes with the
     # user's task. Suppressed by skip_background_review (e.g. cron): the fork costs
@@ -979,6 +1048,7 @@ def finalize_turn(
         final_response
         and not interrupted
         and not safe_pause_stopped
+        and not str(_turn_exit_reason).startswith("runtime_settlement_")
         and not getattr(agent, "skip_background_review", False)
         and (_should_review_memory or _should_review_skills)
     ):

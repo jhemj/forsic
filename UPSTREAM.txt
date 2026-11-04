@@ -342,3 +342,19 @@ Predispatch diagnostics remain bound to scope, material and review progress;
 finalize/inbox expose them without replacing canonical receipts or preventing
 a fresh explicit dispatch after repair.
 Regressions: test_executive_packet_composition.py, test_review_attempt_diagnostics.py.
+
+Maintained opt-in native completion contract:
+Typed yielded/context outcomes persist bounded recovery ownership in the existing
+goal row and wake through the existing TUI scheduler. Milestones use bounded
+canonical packets, one format repair and source-message-before-CAS persistence.
+The pinned report-completion-v2 policy reserves artifact/review work and separate
+model-free settlement on the native active clock. Actual dispatch, summary and
+child operations inherit the original deadline and identity; retries and approval
+waits cannot renew it. Legacy goals keep their policy until explicit paused CAS
+migration. Current work is a read-only plugin projection, not another executor.
+The UI and native control snapshot distinguish owner, phase, preparation target,
+artifact, review and delivery status and expose the loaded policy fingerprint.
+See docs/runtime-completion.md for activation, migration, validation and rollback.
+Regressions include native checkpoint/context/deadline/dispatch tests and product
+report-work, ordinary-slot reservation and synthetic artifact integration tests.
+Live-provider and real-time soak validation remain distinct operational evidence.

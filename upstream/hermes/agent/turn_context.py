@@ -585,6 +585,12 @@ _PER_TURN_RESET_STATE: Tuple[Tuple[str, Any], ...] = (
     ("_runtime_checkpoint_row", None), ("_runtime_checkpoint_saved", False),
     ("_runtime_milestone_threshold", None), ("_runtime_milestone_decision", None),
     ("_runtime_checkpoint_cancelled", False),
+    ("_runtime_checkpoint_degraded", False), ("_runtime_checkpoint_diagnostics", None),
+    ("_runtime_checkpoint_request_budget", None), ("_runtime_checkpoint_deadline", None),
+    ("_runtime_checkpoint_request", False), ("_runtime_checkpoint_work_digest", None),
+    ("_runtime_settlement_due", False), ("_runtime_settlement_receipt", None),
+    ("_runtime_turn_identity", None), ("_runtime_turn_policy_enabled", False),
+    ("_runtime_turn_identity_error", None),
     ("_pre_verify_nudges", 0),
 )
 
@@ -593,6 +599,18 @@ def _reset_per_turn_agent_state(agent: Any) -> None:
     """Reset retry counters, guardrails, iteration and run budgets at turn start."""
     for name, value in _PER_TURN_RESET_STATE:
         setattr(agent, name, value)
+    # Pin cleanup to the admitted turn's goal. A later replacement must never
+    # inherit an old turn's settlement receipt or be paused by its finalizer.
+    try:
+        from agent.conversation_loop import _run_budget_state
+        from hermes_cli.goals_runtime import runtime_identity
+        from hermes_cli.goals_completion import enabled
+        state = _run_budget_state(agent)
+        if state is not None:
+            agent._runtime_turn_identity = runtime_identity(state)
+            agent._runtime_turn_policy_enabled = enabled(state)
+    except Exception as exc:
+        agent._runtime_turn_identity_error = type(exc).__name__
     agent._turn_failed_file_mutations = {}
     agent._turn_file_mutation_paths = set()
     agent._tool_guardrails.reset_for_turn()

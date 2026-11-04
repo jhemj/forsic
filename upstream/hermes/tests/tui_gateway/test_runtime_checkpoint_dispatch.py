@@ -189,3 +189,43 @@ def test_checkpoint_never_controls_a_different_or_unidentified_scope(gateway, ch
     rt.server._run_post_turn_followups("request", "ui", rt.session, result, prompt)
     assert rt.db.get_meta("goal:" + rt.manager.session_id) == before
     rt.server._run_prompt_submit.assert_not_called()
+
+
+def technical_closing(gateway, *, role="assistant", source=True):
+    from hermes_cli.goals_completion import technical_closing as commit_closing
+    rt=gateway
+    identity=list(runtime.runtime_identity(rt.manager.state))
+    uid="native-closing-source"
+    if source:
+        rt.db.append_message(rt.manager.session_id,role,"Native checkpoint unavailable; bounded closing follows.",
+            message_uid=uid,display_metadata={"runtime_checkpoint_unavailable":
+                {"goal_identity":identity,"reason":"checkpoint_decision_unavailable"}})
+    assert commit_closing(rt.db,rt.manager.session_id,tuple(identity),
+        "checkpoint_decision_unavailable",source_uid=uid)
+    return {"final_response":"Native checkpoint unavailable; bounded closing follows.","completed":False,
+        "failed":False,"interrupted":False,"turn_exit_reason":"runtime_checkpoint_closing_due",
+        "runtime_checkpoint_source_message_id":uid}
+
+
+def test_technical_closing_actual_source_continues_without_fabricated_finish(gateway):
+    result=technical_closing(gateway)
+    assert followup(gateway,result)
+    state=goals.load_goal(gateway.manager.session_id)
+    assert state.status=="active" and state.last_verdict=="closing" and state.turns_used==1
+    assert state.runtime_checkpoints==[]
+    gateway.forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("damage",["missing_source","wrong_result_uid","wrong_identity","wrong_role"])
+def test_technical_closing_never_accepts_wrong_source_or_identity(gateway,damage):
+    result=technical_closing(gateway,role="user" if damage=="wrong_role" else "assistant",
+        source=damage!="missing_source")
+    if damage=="wrong_result_uid": result["runtime_checkpoint_source_message_id"]="other-turn"
+    if damage=="wrong_identity":
+        state=goals.load_goal(gateway.manager.session_id)
+        state.runtime_control["goal_identity"]=[0.,"different-goal"]
+        goals.save_goal(gateway.manager.session_id,state)
+    assert followup(gateway,result) is None
+    gateway.server._run_prompt_submit.assert_not_called()
+    assert goals.load_goal(gateway.manager.session_id).runtime_checkpoints==[]
+    gateway.forbidden.assert_not_called()

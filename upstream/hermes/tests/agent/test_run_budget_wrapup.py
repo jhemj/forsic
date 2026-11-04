@@ -7,7 +7,7 @@ import pytest
 
 from agent import conversation_loop as loop, turn_context, turn_finalizer as final
 from agent.session_persistence import SessionPersistenceMixin
-from hermes_cli import goals, goals_runtime as runtime
+from hermes_cli import goals, goals_runtime as runtime, goals_completion
 from hermes_state import SessionDB
 
 
@@ -19,8 +19,12 @@ class OfflineAgent(SessionPersistenceMixin):
 def clock_agent(tmp_path, monkeypatch):
     clock = NS(now=1000.)
     fake_time = NS(time=lambda: clock.now)
-    for module in (goals, runtime, loop):
+    for module in (goals, runtime, loop, goals_completion):
         monkeypatch.setattr(module, "time", fake_time)
+    monkeypatch.setattr(goals_completion, "read_work_projection", lambda sid, state: {
+        "status": "known", "digest": "synthetic-canonical-r1", "checkpoint_context": {
+            "answer": "Original observed evidence", "evidence_pointers": ["synthetic:1"],
+            "limitations": ["Unknown actor"], "next_tests": ["Inspect another source"]}})
     db = SessionDB(tmp_path / "state.db")
     db.create_session("task", "test")
     monkeypatch.setattr(goals, "_get_session_db", lambda: db)
@@ -150,6 +154,7 @@ def test_actual_finalizer_saves_partial_before_native_handoff_and_respects_contr
             return "" if outcome == "empty" else text
         return attempt
     monkeypatch.setitem(helpers._SUMMARY_ATTEMPT_BUILDERS, "synthetic", build)
+    monkeypatch.setattr(helpers, "_checkpoint_summary_attempt", build)
     monkeypatch.setattr(helpers, "_iteration_summary_api_messages", lambda agent, messages: deepcopy(messages))
     monkeypatch.setattr(relay_llm, "complete_logical_call", Mock())
     forbidden = Mock(side_effect=AssertionError("No auxiliary review/judge during native partial handoff"))
@@ -243,7 +248,11 @@ def test_actual_finalizer_saves_partial_before_native_handoff_and_respects_contr
     saved = db.get_messages("task")
     assert saved[:len(receipts)] == receipts
     if milestone:
-        if outcome in {"milestone_invalid", "milestone_exception", "milestone_persist_failure"}:
+        if outcome == "milestone_invalid":
+            assert state.status == "active" and state.runtime_checkpoints == []
+            assert state.runtime_control["reason"] == "checkpoint_decision_unavailable"
+            assert result["turn_exit_reason"] == "runtime_checkpoint_closing_due" and not result["failed"]
+        elif outcome in {"milestone_exception", "milestone_persist_failure"}:
             assert state.status == "paused" and state.paused_reason == runtime.RUNTIME_CHECKPOINT_FAILED_REASON
             assert state.runtime_checkpoints == [] and result["failed"]
         elif outcome == "milestone_latecap":
@@ -294,8 +303,9 @@ def test_actual_finalizer_saves_partial_before_native_handoff_and_respects_contr
         assert result["turn_exit_reason"] == "runtime_budget_handoff_superseded"
     else:
         assert state.paused_reason == "user-safe-paused" and result["interrupted"]
-    assert calls == ([] if outcome in {"handoff_text", "hard_cap"} else [0])
-    if outcome not in {"manual_pause", "milestone_manual_pause", "milestone_continue", "milestone_finish", "milestone_18", "milestone_fenced"}:
+    assert calls == ([] if outcome in {"handoff_text", "hard_cap", "milestone_cas_loss"}
+                     else [0, 0] if outcome == "milestone_invalid" else [0])
+    if outcome not in {"manual_pause", "milestone_manual_pause", "milestone_continue", "milestone_finish", "milestone_18", "milestone_fenced", "milestone_invalid"}:
         assert not goals.GoalManager("task").evaluate_after_turn(text, turn_result=result)["should_continue"]
     forbidden.assert_not_called()
 

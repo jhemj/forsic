@@ -16,3 +16,8 @@
 .fcj-records > summary span {display: block; margin-top: 5px; color: var(--forsic-muted); font-size: var(--forsic-font-secondary, 13px); font-weight: 400;}
 .fcj-records > .forsic-investigation-panel {padding: 0 18px 18px;}
 @media (max-width: 600px) {.fcj-card {padding: 14px;} .fcj-history summary {padding: 8px 0;}}
+
+.fcj-runtime h3 {margin: 0 0 .75rem; font-size: 1rem; font-weight: 600;}
+.fcj-runtime dl {display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .75rem; margin: 0;}
+.fcj-runtime dt {font-size: .78rem; color: var(--muted-foreground);}
+.fcj-runtime dd {margin: .25rem 0 0; font-size: .9rem; line-height: 1.5;}

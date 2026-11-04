@@ -492,6 +492,12 @@ class GoalState:
     runtime_followup_of: Optional[str] = None
     runtime_followup_user_row_id: Optional[int] = None
 
+    runtime_policy: Dict[str, Any] = field(default_factory=dict)
+    runtime_control: Dict[str, Any] = field(default_factory=dict)
+    runtime_recovery: Dict[str, Any] = field(default_factory=dict)
+    runtime_settlement: Dict[str, Any] = field(default_factory=dict)
+    wall_deadline: Optional[float] = None
+
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
 
@@ -529,6 +535,11 @@ class GoalState:
                                  if isinstance(item, dict) and item.get("decision") in {"continue", "finish"}
                                  and item.get("threshold_seconds") in (43200, 64800)
                                  and isinstance(item.get("source_message_id"), str)],
+            runtime_policy=data.get("runtime_policy") if isinstance(data.get("runtime_policy"), dict) else {},
+            runtime_control=data.get("runtime_control") if isinstance(data.get("runtime_control"), dict) else {},
+            runtime_recovery=data.get("runtime_recovery") if isinstance(data.get("runtime_recovery"), dict) else {},
+            runtime_settlement=data.get("runtime_settlement") if isinstance(data.get("runtime_settlement"), dict) else {},
+            wall_deadline=normalize_runtime_clock(data.get("wall_deadline")),
             runtime_followup_of=(str(data["runtime_followup_of"]) if data.get("runtime_followup_of") else None),
             runtime_followup_user_row_id=(int(data["runtime_followup_user_row_id"])
                                          if data.get("runtime_followup_user_row_id") else None),
@@ -1392,18 +1403,24 @@ class GoalManager:
     @_goal_state_mutation
     def set(self, goal: str, *, max_turns: Optional[int] = None, contract: Optional[GoalContract] = None,
             runtime_followup_of: Optional[str] = None,
-            runtime_followup_user_row_id: Optional[int] = None) -> GoalState:
+            runtime_followup_user_row_id: Optional[int] = None,
+            wall_deadline: Optional[float] = None) -> GoalState:
         goal = (goal or "").strip()
         if not goal:
             raise ValueError("goal text is empty")
+        if wall_deadline is not None and normalize_runtime_clock(wall_deadline) is None:
+            raise ValueError("wall_deadline must be a finite absolute timestamp")
         self._state = GoalState(
             goal=goal, status="active", turns_used=0, created_at=time.time(), last_turn_at=0.0,
             max_turns=int(max_turns) if max_turns else self.default_max_turns,
             contract=contract if contract is not None else GoalContract(),
             runtime_followup_of=runtime_followup_of,
             runtime_followup_user_row_id=runtime_followup_user_row_id,
+            wall_deadline=wall_deadline,
         )
         attach_runtime_budget(self._state, self._runtime_budget)
+        from hermes_cli.goals_completion import configured_policy
+        self._state.runtime_policy = configured_policy(self._state.runtime_budget_seconds)
         return self._save()
 
     @_goal_state_mutation
@@ -1851,6 +1868,29 @@ class GoalManager:
             return _decision(state.status if state else None, False, None, "inactive", "no active goal", "")
         self._assert_evaluation_current()
 
+        if (turn_result or {}).get("turn_exit_reason") == "runtime_checkpoint_closing_due":
+            control = state.runtime_control
+            identity = list((state.created_at, state.goal))
+            uid = control.get("source_message_id")
+            row = next((r for r in _get_session_db().get_messages(self.session_id)
+                        if uid and r.get("message_uid") == uid), None)
+            metadata = (row or {}).get("display_metadata") or {}
+            notice = metadata.get("runtime_checkpoint_unavailable") or {}
+            if (control.get("phase") != "closing" or control.get("reason") != "checkpoint_decision_unavailable"
+                    or control.get("goal_identity") != identity or notice.get("goal_identity") != identity
+                    or (row or {}).get("role") != "assistant"
+                    or (turn_result or {}).get("runtime_checkpoint_source_message_id") != uid
+                    or notice.get("reason") != "checkpoint_decision_unavailable"):
+                return self._pause_decision("native checkpoint receipt invalid", "contract_violation",
+                                            "Current native closing source receipt was not verified.", "")
+            state.turns_used += 1
+            state.last_turn_at = time.time()
+            if state.turns_used >= state.max_turns:
+                return self._budget_pause(state, "budget", "Native closing still uses the original turn allowance.")
+            state.last_verdict, state.last_reason = "closing", control["reason"]
+            self._save()
+            return _decision("active", True, self.next_continuation_prompt(), "closing", control["reason"], "")
+
         if (turn_result or {}).get("turn_exit_reason") in {
                 "runtime_budget_handoff", "runtime_budget_checkpoint_failed", "runtime_budget_handoff_superseded"}:
             # The native finalizer owns this partial stop and its durable CAS. It is
@@ -1902,6 +1942,9 @@ class GoalManager:
         advice = advisory['context']
         if advisory['requires_followup']:
             verdict, diagnostic = advisory_continuation(state, advisory)
+            if verdict == 'wait':
+                self._save()
+                return self._waiting_decision(state)
             if verdict != 'continue':
                 return self._pause_decision(diagnostic, verdict, diagnostic,
                     '⏸ Goal incomplete — ' + diagnostic + '\n' + advice)
@@ -1958,6 +2001,18 @@ class GoalManager:
             elif validation["revisions"]:
                 state.evaluation_receipt = {"goal_id": goal_id, "revisions": validation["revisions"],
                                             "validated_at": time.time()}
+        if verdict == "done":
+            from hermes_cli.goals_completion import enabled, read_work_projection
+            if enabled(state):
+                work = read_work_projection(self.session_id, state)
+                if (work.get('status') != 'known' or work.get('blockers')
+                        or work.get('artifact_status') not in {'final_ready', 'final_ready_with_limitations'}):
+                    verdict = 'continue'
+                    reason = ('Report completion contract remains incomplete: '
+                        + ', '.join(work.get('blockers') or [work.get('reason') or 'qualified_artifact_missing']))
+                    state.runtime_control = {**state.runtime_control, 'phase':'closing',
+                        'reason':'completion_contract_pending', 'goal_identity':[state.created_at,state.goal],
+                        'decision_origin':'native', 'changed_at':time.time()}
         state.last_verdict = verdict
         state.last_reason = reason
         # Parse failures reset on any usable reply INCLUDING transport errors, so a flaky network

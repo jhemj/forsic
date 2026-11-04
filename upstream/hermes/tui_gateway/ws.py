@@ -379,6 +379,7 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: 
         # desktop app and web dashboard reach the agent via this sidecar, not entry.main()).
         for start, what in (
             (server._start_backend_heartbeat_refresher, "backend heartbeat refresher start"),
+            (server._start_goal_recovery, "durable goal recovery start"),
             (server._schedule_startup_orphan_sweep, "startup orphan sweep scheduling"),
         ):
             try:

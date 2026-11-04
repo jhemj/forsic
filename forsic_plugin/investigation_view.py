@@ -6,6 +6,7 @@ import heapq
 import json
 import re
 import sqlite3
+import time
 from urllib.parse import quote, urlencode
 
 from .notes import EVIDENCE_TOOLS
@@ -22,6 +23,27 @@ MAX_REVIEW_RECEIPTS = 24
 MAX_RECORD_BYTES = 128 * 1024
 MAX_SOURCE_BYTES = 1024 * 1024
 MAX_VIEW_BYTES = 256 * 1024
+
+
+def _execution_owner(resolved, goal, recovery):
+    if goal.status != 'active':
+        return 'inactive'
+    try:
+        path = resolved['_view_native_db']
+        lineage = resolved.get('session_lineage') or [resolved['requested_session_id']]
+        with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
+            db.execute('PRAGMA query_only=ON')
+            row = db.execute('SELECT 1 FROM session_turn_leases WHERE expires_at > ? AND conversation_id IN ('
+                + ','.join('?' for _ in lineage) + ') LIMIT 1', [time.time(), *lineage]).fetchone()
+        if row:
+            return 'native_lease'
+    except (KeyError, OSError, sqlite3.Error):
+        return 'unknown'
+    if recovery.get('status') == 'pending' and recovery.get('owner') and recovery.get('next_owner') and recovery.get('next_due'):
+        return 'recovery_scheduled'
+    if goal.waiting_until:
+        return 'native_wait'
+    return 'unowned'
 
 
 def resolve_view(session_id, profile):
@@ -724,8 +746,28 @@ def project_view(resolved, *, profile=''):
         result['task_focus']['omitted_tasks'] += max(0, counts['questions']-len(matching))
     _reports(case,resolved['case_id'],result,counts,current_basis=report_basis,draft=draft)
     result['report_workspace'] = workspace(result['report_authoring'], result['reports'])
+    from hermes_cli.goals_runtime import runtime_remaining
+    from hermes_cli.goals_completion import enabled, control_projection, read_work_projection
+    goal = resolved.get('goal')
+    result['execution'] = None
+    if goal is not None:
+        work = read_work_projection(resolved['requested_session_id'], goal) if enabled(goal) else {}
+        timing = control_projection(goal, work) if enabled(goal) else {}
+        recovery = goal.runtime_recovery.get('context') or {}
+        result['execution'] = {
+            'status': goal.status, 'phase': timing.get('phase') or goal.runtime_control.get('phase'),
+            'reason': goal.paused_reason or timing.get('reason'), 'remaining_seconds': runtime_remaining(goal),
+            'wall_deadline': goal.wall_deadline, 'reserve_seconds': timing.get('reserve_seconds'),
+            'slack_seconds': timing.get('slack_seconds'), 'ready_deadline': timing.get('ready_deadline'),
+            'estimate_source': timing.get('estimate_source'), 'next_owner': recovery.get('next_owner'),
+            'owner_status': _execution_owner(resolved, goal, recovery),
+            'next_due': recovery.get('next_due') or recovery.get('next_due_at') or goal.waiting_until,
+            'blockers': (work.get('blockers') or [])[:16], 'blocker_count': len(work.get('blockers') or []),
+            'artifact_status': goal.runtime_settlement.get('artifact_status'),
+            'policy_revision': goal.runtime_policy.get('revision', 'legacy-v1')}
+
     kept = {key: [] for key in counts}
-    budget = len(json.dumps([result['task_focus'],result['report_authoring'],result['report_workspace'],result['judgment_checkpoint']],ensure_ascii=False).encode())
+    budget = len(json.dumps([result['task_focus'],result['report_authoring'],result['report_workspace'],result['judgment_checkpoint'],result['execution']],ensure_ascii=False).encode())
     for key, limit in [('reports',MAX_REPORTS),('questions',MAX_QUESTIONS),('sources',MAX_SOURCES),
                        ('observations',MAX_OBSERVATIONS),('timeline',MAX_TIMES),
                        ('sessions',MAX_SESSIONS),

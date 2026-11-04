@@ -13,6 +13,29 @@ from forsic_plugin.report_driven.measurement import field_role
 from forsic_plugin.notes import note
 
 
+class ExecutionOwnerTests(unittest.TestCase):
+    def test_native_lease_and_recovery_owner_are_read_without_minting_authority(self):
+        from hermes_state import SessionDB
+        from types import SimpleNamespace
+        from forsic_plugin.investigation_view import _execution_owner
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'state.db'
+            with SessionDB(path) as db:
+                db.create_session('task', 'test')
+                resolved = {'_view_native_db':path, 'requested_session_id':'task', 'session_lineage':['task']}
+                goal = SimpleNamespace(status='active', waiting_until=None)
+                self.assertEqual(_execution_owner(resolved, goal, {}), 'unowned')
+                self.assertTrue(db.try_acquire_session_turn_lease('task', 'test-owner'))
+                self.assertEqual(_execution_owner(resolved, goal, {}), 'native_lease')
+                db.release_session_turn_lease('task', 'test-owner')
+                recovery = {'status':'pending','owner':'backend','next_owner':'native_goal_recovery','next_due':9999999999.}
+                self.assertEqual(_execution_owner(resolved, goal, recovery), 'recovery_scheduled')
+                recovery.pop('owner')
+                self.assertEqual(_execution_owner(resolved, goal, recovery), 'unowned')
+                goal.status = 'paused'
+                self.assertEqual(_execution_owner(resolved, goal, recovery), 'inactive')
+
+
 class CurrentJudgmentTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)

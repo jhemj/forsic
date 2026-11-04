@@ -23,20 +23,29 @@ def runtime_checkpoint_due(state, *, now=None):
     if any(item.get("decision") == "finish" for item in state.runtime_checkpoints):
         return None  # the model already chose closing; do not restart discovery decisions
     seen = {item.get("threshold_seconds") for item in state.runtime_checkpoints}
+    control = getattr(state, "runtime_control", None) or {}
+    seen.update(int(k) for k, v in (control.get("checkpoint_dispositions") or {}).items()
+                if k in {"43200", "64800"} and v.get("status") in {"decision_unavailable", "not_performed_due_to_deadline"})
     elapsed = runtime_elapsed(state, now=now)
     return next((threshold for threshold in RUNTIME_CHECKPOINT_THRESHOLDS
                  if threshold < state.runtime_budget_seconds and threshold <= elapsed
                  and threshold not in seen), None)
 
 
-def runtime_phase(state, *, now=None):
-    """Milestone choices precede closing; reserve the last 5% for a partial handoff.
+def runtime_phase(state, *, now=None, work=None):
+    """Project the pinned policy; settlement takes priority over late milestones.
 
     This is a projection of the same durable allowance as the hard deadline, never
     another timer or a resettable per-turn budget. Paused goals authorize no phase.
     """
     if state is None or state.status != "active" or state.pause_requested:
         return None
+    from hermes_cli.goals_completion import enabled, control_projection
+    if enabled(state):
+        control = control_projection(state, work, now=now)
+        phase = control['phase']
+        return ('checkpoint' if control['checkpoint_due'] is not None
+                and phase not in {'settlement', 'exhausted'} else phase)
     remaining = runtime_remaining(state, now=now)
     if remaining is None:
         return None
@@ -48,6 +57,8 @@ def runtime_phase(state, *, now=None):
         return "closing"
     if runtime_checkpoint_due(state, now=now) is not None:
         return "checkpoint"
+    if (getattr(state, "runtime_control", None) or {}).get("phase") == "closing":
+        return "closing"
     return "closing" if remaining <= state.runtime_budget_seconds * 0.1 else "investigation"
 
 
@@ -94,6 +105,13 @@ def commit_runtime_milestone(db, session_id, *, expected_goal_id, row, now=None)
                    if item.get(MESSAGE_UID) == uid), None)
     if source is None or source.get("content") != row.get("content") or source.get("display_metadata") != row.get("display_metadata"):
         return "invalid"
+    if metadata.get("report_work_digest") is not None:
+        from hermes_cli.goals_completion import read_work_projection
+        current_raw = db.get_meta(_meta_key(session_id))
+        current_state = GoalState.from_json(current_raw) if current_raw else None
+        if (current_state is None or runtime_identity(current_state) != expected_goal_id
+                or read_work_projection(session_id, current_state).get("digest") != metadata["report_work_digest"]):
+            return "invalid"
     expected = db.get_meta(_meta_key(session_id))
     state = GoalState.from_json(expected) if expected else None
     if (state is None or state.status != "active" or state.pause_requested
@@ -132,6 +150,10 @@ def recover_runtime_milestones(db, session_id):
     for row in db.get_messages(session_id):
         if (row.get("display_metadata") or {}).get("runtime_milestone"):
             result = commit_runtime_milestone(db, session_id, expected_goal_id=identity, row=row)
+            if result in {"continue", "finish"}:
+                from hermes_cli.goals_completion import finish_recovery
+                from agent.message_metadata import MESSAGE_UID
+                finish_recovery(db, session_id, "checkpoint", identity, row[MESSAGE_UID])
             if result in {"finish", "exhausted"}:
                 return
 
@@ -179,14 +201,18 @@ def runtime_elapsed(state, *, now=None):
 def runtime_remaining(state, *, now=None):
     if state is None or state.runtime_budget_seconds is None or not state.runtime_accounting_known:
         return None
-    return max(0.0, state.runtime_budget_seconds - runtime_elapsed(state, now=now))
+    remaining = max(0.0, state.runtime_budget_seconds - runtime_elapsed(state, now=now))
+    wall = getattr(state, "wall_deadline", None)
+    return min(remaining, max(0.0, wall - (time.time() if now is None else now))) if wall is not None else remaining
 
 
 def runtime_wall_deadline(state):
     if (state is None or state.status != "active" or state.runtime_budget_seconds is None
             or not state.runtime_accounting_known or state.runtime_started_at is None):
         return None
-    return state.runtime_started_at + max(0.0, state.runtime_budget_seconds - state.runtime_elapsed_seconds)
+    deadline = state.runtime_started_at + max(0.0, state.runtime_budget_seconds - state.runtime_elapsed_seconds)
+    wall = getattr(state, "wall_deadline", None)
+    return min(deadline, wall) if wall is not None else deadline
 
 
 def settle_runtime(state, *, now=None):

@@ -678,18 +678,26 @@ def _blocked_tool_result(agent, ref: _ToolCallRef, *, block_body: dict[str, Any]
 def _pre_tool_block(agent, ref: _ToolCallRef):
     """Run ``pre_tool_call`` plugin hooks; returns ``(block_message, final_args)`` with any
     hook-modified args applied. Hook failures never block."""
+    from hermes_cli.goals_completion import admit_tool_request
+    native_block, native_args = admit_tool_request(agent, ref.name, ref.args, ref.call_id)
+    if native_block:
+        return native_block, native_args
     try:
         from hermes_cli.plugins import _dispatch_pre_tool_call_hooks
 
         block_msg, modified_args = _dispatch_pre_tool_call_hooks(
             ref.name,
-            ref.args,
+            native_args,
             **tool_hook_ids(agent, ref.task_id, ref.call_id),
             middleware_trace=list(ref.trace),
         )
-        return block_msg, (ref.args if modified_args is None else modified_args)
+        final_args = native_args if modified_args is None else modified_args
     except Exception:
-        return None, ref.args
+        block_msg, final_args = None, native_args
+    if block_msg:
+        return block_msg, final_args
+    # Approval/plugin waits do not renew the original deadline or a replaced goal.
+    return admit_tool_request(agent, ref.name, final_args, ref.call_id)
 
 
 def _dispatch_authorized_once(
@@ -758,7 +766,20 @@ def _dispatch_authorized_once(
     from agent.terminal_approval_batch import prepare_current_terminal
     prepare_current_terminal(ref)
     _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
-    return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
+    from agent.deadline import native_operation_scope
+    deadline = ((getattr(agent, '_native_tool_grants', None) or {}).get(ref.call_id) or {}).get('deadline')
+    with native_operation_scope(deadline):
+        def dispatch():
+            from hermes_cli.goals_completion import admit_tool_request
+            blocked, actual_args = admit_tool_request(agent, ref.name, ref.args, ref.call_id)
+            if blocked:
+                state.blocked = True
+                return _blocked_tool_result(agent, ref, block_body={"error": blocked},
+                    block_error_type="native_admission", guardrail_decision=None)
+            accepted = ((getattr(agent, '_native_tool_grants', None) or {}).get(ref.call_id) or {}).get('deadline')
+            with native_operation_scope(accepted):
+                return execute(actual_args)
+        return _run_with_activity_heartbeat(agent, ref.name, dispatch)
 
 
 def _run_agent_tool_execution_middleware(
@@ -873,14 +894,24 @@ def _abandoned_sequential_result(agent, ref: _ToolCallRef, message: str, result_
     return _ManagedToolResult(result=result_cls(message), args=ref.args, middleware_trace=ref.trace, blocked=False, dispatched=True)
 
 
-def _poll_sequential_future(agent, future, function_name: str, deadline: float | None, started: float, authorization_gate) -> tuple[str, Any]:
+def _native_tool_remaining(agent, call_id=None):
+    from hermes_cli.goals_completion import operation_timeout
+    remaining = operation_timeout(agent, float('inf'))
+    accepted = ((getattr(agent, '_native_tool_grants', None) or {}).get(call_id) or {}).get('deadline')
+    return min(remaining, accepted - time.time()) if accepted is not None else remaining
+
+
+def _poll_sequential_future(agent, future, function_name: str, deadline: float | None, started: float, authorization_gate, tool_call_id=None) -> tuple[str, Any]:
     """Wait for the worker in interrupt-poll slices, extending the deadline by human approval
     wait; returns ``("done", result)``, ``("timeout", None)`` or ``("interrupted", None)``.
     A disabled deadline still polls: this loop is what makes a non-cooperative tool
     interruptible, so no deadline must not mean no interrupt checks."""
     _last_heartbeat = 0
     while True:
-        wait_slice = _SEQUENTIAL_INTERRUPT_POLL_SECONDS
+        native_remaining = _native_tool_remaining(agent, tool_call_id)
+        if native_remaining <= .001:
+            return "timeout", None
+        wait_slice = min(_SEQUENTIAL_INTERRUPT_POLL_SECONDS, native_remaining)
         if deadline is not None:
             remaining = deadline + authorization_gate.excluded_seconds() - time.monotonic()
             if remaining <= 0:
@@ -919,6 +950,10 @@ def _run_sequential_tool_execution_middleware(
     are ``_NEVER_PARALLEL_TOOLS`` and run inline below, before any deadline is armed, so
     they need no ``_SEQUENTIAL_DEADLINE_EXEMPT_TOOLS`` entry."""
     timeout_s = None if function_name in _SEQUENTIAL_DEADLINE_EXEMPT_TOOLS else _resolve_sequential_tool_timeout()
+    from hermes_cli.goals_completion import operation_timeout
+    native_timeout = operation_timeout(agent, timeout_s if timeout_s is not None else float('inf'))
+    if native_timeout != float('inf'):
+        timeout_s = native_timeout
     ref = _ToolCallRef(function_name, function_args, effective_task_id, tool_call_id, middleware_trace)
     kwargs = dict(ref.middleware_kwargs(), execute=execute, scope_block=scope_block, display_index=display_index)
     from agent.terminal_approval_batch import take_prepared_call
@@ -953,7 +988,7 @@ def _run_sequential_tool_execution_middleware(
     started = time.monotonic()
     abandoned = False
     try:
-        state, result = _poll_sequential_future(agent, future, function_name, deadline, started, authorization_gate)
+        state, result = _poll_sequential_future(agent, future, function_name, deadline, started, authorization_gate, tool_call_id)
         if state == "done":
             return result
         if state == "interrupted":
@@ -974,11 +1009,11 @@ def _run_sequential_tool_execution_middleware(
                 error_type="tool_interrupted", error_message=f"Tool execution cancelled: {interrupt_reason}",
             )
         else:
-            assert timeout_s is not None  # only reachable when a deadline exists
-            message = f"Error executing tool '{function_name}': timed out after {timeout_s:.1f}s"
-            logger.warning("sequential tool %s timed out after %.1fs", function_name, timeout_s)
+            elapsed = max(0., time.monotonic() - started)
+            message = f"Error executing tool '{function_name}': timed out after {elapsed:.1f}s; execution effect may be unknown, reconcile before retrying"
+            logger.warning("sequential tool %s timed out after %.1fs", function_name, elapsed)
             result_cls, outcome = _ToolTimeoutResult, dict(
-                duration_ms=int(timeout_s * 1000), status="timeout", error_type="tool_timeout", error_message=message,
+                duration_ms=int(elapsed * 1000), status="timeout", error_type="tool_timeout", error_message=message,
             )
         abandoned = True
         if prepared is not None:
@@ -1431,24 +1466,32 @@ class _ConcurrentBatch:
         agent = self.agent
         _conc_start = time.time()
         while True:
-            wait_timeout = 5.0
+            pending = {f for f in futures if not f.done()}
+            native_remaining = min((_native_tool_remaining(agent,
+                _pairing_tool_call_id(self.parsed_calls[future_to_index[f]].tool_call))
+                for f in pending if f in future_to_index), default=float('inf'))
+            wait_timeout = max(0., min(5.0, native_remaining))
+            remaining = float('inf')
             if deadline is not None:
                 remaining = deadline + self.authorization_gate.excluded_seconds() - time.monotonic()
                 if remaining <= 0:
                     not_done = {f for f in futures if not f.done()}
                 else:
                     wait_timeout = min(wait_timeout, remaining)
-            if deadline is None or remaining > 0:
+            if remaining > 0 and native_remaining > .001:
                 _done, not_done = concurrent.futures.wait(futures, timeout=wait_timeout)
+            else:
+                not_done = pending
             if not not_done:
                 return False
 
-            timed_out = deadline is not None and time.monotonic() >= deadline + self.authorization_gate.excluded_seconds()
+            timed_out = (native_remaining <= .001 or
+                deadline is not None and time.monotonic() >= deadline + self.authorization_gate.excluded_seconds())
             if timed_out:
                 self.timed_out_indices = {future_to_index[f] for f in not_done if f in future_to_index}
                 logger.warning(
                     "concurrent tool batch timed out after %.1fs; %d tool(s) still running: %s",
-                    self.timeout_s,
+                    time.time() - _conc_start,
                     len(self.timed_out_indices),
                     ", ".join(self._running_names(not_done, future_to_index)[:5]),
                 )
@@ -1590,6 +1633,10 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
 
     # Resolved before the batch is built so the start-order gate can clamp under the deadline.
     timeout_s = _resolve_concurrent_tool_timeout()
+    from hermes_cli.goals_completion import operation_timeout
+    native_timeout = operation_timeout(agent, timeout_s if timeout_s is not None else float('inf'))
+    if native_timeout != float('inf'):
+        timeout_s = native_timeout
     batch = _ConcurrentBatch(agent, messages, effective_task_id, parsed_calls, timeout_s)
     agent._current_tool = tool_names_str
     agent._touch_activity(f"executing {num_tools} tools concurrently: {tool_names_str}")

@@ -1390,6 +1390,17 @@ def _with_state(result,resolved,max_chars=3500):
             result['context']='검증된 기존 질문과 답은 보존했습니다. 다음 native 최종 경계에서 같은 회차의 누락 질문만 한 차례 복구합니다. 정확 참조·다섯 질문 완료 요건과 기존 호출 예산을 유지합니다.'
             return result
         if progress.get('status')=='blocked' and not state['pending_findings']:
+            from .independent_review_repair import reservation_blocker
+            reserved = reservation_blocker(resolved, _receipts(resolved), progress['rounds'])
+            if reserved:
+                result.update(status='final_reserved', requires_followup=True,
+                    followup_actionable=False, followup_action='repair',
+                    diagnostic={'code':'review_final_slot_reserved', 'phase':'executive_repair',
+                        'reason':'Missing-only repair cannot consume the reserved current-report final review slot.',
+                        'quota':reserved['quota'],
+                        'recovery':{'tool':'forsic_reporting','arguments':{'action':'review_inbox'}}})
+                result['context']='기존 임원 질문과 답은 보존했습니다. 누락 질문 복구에는 추가 ordinary 호출이 필요하지만 남은 호출은 현재 보고서 최종 검토용입니다. 마지막 슬롯을 소진하지 않고 미완료와 호출 제약을 표시합니다.'
+                return result
             # Availability disposition records a limitation, not the missing
             # questions. Keep this terminal partial outcome without replaying an
             # unknown request or forcing an endless main-agent continuation.
@@ -1458,7 +1469,7 @@ def latest_advice(resolved,max_chars=3500):
 
 def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,cancel_check=None,max_chars=3500,
                           *,intake_root,native_db=None,enabled=False,phase='checkpoint',stage='checkpoint',draft_response='',nonblocking=False,
-                          executive_followup=False,report_question_ids=None,**_):
+                          executive_followup=False,report_question_ids=None,read_only=False,wait_request_ids=(),**_):
     """Single bounded auxiliary call at an opted-in active native goal checkpoint."""
     if not enabled:return _result('disabled','',max_chars)
     if phase!='checkpoint' or stage not in ('checkpoint','exploration','final'):return _result('deferred','',max_chars)
@@ -1479,6 +1490,23 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
             # current report selection. Preserve them without marking success.
             return _unavailable(exc, 'report_selection', max_chars)
         if callable(cancel_check) and cancel_check():return _result('cancelled','',max_chars)
+        if read_only:
+            # The native idle timer may inspect only these already-issued requests.
+            # It must never reach packet construction, admission, or the provider.
+            from .independent_review_overlap import owner_status
+            owner=owner_status(str(resolved['case'].output/('independent-review-'+_goal_key(resolved)+'.lock')))
+            receipts={request['request_id']:(path,request) for path,request in _receipts(resolved)}
+            waits=[]
+            for request_id in wait_request_ids:
+                item={'request_id':request_id,'state':'unavailable'}
+                if owner.get('request_id')==request_id and owner.get('state')=='alive':
+                    item.update(owner)
+                elif request_id in receipts:
+                    path,request=receipts[request_id]
+                    response=_response_for(path,request)
+                    if response is not None:item.update(state='ready',receipt_status=response.get('status','unknown'))
+                waits.append(item)
+            return {'provider':'forsic_independent_review','status':'wait_status','review_waits':waits}
         # A prior dialogue must never restart at round one merely because the
         # new report has not been composed yet. Preparation is the actionable
         # next step; no auxiliary dispatch occurs on this boundary.
@@ -1489,7 +1517,7 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
         from .independent_review_overlap import pending_for
         pending=pending_for(str(lock_path),native_db=native_db,session_ids=resolved['session_lineage'])
         if pending and pending[0]!=str(lock_path) and stage!='final':
-            return _in_progress(resolved,max_chars,pending[1])
+            return _in_progress(resolved,max_chars,pending[1],owner_key=pending[0])
         if stage=='final':
             from .independent_review_overlap import wait_existing
             waited=wait_existing(pending[0] if pending else str(lock_path),cancel_check=cancel_check)
@@ -1501,10 +1529,15 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
                     return value
                 value=_in_progress(resolved,max_chars)
                 if waited=='cancelled':value['status']='cancelled'
-                else:
+                elif waited == 'in_progress':
                     value.update(followup_actionable=False, followup_action='repair',
                         diagnostic={'code':'review_deadline', 'phase':'final_wait',
                             'reason':'The existing review request reached its original deadline; its outcome remains unconfirmed.',
+                            'recovery':{'tool':'forsic_reporting','arguments':{'action':'review_inbox'}}})
+                elif waited == 'owner_lost':
+                    value.update(status='unavailable',followup_actionable=False,followup_action='repair',
+                        diagnostic={'code':'review_owner_dead','phase':'final_wait',
+                            'reason':'The existing worker ended without a settled receipt. The preserved request is not retried.',
                             'recovery':{'tool':'forsic_reporting','arguments':{'action':'review_inbox'}}})
                 return value
         # Settled executive questions and their answers are readable without
@@ -1585,7 +1618,7 @@ def goal_advisory_context(session_id='',goal_id='',goal_text='',turns_used=0,can
                 unknown=_with_state(_result('delivery_unconfirmed',
                     '이전 독립 검토 요청의 완료 여부를 확인하지 못했습니다. 같은 요청을 재전송하지 말고 보존 기록과 한계를 처분하세요.',max_chars),resolved,max_chars)
                 if unknown['requires_followup']:return unknown
-            if stage!='final' and limit is not None and len(ordinary)>=limit-1:
+            if (stage!='final' or snapshot.get('executive_repair_of')) and limit is not None and len(ordinary)>=limit-1:
                 return _with_state(_result('final_reserved','마지막 독립 검토 호출은 최종 답 검토를 위해 남겨 두었습니다.',max_chars),resolved,max_chars)
             if receipts and stage!='final':
                 previous=receipts[-1][1]
@@ -1735,11 +1768,20 @@ def inflight_review_ids(resolved):
     return [request_id] if request_id else []
 
 
-def _in_progress(resolved,max_chars=3500,review_id=''):
+def _in_progress(resolved,max_chars=3500,review_id='',*,owner_key=None):
     result=_with_state(_result('in_progress',
         '독립 검토가 고정된 관측을 검토 중입니다. 주 조사는 계속할 수 있으며 결과는 다음 도구·목표 경계에서 확인합니다. 실행 중인 검토를 통과나 가용성 한계 처분으로 대신하지 마세요.',max_chars),resolved,max_chars)
+    from .independent_review_overlap import owner_status
+    key=owner_key or str(resolved['case'].output/('independent-review-'+_goal_key(resolved)+'.lock'))
+    owner=owner_status(key)
+    if owner['state'] != 'alive':
+        result.update(status='unavailable',requires_followup=True,followup_action='repair',followup_actionable=False,
+            diagnostic={'code':'review_owner_'+owner['state'],'phase':'review_wait',
+                'reason':'No live bounded review worker is verified. Preserve the existing intent and inspect its receipt; do not resend.',
+                'recovery':{'tool':'forsic_reporting','arguments':{'action':'review_inbox'}}})
+        return result
     result.update(requires_followup=True, followup_action='wait', followup_actionable=True,
-                  review_id=review_id or next(iter(inflight_review_ids(resolved)),result['review_id']))
+                  review_id=review_id or owner['request_id'], review_wait=owner)
     return result
 
 

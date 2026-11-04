@@ -221,6 +221,8 @@ async def _lifespan(app: "FastAPI"):
     # Chat must degrade on its own rather than block every Desktop feature.
     from tui_gateway import methods_groups as _hosted_groups
     import tui_gateway.server  # noqa: F401
+    # Native durable goal wakeups must restore without a browser reconnect.
+    tui_gateway.server._start_goal_recovery()
 
     try:
         tui_gateway.server.install_tui_message_injector()

@@ -31,10 +31,12 @@ export interface InvestigationTime extends InvestigationDisplay {
   temporal?: InvestigationTemporal; temporal_context?: InvestigationTemporal
 }
 export interface InvestigationReviewQuestion {id: string; question: string; disposition?: string; semantic_approval?: boolean; disposition_validation?: 'validated_saved_response' | 'unverified_or_not_recorded'; response?: {question_id: string; revision: number; disposition: 'investigated' | 'refuted' | 'scope_limited'; reason: string; limitation: string | null; citation_refs: string[]}; quote_validation?: string; review_id?: string; currentness?: string; current_goal?: boolean; session_id?: string}
+export interface InvestigationExecution {status: string; phase?: string | null; reason?: string | null; remaining_seconds: number | null; wall_deadline?: number | null; reserve_seconds?: number | null; slack_seconds?: number | null; ready_deadline?: number | null; estimate_source?: string; owner_status?: 'inactive' | 'native_lease' | 'recovery_scheduled' | 'native_wait' | 'unowned' | 'unknown'; next_owner?: string | null; next_due?: number | null; blockers?: string[]; blocker_count?: number; artifact_status?: string | null; policy_revision: string}
 export interface InvestigationView {
   case_id: string; session_id?: string; profile?: string; questions: InvestigationQuestion[]; sources: InvestigationSource[]; observations: InvestigationObservation[]; timeline: InvestigationTime[]
   review_questions?: InvestigationReviewQuestion[]; review_question_coverage?: {current_goal_questions?: number; historical_goal_questions?: number}; timeline_empty_reason?: string
   judgment_checkpoint?: {status: 'pending' | 'current' | 'unavailable'; pending_briefings: number | null; latest_briefing_at: number | null; latest_saved_at: number | null}
+  execution?: InvestigationExecution | null
   task_focus?: InvestigationTaskFocus
   report_workspace?: InvestigationReportWorkspace
   report_authoring?: InvestigationReportAuthoring

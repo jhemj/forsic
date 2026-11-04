@@ -15,6 +15,7 @@ string sniffing when absent or partial.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ _CUSTOM_ENDPOINT_PROVIDERS = {"custom", "local", "llama.cpp", "llamacpp", "ollam
 # summaries plus the OpenAI SDK's stream-abort errors.
 _STREAM_DROP_FRAGMENTS = (
     "stream connection", "peer closed connection", "incomplete chunked read",
-    "connection broken", "stream ended prematurely", "sse", "mid-stream",
+    "connection broken", "stream ended prematurely", "mid-stream",
 )
 
 # Exception top-level modules that mean "API/transport call failed" (vs. a bug
@@ -82,7 +83,8 @@ def _is_custom_endpoint(provider: Optional[str]) -> bool:
 
 
 def _looks_like_stream_drop(message: str) -> bool:
-    return any(fragment in message.lower() for fragment in _STREAM_DROP_FRAGMENTS)
+    return (any(fragment in message.lower() for fragment in _STREAM_DROP_FRAGMENTS)
+            or re.search(r"\bsse\b", message, re.IGNORECASE) is not None)
 
 
 def _surface(layer: str, code: str, retryable: bool, provider: str = "", model: str = "") -> dict:

@@ -6,10 +6,12 @@ conclusion, force a scanner, or add a second judgment store.
 
 ## Recovery boundaries and reusable work
 
-The deployment enables two native automatic recovery cycles after transient provider
+The legacy transport policy enables two native automatic recovery cycles after transient provider
 failure. Primary transport repair and these cycles share 600 seconds after the first
 failure; each recovery request is capped at 180 seconds. A normal first request keeps its
-existing timeout. No new provider is selected. User stops, delivery uncertainty and the
+existing timeout, clipped by native goal and inherited operation deadlines. The opt-in
+[report completion policy](runtime-completion.md) additionally reserves closing work
+and settlement and uses durable typed context recovery. No new provider is selected. User stops, delivery uncertainty and the
 goal's recorded time/call allowances remain separate constraints. Resuming a goal preserves
 its used-turn count unless an explicit reset is requested.
 

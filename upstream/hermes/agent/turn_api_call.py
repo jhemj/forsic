@@ -87,20 +87,29 @@ def perform_api_call(
     _use_streaming = _should_stream(agent)
 
     def _perform_api_call(next_api_kwargs):
+        from hermes_cli.goals_completion import admit_model_request
+        admit_model_request(agent, api_request_id)
         if agent.api_mode == "codex_responses":
             next_api_kwargs = agent._get_transport().preflight_kwargs(
                 next_api_kwargs, allow_stream=False, is_github_responses=agent._is_copilot_url(),
                 sanitize_harmony_tokens=agent._is_codex_backend(),
             )
+        from agent.deadline import native_operation_scope
         if _use_streaming:
-            return agent._interruptible_streaming_api_call(
-                next_api_kwargs, on_first_delta=_stop_spinner
-            )
+            with native_operation_scope(getattr(agent, '_native_operation_deadline', None)):
+                return agent._interruptible_streaming_api_call(
+                    next_api_kwargs, on_first_delta=_stop_spinner
+                )
         from agent import relay_llm
+
+        def dispatch(actual_kwargs):
+            admit_model_request(agent, api_request_id)
+            with native_operation_scope(getattr(agent, '_native_operation_deadline', None)):
+                return agent._interruptible_api_call(actual_kwargs)
 
         return relay_llm.execute(
             next_api_kwargs,
-            agent._interruptible_api_call,
+            dispatch,
             session_id=str(agent.session_id or ""),
             name=str(agent.provider or "provider"),
             model_name=str(agent.model or ""),

@@ -66,7 +66,7 @@ def _is_successful_goal_turn(result: Any, status: str, raw: Any) -> bool:
     if (result.get("guardrail") or {}).get("action") in {"block", "halt"}:
         return False
     return (result.get("completed") is not False or is_max_iteration_handoff(result)
-            or result.get("turn_exit_reason") == "runtime_checkpoint_decided")
+            or result.get("turn_exit_reason") in {"runtime_checkpoint_decided", "runtime_checkpoint_closing_due"})
 
 
 def _active_goal_manager(session: dict):
@@ -116,42 +116,20 @@ def _pause_failed_turn_goal(session: dict, expected_identity: str | None, failur
 
 
 def _plan_goal_compression_recovery(
-    session: dict, result: Any, *, status: str, raw: Any) -> tuple[str | None, str | None]:
-    """Bounded active-goal retry after compression exhaustion: ``(continuation, notice)``.
-    Exhaustion is a failed turn (never judge input, never a spent goal turn); one fresh
-    continuation is allowed, a second exhaustion pauses the goal instead of spinning."""
-    if not (isinstance(result, dict) and result.get("compression_exhausted")):
-        if _is_successful_goal_turn(result, status, raw):
-            session.pop(_GOAL_COMPRESSION_RECOVERY_ATTEMPTS, None)
+    session: dict, result: Any, *, status: str, raw: Any,
+    expected_goal_identity: str | None = None) -> tuple[str | None, str | None]:
+    """Persist recovery before yielding; existing native wake ownership dispatches it."""
+    from agent.turn_outcome import turn_outcome
+    outcome = turn_outcome(result)
+    if outcome.kind not in {"yielded", "recoverable_error"}:
         return None, None
-    if not str(session.get("session_key") or ""):
+    if not session.get("session_key") or expected_goal_identity is None:
         return None, None
-    if (goal_mgr := _active_goal_manager(session)) is None:
-        session.pop(_GOAL_COMPRESSION_RECOVERY_ATTEMPTS, None)
-        return None, None
-    goal_created_at = float(getattr(goal_mgr.state, "created_at", 0.0) or 0.0)
-    goal_text = getattr(goal_mgr.state, "goal", "")
-    recovery_state = session.get(_GOAL_COMPRESSION_RECOVERY_ATTEMPTS)
-    attempts = 0
-    if (
-        isinstance(recovery_state, dict)
-        and recovery_state.get("goal_created_at") == goal_created_at
-        and recovery_state.get("goal") == goal_text):
-        with contextlib.suppress(TypeError, ValueError):
-            attempts = int(recovery_state.get("attempts", 0) or 0)
-    continuation_prompt = goal_mgr.next_continuation_prompt()
-    if attempts < _GOAL_COMPRESSION_RECOVERY_LIMIT and continuation_prompt:
-        session[_GOAL_COMPRESSION_RECOVERY_ATTEMPTS] = {
-            "goal_created_at": goal_created_at, "goal": goal_text, "attempts": attempts + 1}
-        return (
-            continuation_prompt,
-            "Context compression was exhausted. Retrying the active goal once.")
-    goal_mgr.pause(reason="context compression exhausted twice consecutively")
-    # A later explicit /goal resume gets a fresh bounded recovery cycle.
-    session.pop(_GOAL_COMPRESSION_RECOVERY_ATTEMPTS, None)
-    return None, (
-        "Goal paused after context compression was exhausted twice. "
-        "Run /compress, then /goal resume to continue.")
+    disposition = _register_goal_recovery(session, result, expected_goal_identity)
+    return None, ("Context recovery scheduled within the existing goal deadline."
+                  if disposition == "pending" else
+                  "Context recovery stopped; the durable goal records the reason."
+                  if disposition == "terminal" else None)
 
 
 def _admit_prompt_turn(
@@ -350,9 +328,8 @@ def _commit_turn_history(
 
 
 def _result_status(result: dict) -> str:
-    return (
-        "interrupted" if result.get("interrupted")
-        else "error" if result.get("error") else "complete")
+    from agent.turn_outcome import turn_outcome
+    return turn_outcome(result).display_status
 
 
 def _turn_outcome(result: Any, error_surface: dict | None = None) -> tuple[Any, str, str | None]:
@@ -416,13 +393,15 @@ def _goal_followup_after_turn(
         except Exception as exc:
             _hook_failure("goal guardrail pause", exc)
         return None
+    from agent.turn_outcome import turn_outcome
+    outcome = turn_outcome(result)
     compression_exhausted = bool(isinstance(result, dict) and result.get("compression_exhausted"))
-    if status == "error" and not compression_exhausted:
+    if outcome.kind == "terminal_error":
         _pause_failed_turn_goal(session, expected_goal_identity, result)
         return None
     try:
         recovery_prompt, recovery_notice = _plan_goal_compression_recovery(
-            session, result, status=status, raw=raw)
+            session, result, status=status, raw=raw, expected_goal_identity=expected_goal_identity)
         if recovery_notice:
             from gateway.warning_notifications import render_notification
             render_notification(
@@ -430,12 +409,16 @@ def _goal_followup_after_turn(
                 platform="tui", user_config=getattr(session.get("agent"), "_notification_config", None))
         goal_followup = recovery_prompt or None
     except Exception as _goal_recovery_exc:
+        # No durable intent means no guaranteed next owner. Do not present active idle as recovery.
+        _pause_failed_turn_goal(session, expected_goal_identity, _goal_recovery_exc)
         _hook_failure("goal compression recovery", _goal_recovery_exc)
-    if compression_exhausted or not _is_successful_goal_turn(result, status, raw):
+    if compression_exhausted or outcome.kind == "yielded" or not _is_successful_goal_turn(result, status, raw):
         return goal_followup
     try:
+        if session.get("session_key") and (getattr(manager.state, "runtime_recovery", {}) or {}).get("context"):
+            _finish_goal_recovery(session, result, expected_goal_identity)
         if session.get("session_key") and (goal_mgr := _active_goal_manager(session)) is not None:
-            if isinstance(result, dict) and result.get("turn_exit_reason") == "runtime_checkpoint_decided":
+            if isinstance(result, dict) and result.get("turn_exit_reason") in {"runtime_checkpoint_decided", "runtime_checkpoint_closing_due"}:
                 from hermes_cli.goals import goal_identity
                 if expected_goal_identity is None or goal_identity(goal_mgr.state) != expected_goal_identity:
                     return goal_followup  # a replacement scope never inherits the old checkpoint
@@ -898,7 +881,16 @@ def _invoke_agent(
     _usage_stop, _usage_thread = _start_usage_ticker(sid, agent)
     try:
         from agent.notification_presentation import notification_turn, event_presentation_muted
-        with notification_turn(agent, muted=event_presentation_muted("message.delta", sid), session_id=sid):
+        from agent.deadline import native_operation_scope
+        try:
+            deadline = (_goal_recovery_execution_deadline(session, display_metadata)
+                        if (display_metadata or {}).get("goal_recovery") else None)
+        except InterruptedError:
+            st.result = {"completed": False, "interrupted": True, "final_response": "",
+                         "turn_exit_reason": "context_recovery_superseded"}
+            return
+        with native_operation_scope(deadline), notification_turn(
+                agent, muted=event_presentation_muted("message.delta", sid), session_id=sid):
             st.result = agent.run_conversation(run_message, **st.run_kwargs)
     finally:
         # Stop AND join before anything emits: a tick surviving past message.complete would
@@ -1239,6 +1231,10 @@ def _run_prompt_submit(
     if admitted is None:
         return False
     images, agent = admitted
+    if (display_metadata or {}).get("goal_recovery") and not _ack_goal_recovery_start(session, display_metadata):
+        with session["history_lock"]:
+            session["running"] = False
+        return False
     from gateway.warning_notifications import diagnostic_turn_muted
     from agent.notification_presentation import notification_config_snapshot
     with _session_profile_runtime_scope(session):

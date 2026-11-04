@@ -126,6 +126,8 @@ VALID_HOOKS: Set[str] = {
     # Optional advice before the native goal judge. Own deadline/cancel_check required;
     # never receives the main response/history, executes tools, or changes goal state.
     "goal_advisory_context",
+    "goal_work_projection",  # Read-only work/quota basis for native deadline admission.
+
     # Compaction kwargs: owning session_id, max_bytes; same bounded projection envelope.
     "post_context_compaction",
     # Streaming observers (agent.plugin_stream_hooks), off the token path; payloads are immutable

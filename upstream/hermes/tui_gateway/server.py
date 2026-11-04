@@ -3411,9 +3411,6 @@ def _read_spawn_tree_index(session_dir) -> list[dict]:
 # ── Methods: prompt ──────────────────────────────────────────────────
 
 
-_GOAL_COMPRESSION_RECOVERY_ATTEMPTS = "_goal_compression_recovery_attempts"
-_GOAL_COMPRESSION_RECOVERY_LIMIT = 1
-
 # Captured at import time: tests monkeypatch threading.Thread with a synchronous stub, and the ticker only
 # exits once `stop` is set AFTER run_conversation returns — inline it would spin forever.
 _RealThread = threading.Thread
@@ -3605,7 +3602,7 @@ from .mcp_rpc_helpers import summarize_server as _mcp_summarize_server  # noqa: 
 from . import (  # noqa: E402
     methods_voice as _methods_voice, methods_browser as _methods_browser, methods_slash as _methods_slash,
     methods_complete_helpers as _methods_complete_helpers, session_auto_continue as _session_auto_continue,
-    plugin_inject as _plugin_inject,
+    plugin_inject as _plugin_inject, goal_recovery as _goal_recovery,
     rpc_dispatch as _rpc_dispatch,
     agent_callbacks as _agent_callbacks, session_history as _session_history,
     prompt_attachments as _prompt_attachments, session_notifications as _session_notifications,
@@ -3637,6 +3634,6 @@ for _m in (
     _methods_bot_relay, _prompt_turn, _billing_view, _methods_projects, _methods_session_foreign,
     _methods_session_control, _methods_subagents, _methods_vault, _methods_free_tier, _methods_connectors,
     _methods_connectors_account, _methods_display, _methods_display_watch, _methods_onboarding,
-    _methods_i18n, _methods_shared_metrics):
+    _methods_i18n, _methods_shared_metrics, _goal_recovery):
     _m.register(sys.modules[__name__])
 del _m

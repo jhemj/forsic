@@ -2716,6 +2716,10 @@ class _CompressionLease:
                     self.finish_lock_setup()
 
 
+class CompressionStateUnavailable(RuntimeError):
+    """Durable compression ownership could not be established; never a lock-busy verdict."""
+
+
 def _resolve_lock_api(lock_db: Any) -> Tuple[Any, Optional[Exception]]:
     """Return ``(try_acquire_compression_lock, lookup_error)`` for ``lock_db``.
     ``(None, None)`` = no db or legacy SessionDB without the lock API (fail open); ``(None, exc)`` = lookup
@@ -2745,7 +2749,7 @@ def _abort_lease(
     return None, prompt
 
 
-def _try_acquire_durable_lock(lease: _CompressionLease, try_acquire: Any, commit_fence: Any) -> bool:
+def _try_acquire_durable_lock(lease: _CompressionLease, try_acquire: Any, commit_fence: Any) -> Optional[bool]:
     """Acquire the durable lock for ``lease.holder`` and capture the start watermark.
     Watermark = MAX(id) of active rows at START: appends aren't blocked during summary; later rows are
     concurrent tail that archive_and_compact re-sequences. Capture is safety-additive (fallback archives
@@ -2776,7 +2780,7 @@ def _try_acquire_durable_lock(lease: _CompressionLease, try_acquire: Any, commit
             "compression lock acquisition raised unexpectedly for session=%s (%s: %s) — skipping compression this cycle",
             lease.sid, type(_lock_err).__name__, _lock_err,
         )
-        return False
+        return None  # storage failure: never turn unknown acquisition into confirmed contention
 
 
 def _sit_out_lock_contention(
@@ -2824,6 +2828,7 @@ def _acquire_compression_lease(
     # Clear stale lock-skip so this call's outcome alone is visible; else a manual
     # /compress after an auto lock-skip falsely reports "already in progress".
     agent._compression_skipped_due_to_lock = None
+    agent._compression_lock_state_unknown = False
     _try_acquire_lock, _lock_lookup_error = _resolve_lock_api(_lock_db)
     _lock_ttl = 300.0
     with contextlib.suppress(TypeError, ValueError):
@@ -2843,7 +2848,7 @@ def _acquire_compression_lease(
                 "compression lock lookup raised unexpectedly for session=%s (%s: %s) — skipping compression this cycle",
                 _lock_sid, type(_lock_lookup_error).__name__, _lock_lookup_error,
             )
-            _lock_acquired = False
+            _lock_acquired = None
         elif _try_acquire_lock is None:
             # Lock API absent on this instance: log once, proceed unlocked so version skew
             # cannot stall the outer auto-compression loop forever.
@@ -2864,6 +2869,12 @@ def _acquire_compression_lease(
                 agent._last_compaction_in_place = False
                 return _abort_lease(agent, lifecycle, system_message, attempt_started_at, "commit_fence_cancelled")
             _lock_acquired = _try_acquire_durable_lock(lease, _try_acquire_lock, commit_fence)
+        if _lock_acquired is None:
+            lease.finish_lock_setup()
+            agent._compression_lock_state_unknown = True
+            # End before any provider call; unknown ownership is not permission to run unlocked.
+            _abort_lease(agent, lifecycle, system_message, attempt_started_at, "lock_state_unknown")
+            raise CompressionStateUnavailable("compression_lock_state_unknown")
         if not _lock_acquired:
             lease.finish_lock_setup()
             return _sit_out_lock_contention(

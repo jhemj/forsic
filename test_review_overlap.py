@@ -312,7 +312,9 @@ class ReviewOverlapTests(unittest.TestCase):
         self.launch()
         self.jobs[-1].deadline=0
         result=review.goal_advisory_context(**self.kwargs(stage='final',draft_response='Candidate'))
-        self.assertEqual(result['status'],'in_progress');self.assertTrue(result['requires_followup'])
+        self.assertEqual(result['status'],'unavailable');self.assertTrue(result['requires_followup'])
+        self.assertEqual(result['diagnostic']['code'],'review_deadline')
+        self.assertFalse(result['followup_actionable'])
         self.assertTrue(self.jobs[-1].cancel.is_set());self.assertEqual(len(self.calls),1)
 
     def test_final_wait_cancels_without_waiting_for_an_unresponsive_fake_stream(self):

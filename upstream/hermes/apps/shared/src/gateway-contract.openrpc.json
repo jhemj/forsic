@@ -14256,6 +14256,56 @@
             "title": "Runtime Checkpoints",
             "type": "array"
           },
+          "runtime_policy": {
+            "additionalProperties": true,
+            "title": "Runtime Policy",
+            "type": "object"
+          },
+          "runtime_control": {
+            "additionalProperties": true,
+            "title": "Runtime Control",
+            "type": "object"
+          },
+          "runtime_recovery": {
+            "additionalProperties": true,
+            "title": "Runtime Recovery",
+            "type": "object"
+          },
+          "runtime_settlement": {
+            "additionalProperties": true,
+            "title": "Runtime Settlement",
+            "type": "object"
+          },
+          "wall_deadline": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wall Deadline"
+          },
+          "runtime_completion": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Completion"
+          },
+          "runtime_fingerprint": {
+            "additionalProperties": true,
+            "title": "Runtime Fingerprint",
+            "type": "object"
+          },
           "runtime_phase": {
             "anyOf": [
               {
@@ -36797,6 +36847,7 @@
         "description": "``prompt_turn._result_status``.",
         "enum": [
           "complete",
+          "yielded",
           "error",
           "interrupted"
         ],

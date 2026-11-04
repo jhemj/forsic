@@ -4,6 +4,7 @@ import type {InvestigationSourcePage, InvestigationSourceRequest, InvestigationV
 import {QuestionJudgment} from './ForsicRelationMap'
 import {ForsicInvestigation, SourcePreview} from './ForsicInvestigation'
 import {ForsicMissionFocus} from './ForsicMissionFocus'
+import {ForsicExecutionStatus} from './ForsicExecutionStatus'
 import {displayTitle, exactQuestionRefs, recordKey, sameRef} from './forsic-monitor'
 import './forsic-current-judgment.css'
 
@@ -39,6 +40,7 @@ export function ForsicCurrentJudgment({data, loading, error, lastCheckedAt, read
     {error && <p className="fi-notice" role="alert">현재 판단을 다시 확인하지 못했어요.{data ? ' 아래는 마지막으로 불러온 기록이며 최신 여부를 확인할 수 없습니다.' : ' 상태 다시 조회로 확인해 주세요.'}</p>}
     {!data && !error && <div className="fi-empty" role="status"><p>{loading ? '저장된 판단을 불러오고 있어요.' : '이 대화에 연결된 판단 기록을 기다리고 있어요.'}</p></div>}
     {data && <>
+      <ForsicExecutionStatus execution={data.execution}/>
       {checkpoint?.status === 'pending' && <section className="fi-notice" aria-label="새 설명과 저장된 판단" role="status"><strong>새 설명 이후 판단 반영 여부 확인 필요</strong><p>마지막 판단 저장 이후 조사 설명 {checkpoint.pending_briefings}회가 있었습니다. 아래는 저장된 판단이며, 진행 안내만 있는 경우에는 수정이 필요하지 않습니다. 새 설명은 최종 결론을 뜻하지 않습니다.</p><small>최근 설명 · {savedTime(checkpoint.latest_briefing_at)}<br/>최근 판단 저장 · {savedTime(checkpoint.latest_saved_at)}</small></section>}
       {checkpoint?.status === 'unavailable' && <p className="fi-notice" role="status">새 설명이 저장된 판단에 반영되었는지 확인할 수 없어요.</p>}
       {!data.questions.length && <div className="fi-empty"><p>아직 저장된 질문과 답이 없어요.</p><small>대화 중 설명만으로 판단이 저장되었다고 표시하지 않습니다.</small></div>}

@@ -61,6 +61,14 @@ def _safe_goal_snapshot(state) -> dict | None:
         "runtime_started_at": state.runtime_started_at,
         "runtime_accounting_known": state.runtime_accounting_known,
         "runtime_checkpoints": list(state.runtime_checkpoints),
+        "runtime_policy": dict(state.runtime_policy),
+        "runtime_control": dict(state.runtime_control),
+        "runtime_recovery": {key: {k: v for k, v in record.items() if k in {
+            'status', 'cause_code', 'attempts_used', 'attempts', 'next_due', 'next_due_at',
+            'original_deadline', 'deadline', 'owner', 'episode_id', 'reason', 'delivery_status'}}
+            for key, record in state.runtime_recovery.items() if isinstance(record, dict)},
+        "runtime_settlement": dict(state.runtime_settlement),
+        "wall_deadline": state.wall_deadline,
         "contract": state.contract.to_dict(),
         "subgoals": list(state.subgoals),
         "gates": [
@@ -77,6 +85,9 @@ def _safe_goal_snapshot(state) -> dict | None:
     from hermes_cli.goals_runtime import runtime_phase, runtime_checkpoint_due
     snapshot["runtime_phase"] = runtime_phase(state)
     snapshot["runtime_checkpoint_due_seconds"] = runtime_checkpoint_due(state)
+    from hermes_cli.goals_completion import enabled, control_projection, loaded_fingerprint
+    snapshot["runtime_completion"] = control_projection(state) if enabled(state) else None
+    snapshot["runtime_fingerprint"] = loaded_fingerprint()
     if state.created_at:
         snapshot["created_at"] = state.created_at
     if state.last_turn_at:

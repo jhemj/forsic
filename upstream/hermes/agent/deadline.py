@@ -473,3 +473,27 @@ def kill_process_tree(pid: int, *, sig: Optional[int] = None) -> bool:
             logger.debug("kill_process_tree: signal failed for pid %s", pid, exc_info=True)
 
         return signalled
+
+
+# A child inherits the accepted parent-operation bound through copy_context.
+# It may shorten this value but can never renew a parent's allowance.
+from contextvars import ContextVar
+_native_operation_deadline = ContextVar("native_operation_deadline", default=None)
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def native_operation_scope(deadline):
+    current = _native_operation_deadline.get()
+    bound = current if deadline is None else min(current, deadline) if current is not None else deadline
+    token = _native_operation_deadline.set(bound)
+    try:
+        yield bound
+    finally:
+        _native_operation_deadline.reset(token)
+
+
+def native_operation_deadline():
+    return _native_operation_deadline.get()

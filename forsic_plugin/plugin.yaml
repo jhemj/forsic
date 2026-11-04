@@ -45,6 +45,7 @@ provides_hooks:
   - post_context_compaction
   - goal_evaluation_context
   - goal_advisory_context
+  - goal_work_projection
 config_schema:
   tenant_id: {type: str, description: Registry-owned immutable tenant identifier.}
   library_path: {type: str, description: Registry-owned tenant case reference store.}

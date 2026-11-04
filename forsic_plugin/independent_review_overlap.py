@@ -1,6 +1,7 @@
 """One bounded native auxiliary request per goal; receipts remain authoritative."""
 from dataclasses import dataclass, field
 import logging
+import os
 import threading
 import time
 
@@ -72,7 +73,21 @@ def start(key, *, request_id, session_ids, native_db, lease, complete, cancel_ch
 def inflight(key):
     with _lock:
         job = _jobs.get(key)
-        return job.request_id if job and not job.done.is_set() else None
+        return job.request_id if job and job.thread and job.thread.is_alive() and not job.done.is_set() else None
+
+
+def owner_status(key):
+    """Read the existing worker; a busy flock alone is not a review owner."""
+    with _lock:
+        job = _jobs.get(key)
+        if job is None:return {'state': 'unknown'}
+        alive = bool(job.thread and job.thread.is_alive() and not job.done.is_set())
+        remaining = max(0.0, job.deadline - time.monotonic())
+        state = 'expired' if remaining <= 0 else 'alive' if alive else 'dead'
+        return {'state': state, 'request_id': job.request_id, 'owner_pid': os.getpid(),
+                'thread_id': getattr(job.thread, 'ident', None),
+                'cancel_requested': job.cancel.is_set(),
+                'deadline_at': time.time() + remaining}
 
 
 def cancel_scope(*, native_db, session_id=None):
@@ -89,6 +104,12 @@ def wait_existing(key, *, cancel_check=None):
         job = _jobs.get(key)
     if job is None:return None
     while not job.done.is_set():
+        if not job.thread or not job.thread.is_alive():
+            job.cancel.set()
+            with _lock:
+                if _jobs.get(key) is job:del _jobs[key]
+            job.done.set()
+            return 'owner_lost'
         if callable(cancel_check) and cancel_check():
             job.cancel.set()
             return 'cancelled'
