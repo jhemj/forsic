@@ -871,6 +871,19 @@ def _ws_orphan_turn_activity_is_fresh(session: dict) -> bool:
         return False
 
 
+def _session_has_fresh_post_turn_work(session: dict) -> bool:
+    """The native worker still owns cleanup/follow-up after releasing ``running``."""
+    worker = session.get("_run_thread")
+    if session.get("running") or worker is None or not worker.is_alive():
+        return False
+    # A slow finalizer can outlive the last agent heartbeat. Releasing running
+    # stamps last_active, granting the handoff one existing WS grace window;
+    # a wedged worker becomes reclaimable once both activity clocks are stale.
+    since_settlement = time.time() - float(session.get("last_active") or 0)
+    return (_ws_orphan_turn_activity_is_fresh(session)
+            or 0 <= since_settlement < _WS_ORPHAN_REAP_GRACE_S)
+
+
 def _schedule_ws_orphan_reap(
     sid: str, *, delay_s: float | None = None, _expected_timer: threading.Timer | None = None,
 ) -> None:
@@ -930,7 +943,8 @@ def _schedule_ws_orphan_reap(
                 current.pop("_client_gone_interrupt_polls", None)
                 _pending_ws_reaps.pop(sid, None)
                 return
-            if _session_has_active_delegations(sid, current):
+            if (_session_has_active_delegations(sid, current)
+                    or _session_has_fresh_post_turn_work(current)):
                 reschedule_delay = _WS_ORPHAN_REAP_GRACE_S
             elif not current.get("running"):
                 session = _pop_session_by_id(sid)

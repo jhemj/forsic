@@ -28,7 +28,7 @@
     "SECURITY.md": "066ef727aeeda81e9c034ee4f93dfb613b7cb2cf5e26d6c87e5aa1ed1d29117b",
     "SENSITIVE_DATA.txt": "ecb6f8cf9e6dc6dbbd4733157fde5a806dfa7fa1af5e551034ef2acefd9ce168",
     "THIRD_PARTY_NOTICES.txt": "27f15ef6e3a462e33b1f7060df89f1ba7bdd63294d770ba1e7e26af026e03f7a",
-    "UPSTREAM.txt": "2b3112a1ff497dbec5554a8111d0fbab0e5ad985291a90451c42cf6ad927cdbf",
+    "UPSTREAM.txt": "f0e868dee27bf1833805649fe9b9831ab9a242fa4d0f6ea3719f8ea57eac2494",
     "WORKBENCH_DATA.txt": "6c670051b40bf4e89396fc91f52d7f19268056bbbca932111c6d462481171309",
     "cases/smoke/evidence/change.txt": "f5ef0791daa631c6cd1e46e5a334850959e7a2e6ae46c7baaedadaa02ef378f5",
     "cases/smoke/evidence/cron.log": "c3146d4fc59f6e3e25cd9ada5a7d789b400c72d8fb55a0f6dd8c35d05a2f3830",
@@ -3514,9 +3514,9 @@
     "upstream/hermes/tui_gateway/session_auto_continue.py": "1c0803e5cb13cb64249ca00ff9da0f98f26298acbbadaae91dbf9fcab86e22cf",
     "upstream/hermes/tui_gateway/session_compression.py": "a8338cc22cb6de6c7b857a26c9808944a6bcd15335b0571a17413e596b780934",
     "upstream/hermes/tui_gateway/session_history.py": "2d8d403bbdb9407ebca727ef35cb611c1ae274a85ed5d780ab5ad3e4990596a8",
-    "upstream/hermes/tui_gateway/session_lifecycle.py": "da3390b37f34741848ae6c737b962348b874303901c0dcc57e110d36c87cfddd",
+    "upstream/hermes/tui_gateway/session_lifecycle.py": "4f8fb090e42f912874e441fd9844669338aea6e754d865b9c24d54bf1cbc04d0",
     "upstream/hermes/tui_gateway/session_notifications.py": "b1adc7f23b8a6a9317b81dce9f4b4c9597a2710c25dd18b5b5ed32151273eaf6",
-    "upstream/hermes/tui_gateway/session_reaper.py": "73d7a4fa41ab9888dd7f268257f26ca945785055441efe523c3b96e064b2413e",
+    "upstream/hermes/tui_gateway/session_reaper.py": "d27fdb916d137e391b94cea9de41a635e0f29491707080f02626e34a21a30e28",
     "upstream/hermes/tui_gateway/session_transports.py": "074fe5de3f870c8b2faef00da326ef5e1062008685456e3d0eeea50a97d36c8c",
     "upstream/hermes/tui_gateway/session_workdir.py": "e9e2aa25f7859f58b9b31940fddc97d88f7639beebb3078395a3ddeab4250a1a",
     "upstream/hermes/tui_gateway/slash_fuzzy.py": "6a42c2461d3eca431e0d9775e2c5c2f12ca6d56bf4324ef9e0736c1ff28aea91",
@@ -4379,7 +4379,8 @@
     "upstream/hermes/web/vite.config.ts": "581b18e0b28def9f4cb26773d0e52f3c6eed73a105436df384be79f1337d3d2f",
     "upstream/hermes/web/vitest.config.ts": "67aa38938b16586c69b0035b4874bced9b9ead30900f322463ecc3835f247ade",
     "upstream/hermes/website/static/api/model-catalog.json": "d4bc8d20c560a178646b7589af8aef9ea020c81b7b6f2a9c081a80d42c80a3c7",
-    "verify_dashboard_skills.py": "daa888fd2441c54dfa8b515cf35b9a3e6a700018e1648d01685082a0146b7278"
+    "verify_dashboard_skills.py": "daa888fd2441c54dfa8b515cf35b9a3e6a700018e1648d01685082a0146b7278",
+    "upstream/hermes/tests/tui_gateway/test_post_turn_reaping.py": "3644c6b7a232367f8365582617f7874148c5744e0620ebc7e26359b3b14183b3"
   },
   "modes": {
     ".dockerignore": 420,
@@ -8758,7 +8759,8 @@
     "upstream/hermes/web/vite.config.ts": 420,
     "upstream/hermes/web/vitest.config.ts": 420,
     "upstream/hermes/website/static/api/model-catalog.json": 420,
-    "verify_dashboard_skills.py": 420
+    "verify_dashboard_skills.py": 420,
+    "upstream/hermes/tests/tui_gateway/test_post_turn_reaping.py": 420
   },
   "contains": "source + pinned upstream/local deltas + synthetic fixtures; NOT a ready runtime",
   "excluded": [
@@ -22380,7 +22382,10 @@
     "web/src/plugins/registry.test.ts": "c371647492ec4ad97c85914cdda0120d05a5cb692bd46bb74304a4c65c5e21c5",
     "web/src/plugins/registry.ts": "f177f08a49e44aa7c415c75f0e1a56304bde9e118b26a8a9f9323105d1ed045f",
     "web/src/plugins/slots.test.tsx": "6e7d1d2c14b9fca06c6c954d59a11a41a3f008db09c2e9a8596887d33f503526",
-    "web/src/plugins/slots.ts": "4e1839d6125e37854eb31c7001b7b7494627a9f28a6d693c7c0a8055a350db86"
+    "web/src/plugins/slots.ts": "4e1839d6125e37854eb31c7001b7b7494627a9f28a6d693c7c0a8055a350db86",
+    "tui_gateway/session_lifecycle.py": "4f8fb090e42f912874e441fd9844669338aea6e754d865b9c24d54bf1cbc04d0",
+    "tui_gateway/session_reaper.py": "d27fdb916d137e391b94cea9de41a635e0f29491707080f02626e34a21a30e28",
+    "tests/tui_gateway/test_post_turn_reaping.py": "3644c6b7a232367f8365582617f7874148c5744e0620ebc7e26359b3b14183b3"
   },
   "upstream_test_policy": "Changed product regressions and shared fixtures retained; complete upstream suite requires the original pinned checkout."
 }

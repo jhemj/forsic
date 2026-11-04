@@ -20,6 +20,10 @@ copyrights and license terms remain applicable; see THIRD_PARTY_NOTICES.txt.
 
 Maintained integration areas
 ----------------------------
+- Automatic idle cleanup preserves a fresh native worker while it transfers a
+  completed turn to the next goal continuation. Both orphan and LRU/TTL cleanup
+  use the same bounded activity check; finished or stale workers remain
+  reclaimable, and explicit close and pause retain their existing authority.
 - Web PTY startup reports build/subprocess failures through its existing 1011
   failure path without leaking subprocess arguments. Native cancellation remains
   distinct. Web reconnect limits survive short successful handshakes followed by
