@@ -271,6 +271,8 @@ def enforce_goal_runtime(db, session_id, *, budget=None, now=None, expected_goal
     state = GoalState.from_json(expected)
     if expected_goal_id is not None and runtime_identity(state) != expected_goal_id:
         return state, False
+    if state.pause_requested:
+        return state, False  # the accepted manual stop owns the next safe boundary
     # The shared native scheduler fires after monotonic elapsed time. Preserve
     # that live countdown if wall time moves backwards, provided pause/resume
     # has not changed the durable deadline in the meantime.

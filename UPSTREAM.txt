@@ -369,3 +369,11 @@ and same-owner judgments remain available during closing. An explicitly pinned
 soft preparation target permits finishing up to the original hard allowance;
 existing strict goals require an authorized paused amendment. No allowance,
 review history, discovery scope or new supervisor loop is introduced.
+
+Maintained cold-owner and idle-WAIT boundaries:
+Gateway-reclaimed CLI-created sessions can restore only a current bounded native
+gateway context/review continuation. Explicit closes, live CLI/foreign ownership,
+expired episodes and manual controls remain fenced. Owner-loss artifact settlement
+retains the case's profile scope. The existing classic CLI idle barrier check calls
+the common same-goal deadline enforcer before another WAIT; no extra timer or agent
+loop is added. Past terminal episodes are retained, never silently revived.

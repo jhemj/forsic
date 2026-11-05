@@ -82,6 +82,15 @@ count before releasing the turn. The existing TUI scheduler restores it on start
 without a browser. Native admission and turn leases win over duplicate wakeups.
 Unknown delivery is recorded rather than automatically resent.
 
+Cold restoration follows actual native ownership as well as the session's creation
+surface. A CLI-created row reclaimed by the gateway can be restored only for a
+valid same-goal gateway context or review continuation; a live CLI, explicit close,
+foreign lease or expired episode is not adopted. Owner-loss settlement keeps the
+owning profile scope through its report projection and CAS. The classic CLI's
+existing idle barrier check also enforces the native deadline before waiting again;
+a cached manager cannot keep a timed, process or session WAIT beyond the allowance.
+Pending manual control wins over automatic expiry bookkeeping.
+
 Milestone decisions use a small canonical packet with tools removed and provider
 input/output headroom checked. Exactly five fields are required. One format repair
 shares the original episode; restart and repair cannot reset its deadline or count.

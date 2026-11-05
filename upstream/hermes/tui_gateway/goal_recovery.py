@@ -175,6 +175,47 @@ def _recovery_automatic_end_reason(reason):
     return is_automatic_end_reason(reason)
 
 
+def _reclaimed_cli_has_gateway_recovery(db, key, row):
+    """A CLI-created row is not CLI-owned after a proven gateway recovery/reclaim.
+
+    Do not adopt arbitrary CLI sessions. The bounded intent must belong to the
+    same active goal, and native admission still fences any foreign live lease.
+    """
+    from math import isfinite
+    from hermes_cli.goals_recovery import read_context
+    from hermes_cli.goals_runtime import runtime_identity, runtime_remaining
+    from tui_gateway.session_lifecycle import _RECLAIM_END_REASONS
+    if row.get("ended_at") is None or row.get("end_reason") not in _RECLAIM_END_REASONS:
+        return False
+    _, state, context = read_context(db, key)
+    if not state or state.status != "active" or state.pause_requested or runtime_remaining(state) in (None, 0):
+        return False
+
+    def current(intent):
+        deadline = intent.get("original_deadline")
+        return (intent.get("goal_identity") == list(runtime_identity(state))
+                and type(deadline) in (int, float) and isfinite(deadline) and deadline > time.time())
+
+    def gateway_owner(intent):
+        return isinstance(intent.get("owner"), str) and intent["owner"].startswith("tui-goal-recovery:")
+
+    progress = state.advisory_progress or {}
+    if progress.get("status") in {"waiting", "claimed", "dispatched"}:
+        # Waiting is created before a continuation has an owner/claim. The gateway
+        # reclaim plus the current bounded request is its provenance; admission
+        # still reads the original review's alive/ready receipt before any model.
+        waiting = progress["status"] == "waiting"
+        requests = progress.get("review_waits")
+        return bool(current(progress) and isinstance(requests, list) and requests
+            and all(isinstance(item, dict) and isinstance(item.get("request_id"), str)
+                    and item["request_id"] for item in requests)
+            and progress.get("next_owner") == ("native_review_wait" if waiting else "native_review_continuation")
+            and (gateway_owner(progress) or waiting and progress.get("owner") is None))
+    return bool(current(context) and context.get("status") in {"pending", "claimed", "dispatched"}
+        and context.get("next_owner") == "native_goal_recovery"
+        and gateway_owner(context) and context.get("episode_id"))
+
+
 def _restore_goal_recovery_owner(db, key, home):
     """Reuse cold-resume primitives without requiring a websocket or changing the provider."""
     profile_home = None if Path(home).resolve() == _launch_home().resolve() else Path(home)
@@ -182,7 +223,8 @@ def _restore_goal_recovery_owner(db, key, home):
     if live:
         return live
     row = db.get_session(key)
-    if not row or row.get("source") not in {"desktop", "tui", "web"}:
+    if not row or (row.get("source") not in {"desktop", "tui", "web"}
+                   and not (row.get("source") == "cli" and _reclaimed_cli_has_gateway_recovery(db, key, row))):
         return None
     # Explicitly closed conversations are user controls, not unattended recovery targets.
     if row.get("ended_at") is not None and not _recovery_automatic_end_reason(row.get("end_reason")):
@@ -212,17 +254,17 @@ def _settle_missing_goal_owner(db, key, home, reason):
     with _session_profile_runtime_scope({"profile_home": profile_home}, hydrate_secrets=False):
         lease, refusal = _claim_active_session_slot(key, live_session_id="recovery-" + uuid.uuid4().hex,
                                                    surface="desktop", profile_home=home)
-    if refusal is not None:
-        return False
-    try:
-        from hermes_cli.goals_advisory import read_review_wait, settle_review_wait
-        _,_,progress=read_review_wait(db,key)
-        if progress.get('status') in {'waiting','claimed','dispatched'}:
-            return settle_review_wait(db,key,reason=reason.replace('context_recovery','review_wait'))
-        return settle_context_recovery(db, key, reason=reason)
-    finally:
-        if lease is not None:
-            lease.release()
+        if refusal is not None:
+            return False
+        try:
+            from hermes_cli.goals_advisory import read_review_wait, settle_review_wait
+            _,_,progress=read_review_wait(db,key)
+            if progress.get('status') in {'waiting','claimed','dispatched'}:
+                return settle_review_wait(db,key,reason=reason.replace('context_recovery','review_wait'))
+            return settle_context_recovery(db, key, reason=reason)
+        finally:
+            if lease is not None:
+                lease.release()
 
 
 def _settle_expired_ordinary_goal(db, key, home, goal):

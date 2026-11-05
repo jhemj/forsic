@@ -149,6 +149,7 @@ UPSTREAM_ADDITIONS = (
     'tests/hermes_cli/test_goal_completion_contract.py',
     'tests/hermes_cli/test_goal_evaluation_native_deadline.py',
     'tests/hermes_cli/test_runtime_expiry_settlement.py',
+    'tests/hermes_cli/test_cli_parked_goal_runtime.py',
     'tests/hermes_cli/test_goal_completion_invariants.py',
     'tests/hermes_cli/test_goal_context_recovery.py',
     'tests/tui_gateway/test_goal_recovery_wakeup.py',

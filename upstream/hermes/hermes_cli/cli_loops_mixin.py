@@ -557,10 +557,31 @@ class CLILoopsMixin:
                 return
             if not (state.waiting_on_pid is not None or state.waiting_on_session is not None or state.waiting_until):
                 return  # not parked
+            # WAIT consumes the original allowance too. A cached manager's
+            # constructor will not enforce it again while a live barrier holds.
+            from hermes_cli.goals import _meta_key
+            from hermes_cli.goals_runtime import enforce_goal_runtime, runtime_identity
+            db = getattr(self, "_session_db", None)
+            if db is None:
+                return
+            identity = runtime_identity(state)
+            current, _ = enforce_goal_runtime(db, mgr.session_id, expected_goal_id=identity)
+            if current is None or runtime_identity(current) != identity:
+                return  # this idle owner cannot adopt a replacement or cleared goal
+            mgr._state = current
+            if current.status != "active" or current.pause_requested:
+                return
             if mgr.is_waiting():
                 return  # barrier still holds (is_waiting() also applies the age cap)
+            current = mgr.state
+            if (current is None or runtime_identity(current) != identity
+                    or current.status != "active" or current.pause_requested):
+                return
+            expected = current.to_json()
             prompt = mgr.next_continuation_prompt()
-            if prompt:
+            # Controls/queued input arriving while the barrier was checked win.
+            if (prompt and self._pending_input.empty()
+                    and db.get_meta(_meta_key(mgr.session_id)) == expected):
                 from cli import _DIM, _RST, _cprint
                 _cprint(f"  {_DIM}{t('cli.goal.barrier_lifted')}{_RST}")
                 self._pending_input.put(prompt)
