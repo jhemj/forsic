@@ -250,7 +250,12 @@ def _resolve_runtime_checkpoint(agent, final_response, reason, interrupted, fail
         try:
             final_response = agent._handle_max_iterations(
                 messages, api_call_count, summary_request=RUN_BUDGET_CHECKPOINT_REQUEST, max_attempts=1)
-        except InterruptedError:
+        except InterruptedError as exc:
+            from agent.deadline import NativeOperationExpired
+            if isinstance(exc, NativeOperationExpired) and not getattr(agent, "_interrupt_requested", False):
+                agent._runtime_checkpoint_generated = False
+                return ("The accepted checkpoint deadline expired; saved work is preserved.",
+                        "runtime_budget_checkpoint_failed", False)
             return final_response, interrupted_during_api_call_reason(agent), True
         except Exception as exc:
             logging.getLogger(__name__).warning("Runtime checkpoint request failed (%s)", type(exc).__name__)
@@ -370,14 +375,18 @@ def _resolve_budget_fallback(
             _summary_start = time.time()
             try:
                 final_response = agent._handle_max_iterations(messages, api_call_count)
-            except InterruptedError:
-                # The turn ends interrupted, so the pending interrupt message is returned
-                # for requeue instead of being cleared behind a fallback summary. A redirect
-                # also ends it: the budget is spent, so there is no loop to restart into.
-                from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
-                interrupted = True
-                _turn_exit_reason = interrupted_during_api_call_reason(agent)
-                final_response = f"{INTERRUPT_WAITING_FOR_MODEL_PREFIX}{time.time() - _summary_start:.1f}s elapsed)."
+            except InterruptedError as exc:
+                from agent.deadline import NativeOperationExpired
+                if (isinstance(exc, NativeOperationExpired) and not getattr(agent, "_interrupt_requested", False)
+                        and not getattr(agent, "_has_pending_redirect", lambda: False)()):
+                    _turn_exit_reason = "native_operation_deadline_expired"
+                    final_response = "The accepted summary-request deadline expired. Saved work is preserved; this request was not retried."
+                else:
+                    # Explicit stop/redirect still wins over native expiry.
+                    from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
+                    interrupted = True
+                    _turn_exit_reason = interrupted_during_api_call_reason(agent)
+                    final_response = f"{INTERRUPT_WAITING_FOR_MODEL_PREFIX}{time.time() - _summary_start:.1f}s elapsed)."
 
     # A kanban worker must record a terminal outcome whether or not a fallback path
     # was eligible, so the dispatcher learns the worker could not complete. Only the

@@ -358,3 +358,14 @@ See docs/runtime-completion.md for activation, migration, validation and rollbac
 Regressions include native checkpoint/context/deadline/dispatch tests and product
 report-work, ordinary-slot reservation and synthetic artifact integration tests.
 Live-provider and real-time soak validation remain distinct operational evidence.
+
+Maintained completion boundary corrections:
+Actual SDK stream/nonstream and auxiliary consumers retain the original native
+operation deadline, including continuously emitting responses. Request-local
+cancellation cannot leak into a later operation. The existing recovery sweep
+settles expired unowned v2 goals without a browser, preserving verified same-goal
+draft paths when current work cannot be projected. Current material-finding edits
+and same-owner judgments remain available during closing. An explicitly pinned
+soft preparation target permits finishing up to the original hard allowance;
+existing strict goals require an authorized paused amendment. No allowance,
+review history, discovery scope or new supervisor loop is introduced.

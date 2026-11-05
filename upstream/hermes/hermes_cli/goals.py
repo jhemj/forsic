@@ -1370,12 +1370,22 @@ class GoalManager:
             save_goal(self.session_id, self._state)
         return self._state
 
+    def _completion_due(self) -> bool:
+        from hermes_cli.goals_completion import enabled
+        state = self._state
+        return bool(state is not None and state.status == "active" and not state.pause_requested
+                    and enabled(state) and state.runtime_policy.get("ready_target_mode") != "soft"
+                    and runtime_remaining(state) is not None
+                    and runtime_remaining(state) <= state.runtime_policy["settlement_seconds"])
+
     def _assert_evaluation_current(self) -> None:
         if (hasattr(self, "_evaluation_expected")
                 and self._evaluation_db.get_meta(_meta_key(self.session_id)) != self._evaluation_expected):
             raise _StaleGoalEvaluation("goal changed during evaluation")
         if self._state is not None and self._state.status == "active" and runtime_remaining(self._state) == 0:
             raise _GoalRuntimeExpired(RUNTIME_BUDGET_REASON)
+        if self._completion_due():
+            raise _GoalRuntimeExpired("report_target_settlement")
 
     def _require_goal(self) -> GoalState:
         if self._state is None or not self.has_goal():
@@ -1821,7 +1831,16 @@ class GoalManager:
                     return False
                 except (_StaleGoalEvaluation, _GoalRuntimeExpired):
                     return True
-            with aux_interrupt_protection(cancel_check=cancelled):
+            from agent.deadline import native_operation_scope
+            from hermes_cli.goals_runtime import runtime_wall_deadline
+            from hermes_cli.goals_completion import enabled
+            evaluation_deadline = None
+            if state is not None and state.status == "active" and enabled(state):
+                evaluation_deadline = runtime_wall_deadline(state)
+                if evaluation_deadline is not None and state.runtime_policy.get("ready_target_mode") != "soft":
+                    evaluation_deadline -= state.runtime_policy["settlement_seconds"]
+            with native_operation_scope(evaluation_deadline), aux_interrupt_protection(cancel_check=cancelled):
+                worker._assert_evaluation_current()
                 decision = worker._evaluate_after_turn(
                     last_response, user_initiated=user_initiated,
                     background_processes=background_processes, active_delegations=active_delegations,
@@ -1831,8 +1850,66 @@ class GoalManager:
             try:
                 if db.get_meta(_meta_key(self.session_id)) != worker._evaluation_expected:
                     raise _StaleGoalEvaluation("goal changed during cancellation")
-                if runtime_remaining(worker._state) == 0:
+                hard_due = runtime_remaining(worker._state) == 0
+                if hard_due and not enabled(worker._state):
                     decision = worker._runtime_budget_pause()
+                elif hard_due or worker._completion_due():
+                    from hermes_cli.goals_completion import settle_native
+                    from hermes_cli.goals_runtime import runtime_identity
+                    identity = runtime_identity(worker._state)
+                    stop_reason = RUNTIME_BUDGET_REASON if hard_due else "report_target_settlement"
+                    try:
+                        receipt = settle_native(db, self.session_id, expected_identity=identity,
+                                                reason=stop_reason, pause=True)
+                    except Exception as exc:
+                        receipt = {"status": "settlement_failed", "reason": stop_reason,
+                                   "error": type(exc).__name__}
+                    latest = db.get_meta(_meta_key(self.session_id))
+                    current = GoalState.from_json(latest) if latest else None
+                    if (receipt.get("status") == "settlement_failed" and current is not None
+                            and runtime_identity(current) == identity and current.status == "active"
+                            and not current.pause_requested):
+                        # One bounded failure-marker CAS, matching native hard-expiry
+                        # semantics. Preserve the latest same-goal rows; never retry
+                        # settlement, borrow a new budget, or overwrite user controls.
+                        failure = {"status": "settlement_failed", "reason": stop_reason,
+                                   "error": receipt.get("error", receipt.get("reason")),
+                                   "goal_identity": list(identity)}
+                        settle_runtime(current)
+                        current.status, current.runtime_started_at = "paused", None
+                        current.paused_reason, current.last_reason = stop_reason, stop_reason
+                        current.clear_wait()
+                        current.runtime_settlement = {**current.runtime_settlement, **failure}
+                        try:
+                            marker_saved = db.compare_and_swap_meta(_meta_key(self.session_id), latest, current.to_json())
+                        except Exception:
+                            marker_saved = False
+                        # Re-read after this sole CAS. A concurrent replacement/manual
+                        # pause wins even when it raced the failure marker itself.
+                        latest = db.get_meta(_meta_key(self.session_id))
+                        current = GoalState.from_json(latest) if latest else None
+                        if (current is not None and runtime_identity(current) == identity
+                                and not current.pause_requested
+                                and (current.status == "active" or (current.status == "paused"
+                                     and current.paused_reason == stop_reason))):
+                            worker._evaluation_expected, worker._state = latest, current
+                            decision = _decision(current.status, False, None, "settlement_failed",
+                                "settlement_failed" if marker_saved else "persistence_unconfirmed",
+                                "Native settlement could not be verified; automatic continuation stopped.")
+                        else:
+                            decision = None
+                    elif (receipt.get("status") != "preserved" or current is None
+                            or runtime_identity(current) != identity
+                            or current.status != "paused" or current.pause_requested
+                            or current.paused_reason != stop_reason
+                            or current.runtime_settlement.get("at") != receipt.get("at")):
+                        # A replacement or manual control after settlement still wins.
+                        decision = None
+                    else:
+                        worker._evaluation_expected, worker._state = latest, current
+                        decision = _decision(current.status, False, None, "runtime_settlement",
+                            receipt.get("artifact_status") or receipt.get("status"),
+                            "Native time boundary reached; current artifacts and pending work preserved.")
                 else:
                     decision = _decision(worker._state.status if worker._state else None, False, None,
                                          "evaluation_cancelled", "goal evaluation cancelled", "")

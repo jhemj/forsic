@@ -43,6 +43,11 @@ class _NonStreamRequest:
         self.wait_notice_started_ts = None
         self.wait_notice = wn.WaitNoticeState()
         self.thread = None
+        h.native_request_on_cancel(self._native_cancel)
+
+    def _native_cancel(self):
+        self.cancelled = True
+        self._abort_request("native_operation_deadline")
 
     def _install_codex_request_token(self) -> None:
         if self.codex_token is not None and not self.codex_retired:  # retired before start: don't re-publish
@@ -67,6 +72,7 @@ class _NonStreamRequest:
     def _call(self):
         watchdog_state_var = watchdog_context_token = None
         try:
+            h.native_request_check()
             self._install_codex_request_token()
             if self.codex_watchdog_state is not None:
                 from agent.codex_runtime import _codex_watchdog_state_var
@@ -285,6 +291,7 @@ class _NonStreamRequest:
         poll_count = 0
         while t.is_alive():
             t.join(timeout=0.3)
+            h.native_request_check()
             poll_count += 1
             # Keep the quiet gateway heartbeat; only silence warrants a notice.
             # Resumed events clear our notice on the next poll, not 30s later.

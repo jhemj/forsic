@@ -412,7 +412,13 @@ def aux_progress_hook(hook):
 
 def _current_aux_stream_deadline() -> Optional[float]:
     """The waiting host's absolute monotonic deadline, if one is installed."""
-    return getattr(_aux_stream_deadline, "value", None)
+    current = getattr(_aux_stream_deadline, "value", None)
+    from agent.deadline import native_operation_deadline
+    native = native_operation_deadline()
+    if native is not None:
+        inherited = time.monotonic() + max(0., native - time.time())
+        return min(current, inherited) if current is not None else inherited
+    return current
 
 
 @contextlib.contextmanager
@@ -446,7 +452,15 @@ def _run_protected_sync_provider_call(callback: Callable[[dict[str, Any]], Any],
     transcript/commit state, never holds the session lock). Unprotected / no cancel source: direct.
     """
     source_cancel_check = _capture_aux_cancel_check()
-    if not _aux_interrupt_protected() or not callable(source_cancel_check):
+    from agent.deadline import native_operation_deadline
+    native_deadline = native_operation_deadline()
+    if native_deadline is not None:
+        # Freeze both clocks once. Tokens and another candidate cannot renew it.
+        native_mono = time.monotonic() + max(0., native_deadline - time.time())
+        previous_cancel = source_cancel_check
+        source_cancel_check = lambda: (time.time() >= native_deadline or time.monotonic() >= native_mono
+            or (callable(previous_cancel) and _captured_aux_cancel_requested(previous_cancel)))
+    if (not _aux_interrupt_protected() or not callable(source_cancel_check)) and native_deadline is None:
         return callback(kwargs)
     # One linearized outcome per attempt: the host Event is reused/cleared on later turns and
     # the Codex timeout Timer may race owner polling — same lock for both.
@@ -475,6 +489,8 @@ def _run_protected_sync_provider_call(callback: Callable[[dict[str, Any]], Any],
                 aux_stream_deadline(host_deadline),
                 aux_interrupt_protection(cancel_check=cancel_check),
             ):
+                if cancel_check():
+                    raise AuxiliaryExplicitCancellation()
                 outcome["result"] = callback(kwargs)
         except BaseException as exc:
             outcome["exception"] = exc
@@ -2622,7 +2638,20 @@ def _relay_sync_completion(
     kwargs = prepare_chat_messages(client, kwargs)
     # The progress hook is installed per TASK, so every attempt (retries, recovery rungs, fallbacks)
     # must stream through _create_with_progress or the compression watchdog sees silence (#98466).
-    callback = create or (lambda request: _create_with_progress(client, request))
+    provider_callback = create or (lambda request: _create_with_progress(client, request))
+    def callback(request):
+        from agent.deadline import (native_request_bound, bind_native_request_client, NativeOperationExpired)
+        @native_request_bound
+        def accepted_request():
+            unbind = bind_native_request_client(client, shared=True)
+            try:
+                return provider_callback(request)
+            finally:
+                unbind()
+        try:
+            return accepted_request()
+        except NativeOperationExpired:
+            raise AuxiliaryExplicitCancellation() from None
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
     # Isolate only the provider callback so the owning thread can unwind its lease/DB
     # transaction on hard cancel without touching the shared client.
@@ -2651,7 +2680,34 @@ async def _relay_async_completion(
 
     kwargs = prepare_chat_messages(client, kwargs)
     # Async twin of the seam default above (#98466).
-    callback = create or (lambda request: _acreate_with_progress(client, request))
+    provider_callback = create or (lambda request: _acreate_with_progress(client, request))
+    async def callback(request):
+        from agent.deadline import (native_operation_deadline, native_request_check,
+            bind_native_request_client, run_bounded_async, NativeOperationExpired)
+        deadline = native_operation_deadline()
+        if deadline is None:
+            return await provider_callback(request)
+        unbind = bind_native_request_client(client, shared=True, asynchronous=True)
+        try:
+            native_request_check()
+            result = await run_bounded_async(provider_callback(request), max(.001, deadline-time.time()),
+                                            label="native-aux-provider", dump_on_blocked_loop=False)
+            native_request_check()
+            if result.timed_out:
+                raise AuxiliaryExplicitCancellation()
+            return result.value
+        except NativeOperationExpired:
+            raise AuxiliaryExplicitCancellation() from None
+        except Exception:
+            # Stream aggregation / SDK timeout may win the race with the host
+            # watchdog. Native expiry still must not enter provider retry ladders.
+            try:
+                native_request_check()
+            except NativeOperationExpired:
+                raise AuxiliaryExplicitCancellation() from None
+            raise
+        finally:
+            unbind()
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
     if route is None:
         return await callback(kwargs)
@@ -6999,6 +7055,8 @@ def _create_with_progress_once(
     ``force_stream``, where a stream-only provider rejects the plain call by definition, so the original
     error is surfaced to the normal recovery chains instead.
     """
+    from agent.deadline import native_request_check
+    native_request_check()
     kwargs = bypass_chat_sdk_request_transform(kwargs, client)
     _notify_aux_dispatch()
     # Dispatch alone is not forward progress: a 401/retry/fallback dispatch must not
@@ -7014,6 +7072,7 @@ def _create_with_progress_once(
     try:
         chunks = client.chat.completions.create(**stream_kwargs)
     except Exception as exc:
+        native_request_check()  # expiry is never a reason to issue a fallback request
         # Genuine provider failures aren't streaming's fault — surface unchanged so the
         # recovery chains see the same error as a plain call.
         if (force_stream or _is_transient_transport_error(exc) or _is_auth_error(exc)
@@ -7053,10 +7112,13 @@ def _aggregate_chat_stream(
 ) -> Any:
     """Consume a chunk stream into a complete response; TimeoutError (phrased "timed out" so
     ``_is_timeout_error`` matches) when *total_ceiling* elapses."""
+    from agent.deadline import native_request_on_cancel, native_request_check
+    native_request_on_cancel(lambda: _close_chunk_stream(chunks))
     acc = _ChatStreamAccumulator(
         model=model, total_ceiling=total_ceiling, host_deadline=_current_aux_stream_deadline())
     try:
         for chunk in chunks:
+            native_request_check()
             acc.feed(chunk)
     finally:
         _close_chunk_stream(chunks)
@@ -7228,6 +7290,8 @@ async def _acreate_with_progress(
 ) -> Any:
     """Async :func:`_create_with_progress`: stream + re-aggregate (ticking the hook per substantive
     chunk) when a progress hook is active or the provider is stream-only; plain create otherwise."""
+    from agent.deadline import native_request_check
+    native_request_check()
     kwargs = bypass_chat_sdk_request_transform(kwargs, client)
     _notify_aux_dispatch()
     # Same contract as the sync twin (#114938): dispatch alone is not progress.
@@ -7240,6 +7304,7 @@ async def _acreate_with_progress(
     try:
         chunks = await client.chat.completions.create(**stream_kwargs)
     except Exception as exc:
+        native_request_check()
         # Only a rejected stream NEGOTIATION falls back to a plain call (mirrors the sync wrapper); a
         # failure mid-consumption below reaches the classified recovery ladder instead of silently
         # re-sending the whole prompt non-streaming.

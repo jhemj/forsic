@@ -128,7 +128,7 @@ def advisory_continuation(state, advisory, *, final_boundary=False):
         if same_wait:deadline=min(deadline,float(previous.get('original_deadline') or deadline))
         wall = runtime_wall_deadline(state)
         from hermes_cli.goals_completion import enabled
-        if wall is not None and enabled(state):wall -= state.runtime_policy['settlement_seconds']
+        if wall is not None and enabled(state) and state.runtime_policy.get('ready_target_mode') != 'soft':wall -= state.runtime_policy['settlement_seconds']
         if wall is not None:deadline = min(deadline, wall)
         if deadline > now:
             since=state.waiting_since if same_wait and state.waiting_since else now
@@ -244,7 +244,7 @@ def claim_review_wait(db, session_id, *, owner):
     deadline=float(progress.get('original_deadline') or 0)
     wall=runtime_wall_deadline(state)
     from hermes_cli.goals_completion import enabled
-    if wall is not None and enabled(state):wall-=state.runtime_policy['settlement_seconds']
+    if wall is not None and enabled(state) and state.runtime_policy.get('ready_target_mode') != 'soft':wall-=state.runtime_policy['settlement_seconds']
     if wall is not None:deadline=min(deadline,wall)
     if state.turns_used>=state.max_turns:
         settle_review_wait(db,session_id,reason='review_wait_turn_budget');return None

@@ -235,14 +235,15 @@ class ReportCompletionWorkTests(unittest.TestCase):
     def test_action_classification_uses_actual_scope_and_work_not_a_report_label(self):
         result = self.project()
         classify = lambda tool, arguments: report_work.classify_action(result, {'tool': tool, 'arguments': arguments})
-        self.assertEqual(classify('forsic_reporting', {'action': 'compose'})['purpose'], 'report')
+        self.assertEqual(classify('forsic_reporting', {'action': 'compose'})['purpose'], 'read')
+        self.assertEqual(classify('forsic_reporting', {'action': 'compose', 'draft': {}})['purpose'], 'report')
         self.assertEqual(classify('forsic_reporting', {'action': 'compose', 'question_ids': ['foreign']})['purpose'], 'discovery')
         self.assertEqual(classify('forsic_shell', {'purpose': 'report', 'command': 'broad search'})['purpose'], 'discovery')
         self.assertEqual(classify('forsic_reporting', {'action': 'source', 'source_id': 'foreign'})['purpose'], 'discovery')
         source_id = result['basis']['source_ids'][0]
         self.assertEqual(classify('forsic_reporting', {'action': 'source', 'source_id': source_id})['purpose'], 'read')
         hook = self.project(mode='classify_action', action={'tool': 'forsic_reporting', 'arguments': {'action': 'compose'}})
-        self.assertEqual(hook['purpose'], 'report')
+        self.assertEqual(hook['purpose'], 'read')
         self.assertEqual(hook['projection_digest'], result['digest'])
 
     def test_pinned_review_mismatch_and_required_unverified_layout_are_explicit(self):

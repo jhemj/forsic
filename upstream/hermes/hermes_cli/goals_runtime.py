@@ -284,4 +284,41 @@ def enforce_goal_runtime(db, session_id, *, budget=None, now=None, expected_goal
         if not db.compare_and_swap_meta(_meta_key(session_id), expected, state.to_json()):
             latest = db.get_meta(_meta_key(session_id))
             return (GoalState.from_json(latest) if latest else None), False
+    if expired:
+        from hermes_cli.goals_completion import enabled, settle_native
+        if enabled(state):
+            identity = runtime_identity(state)
+            unsaved_failure = None
+            try:
+                receipt = settle_native(db, session_id, expected_identity=identity,
+                                        reason=state.paused_reason)
+                if receipt.get("status") == "settlement_failed":
+                    raise RuntimeError("native settlement could not be committed")
+            except Exception as exc:
+                # The expiry CAS already succeeded. Keep that stop, its prior
+                # artifact metadata and a visible failure; never restart work.
+                failure = {"status": "settlement_failed", "reason": state.paused_reason,
+                           "error": type(exc).__name__, "goal_identity": list(identity)}
+                try:
+                    latest = db.get_meta(_meta_key(session_id))
+                    current = GoalState.from_json(latest) if latest else None
+                    if current is None or runtime_identity(current) != identity:
+                        return current, False
+                    if current.paused_reason != state.paused_reason or current.pause_requested:
+                        return current, False
+                    current.runtime_settlement = {**current.runtime_settlement, **failure}
+                    if not db.compare_and_swap_meta(_meta_key(session_id), latest, current.to_json()):
+                        unsaved_failure = {**failure, "persistence": "unconfirmed"}
+                except Exception:
+                    state.runtime_settlement = {**state.runtime_settlement, **failure, "persistence": "unconfirmed"}
+                    return state, expired
+            latest = db.get_meta(_meta_key(session_id))
+            current = GoalState.from_json(latest) if latest else None
+            if current is None or runtime_identity(current) != identity:
+                return current, False
+            if current.paused_reason != state.paused_reason or current.pause_requested:
+                return current, False
+            if unsaved_failure is not None:
+                current.runtime_settlement = {**current.runtime_settlement, **unsaved_failure}
+            state = current
     return state, expired

@@ -162,9 +162,14 @@ def resolve_milestone(agent, messages, api_call_count):
                 raise CheckpointError("empty_response", repairable=True)
             data = parse_decision(text)
             _check_work_basis(agent, _current(agent), packet)
-        except InterruptedError:
-            raise
         except Exception as exc:
+            if isinstance(exc, InterruptedError):
+                from agent.deadline import NativeOperationExpired
+                if not isinstance(exc, NativeOperationExpired) or getattr(agent, "_interrupt_requested", False):
+                    raise  # explicit user control/hard cap still wins
+                # A spent accepted request/episode is not a user stop and cannot
+                # authorize another request. Preserve it as native closing work.
+                exc = CheckpointError("checkpoint_decision_unavailable")
             if not isinstance(exc, CheckpointError):
                 from agent.error_classifier import classify_api_error
                 classified = classify_api_error(exc)

@@ -32,6 +32,7 @@ from agent.error_classifier import (
 from agent.sdk_transform_bypass import bypass_chat_sdk_request_transform
 from agent.errors import EmptyStreamError
 from agent.chat_completion_stream_monitor import StreamingWaitMonitor
+from agent.deadline import native_request_bound, native_request_check, native_request_on_cancel, bind_native_request_client
 from agent.transports.chat_completions import is_router_timeout_shim, router_timeout_shim_may_follow
 from agent.fast_mode import effective_request_overrides
 from agent.turn_context import substitute_api_content
@@ -922,6 +923,8 @@ class _InlineRequest:
         self._hb_stop = threading.Event()
         self._hb = threading.Thread(target=self._activity_heartbeat, name="direct-api-activity-hb", daemon=True)
         self._watchdog = None
+        self._native_unbind = lambda: None
+        native_request_on_cancel(lambda: self.abort("native_operation_deadline"))
 
     def _activity_heartbeat(self) -> None:
         # Never put the API call itself on another worker thread — that is the nested-pool
@@ -989,6 +992,7 @@ class _InlineRequest:
             return newly_stale
 
     def make_client(self, reason: str, kind: str = "openai"):
+        native_request_check()
         # Only OpenAI-wire / Codex requests reach direct_api_call; ``kind`` exists
         # for signature parity with the dispatch helper.
         client = self.agent._create_request_openai_client(reason=reason, api_kwargs=self.api_kwargs)
@@ -1004,7 +1008,9 @@ class _InlineRequest:
         if stale_before_dispatch:
             raise TimeoutError(
                 f"Non-streaming API call timed out before request dispatch (threshold: {int(self.stale_timeout)}s)")
+        self._native_unbind = bind_native_request_client(client)
         self.agent._active_request_abort = self.abort_hook
+        native_request_check()
         return client
 
     def mark_done(self) -> None:
@@ -1017,6 +1023,7 @@ class _InlineRequest:
         return client
 
 
+@native_request_bound
 def direct_api_call(agent, api_kwargs: dict):
     """Run a non-streaming LLM call inline on the conversation thread (cron turns,
     delegated children — see ``should_use_direct_api_call``): no interrupt worker,
@@ -1073,6 +1080,7 @@ def direct_api_call(agent, api_kwargs: dict):
         if getattr(agent, "_active_request_abort", None) is request.abort_hook:
             agent._active_request_abort = None
         request_client = request.pop_client()
+        request._native_unbind()
         if request_client is not None:
             agent._close_request_openai_client(request_client,
                 reason="request_complete" if succeeded else "request_error_cleanup")
@@ -1102,10 +1110,14 @@ class _RequestClientRegistry:
         self.owner_tid = None
         self.diag = None  # per-attempt stream diagnostics (streaming path)
         self.lock = threading.Lock()
+        self._native_unbind = lambda: None
+        native_request_on_cancel(lambda: self.close_once("native_operation_deadline"))
 
     def set_client(self, client, *, kind: str = "openai"):
         with self.lock:
             self.client, self.kind, self.owner_tid = client, kind, threading.get_ident()
+        self._native_unbind = bind_native_request_client(client)
+        native_request_check()
         return client
 
     @staticmethod
@@ -1147,6 +1159,7 @@ class _RequestClientRegistry:
             self.owner_tid = None
         if request_client is None:
             return
+        self._native_unbind()
         if request_kind == "stream":
             self._close_stream_handle(request_client, reason)
         elif request_kind == "anthropic_messages":
@@ -1298,6 +1311,7 @@ def _codex_silent_hang_hint(agent, api_kwargs: dict) -> Optional[str]:
 
 
 
+@native_request_bound
 def interruptible_api_call(agent, api_kwargs: dict):
     """Run the API call on a worker thread so the caller can detect interrupts
     without waiting for the full HTTP round-trip. Each worker gets its own
@@ -2769,6 +2783,7 @@ class _BedrockStream:
                 writer_token["value"] = claim_stream_writer(agent)
 
             def _accept_event(_event: Any) -> bool:
+                native_request_check()
                 token = writer_token["value"]
                 return token is None or stream_writer_is_current(agent, token)
 
@@ -2849,6 +2864,7 @@ class _BedrockStream:
         t.start()
         while t.is_alive():
             t.join(timeout=0.3)
+            native_request_check()
             self._raise_if_interrupted("Agent interrupted during Bedrock API call", worker=t)
             stale_elapsed = time.time() - self.last_event
             from agent.turn_recovery_autorecover import recovery_deadline_expired
@@ -2972,6 +2988,13 @@ class _StreamingCall(StreamingWaitMonitor):
         # Outer retries reuse api_request_id; fence late telemetry from an abandoned call too.
         self._diagnostic_token = object()
         agent._stream_diagnostics_token = self._diagnostic_token
+        native_request_on_cancel(self._cancel_native_request)
+
+    def _cancel_native_request(self):
+        self._request_cancelled["value"] = True
+        self._cancel_current_stream_attempt("native_operation_deadline")
+        self.clients.close_once("native_operation_deadline")
+        self._shutdown_stale_attempt_socket(self._attempt_stream_response)
 
     # ── shared small helpers ────────────────────────────────────────────
 
@@ -3140,6 +3163,7 @@ class _StreamingCall(StreamingWaitMonitor):
 
     def _count_chunk(self, diag, chunk) -> None:
         """Stamp liveness for a real chunk; diagnostics are best-effort."""
+        native_request_check()
         self.last_chunk_time["t"] = time.time()
         self.agent._touch_activity("receiving stream response")
         with contextlib.suppress(Exception):
@@ -3207,6 +3231,7 @@ class _StreamingCall(StreamingWaitMonitor):
         return usage, finish_reason
 
     def _open_chat_stream(self, stream_kwargs: dict[str, Any]):
+        native_request_check()
         # Native Gemini rejects OpenAI's usage-streaming extension; so do strict endpoints that
         # already 4xx'd on it this session (``_stream_options_unsupported``, see #9705).
         if not is_native_gemini_base_url(self.agent.base_url) and not getattr(self.agent, "_stream_options_unsupported", False):
@@ -3253,6 +3278,7 @@ class _StreamingCall(StreamingWaitMonitor):
             abort(self._attempt_request_client, reason="cancelled_attempt_late_connect")
 
     def _accept_chat_chunk(self, stream_attempt_id: int, chunk: Any) -> bool:
+        native_request_check()
         with contextlib.suppress(Exception):
             choices = getattr(chunk, "choices", None)
             choice = choices[0] if choices else None
@@ -3945,6 +3971,7 @@ class _StreamingCall(StreamingWaitMonitor):
         return True
 
     def _call_wire(self, stream_attempt_id: int):
+        native_request_check()
         if self.agent.api_mode != "anthropic_messages":
             return self._call_chat_completions(stream_attempt_id)
         # Per-request client so the watchdog aborts its socket, not the shared one.
@@ -4228,6 +4255,7 @@ class _StreamingCall(StreamingWaitMonitor):
         return self.result["response"]
 
 
+@native_request_bound
 def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=None):
     """Streaming variant of _interruptible_api_call: fires the delta callbacks per
     text token (tool-call turns suppress them) and returns a SimpleNamespace in

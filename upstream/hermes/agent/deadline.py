@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import faulthandler
 import logging
 import os
@@ -481,7 +481,7 @@ from contextvars import ContextVar
 _native_operation_deadline = ContextVar("native_operation_deadline", default=None)
 
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 
 @contextmanager
@@ -497,3 +497,151 @@ def native_operation_scope(deadline):
 
 def native_operation_deadline():
     return _native_operation_deadline.get()
+
+
+class NativeOperationExpired(InterruptedError):
+    """The accepted native operation ended; never a retryable provider timeout."""
+
+
+_native_request_lease = ContextVar("native_request_lease", default=None)
+
+
+class _NativeRequestLease:
+    """One request's absolute fence; cancellation only touches its own clients.
+
+    Reuses the native scheduler. No agent-wide interrupt flag or goal mutation:
+    an expired callback cannot interrupt a later turn or replacement goal.
+    """
+    def __init__(self, deadline):
+        self.deadline = deadline
+        self.monotonic_deadline = time.monotonic() + max(0., deadline - time.time())
+        self.lock = threading.RLock()
+        self.active = True
+        self.expired = False
+        self.callbacks = []
+        self.handle = None
+
+    def due(self):
+        return self.expired or time.time() >= self.deadline or time.monotonic() >= self.monotonic_deadline
+
+    def expire(self):
+        with self.lock:
+            if not self.active:
+                return False
+            self.expired = True
+            for callback in self.callbacks:
+                try:
+                    callback()
+                except Exception:
+                    logger.debug("native request cancellation failed", exc_info=True)
+            self.callbacks.clear()
+        return False
+
+    def check(self):
+        if self.due():
+            self.expire()
+            raise NativeOperationExpired("native_operation_deadline_expired")
+
+    def register(self, callback):
+        with self.lock:
+            if self.due():
+                callback()
+                raise NativeOperationExpired("native_operation_deadline_expired")
+            if self.active:
+                self.callbacks.append(callback)
+
+    def close(self):
+        with self.lock:
+            self.active = False
+            self.callbacks.clear()
+        if self.handle is not None:
+            self.handle.cancel()
+
+
+def native_request_check():
+    lease = _native_request_lease.get()
+    if lease is not None:
+        lease.check()
+    else:
+        deadline = native_operation_deadline()
+        if deadline is not None and time.time() >= deadline:
+            raise NativeOperationExpired("native_operation_deadline_expired")
+
+
+def native_request_on_cancel(callback):
+    lease = _native_request_lease.get()
+    if lease is not None:
+        lease.register(callback)
+
+
+def native_request_bound(fn):
+    """Bound actual SDK consumption, including healthy continuous streams."""
+    from functools import wraps
+    @wraps(fn)
+    def bounded(*args, **kwargs):
+        deadline = native_operation_deadline()
+        previous = _native_request_lease.get()
+        if deadline is None or (previous is not None and previous.deadline <= deadline):
+            native_request_check()
+            value = fn(*args, **kwargs)
+            native_request_check()
+            return value
+        lease = _NativeRequestLease(deadline)
+        token = _native_request_lease.set(lease)
+        try:
+            lease.check()
+            from agent.periodic_scheduler import schedule
+            lease.handle = schedule(lease.expire, max(.001, lease.monotonic_deadline - time.monotonic()))
+            try:
+                value = fn(*args, **kwargs)
+            except Exception:
+                lease.check()  # native deadline wins over the socket-abort exception
+                raise
+            lease.check()
+            return value
+        finally:
+            lease.close()
+            _native_request_lease.reset(token)
+    return bounded
+
+
+def bind_native_request_client(client, *, shared=False, asynchronous=False):
+    """Fence physical httpx dispatch after SDK transforms, queueing and retries.
+
+    The owner removes this exact hook before returning a reusable request client.
+    No shared client is closed and no other hook is replaced.
+    """
+    lease = _native_request_lease.get()
+    http = getattr(client, "_client", None)
+    hooks = getattr(http, "event_hooks", None)
+    if (lease is None and native_operation_deadline() is None) or not isinstance(hooks, dict):
+        return lambda: None
+    request_hooks = hooks.get("request")
+    if not isinstance(request_hooks, list):
+        return lambda: None
+    def check_request(request):
+        # Shared auxiliary clients can serve another session concurrently. Its
+        # request uses its own context, never the lease which installed this hook.
+        current = _native_request_lease.get() if shared else lease
+        if current is None:
+            native_request_check()
+            bound = native_operation_deadline()
+            if bound is None:
+                return
+            remaining = bound - time.time()
+        else:
+            current.check()
+            remaining = min(current.deadline - time.time(),
+                            current.monotonic_deadline - time.monotonic())
+        timeouts = request.extensions.get("timeout")
+        if isinstance(timeouts, dict):
+            request.extensions["timeout"] = {key: min(value, remaining) if isinstance(value, (int, float)) else remaining
+                                             for key, value in timeouts.items()}
+    async def async_check_request(request):
+        check_request(request)
+    hook = async_check_request if asynchronous else check_request
+    request_hooks.append(hook)
+    def remove():
+        with suppress(ValueError):
+            request_hooks.remove(hook)
+    return remove

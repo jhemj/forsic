@@ -1661,8 +1661,21 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[Dict[str, Any]]:
                 return _rc.result
             if _rc.action == "break":
                 return None
-        except InterruptedError:
-            if _run_phase(handle_api_interrupt, agent, s).action == "break":
+        except InterruptedError as api_error:
+            from agent.deadline import NativeOperationExpired
+            native_expired = (isinstance(api_error, NativeOperationExpired)
+                              and not getattr(agent, "_interrupt_requested", False)
+                              and not agent._has_pending_redirect())
+            verdict = _run_phase(handle_api_interrupt, agent, s)
+            if native_expired:
+                # Preserve streamed partials through the existing interrupt cleanup,
+                # but do not classify a native bound as a human stop. Failed-turn
+                # settlement owns the next state; unknown delivery is not retried.
+                s.failed, s.interrupted = True, False
+                s._turn_exit_reason = "native_operation_deadline_expired"
+                s.final_response = "The accepted model-request deadline expired. Saved work is preserved; this request was not retried."
+                return None
+            if verdict.action == "break":
                 return None
         except Exception as api_error:
             _ae = _run_phase(handle_api_error, agent, s, api_error=api_error)

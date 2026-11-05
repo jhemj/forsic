@@ -100,6 +100,7 @@ _EXIT_REASON_FAILURES: Tuple[Tuple[str, str, bool, bool], ...] = (
     # finalizer synthesizes the visible close and fails the turn.
     ("pending_tool_result", "loop_error", True, True),
     ("interpreter_shutdown", "interpreter_shutdown", False, True),
+    ("native_operation_deadline_expired", "native_operation_deadline", False, True),
     # Advisory: a deterministic local bug is not a task failure for the kanban breaker.
     ("local_processing_error", "loop_error", False, False),
     ("repeated_outer_errors", "loop_error", True, True),

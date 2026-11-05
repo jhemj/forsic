@@ -225,6 +225,43 @@ def _settle_missing_goal_owner(db, key, home, reason):
             lease.release()
 
 
+def _settle_expired_ordinary_goal(db, key, home, goal):
+    """Only close an expired ownerless v2 goal; never restore ordinary execution."""
+    from hermes_cli.goals_completion import enabled
+    from hermes_cli.goals_recovery import read_context
+    from hermes_cli.goals_runtime import enforce_goal_runtime, runtime_identity, runtime_remaining
+    if (not enabled(goal) or goal.runtime_budget_seconds is None
+            or goal.runtime_accounting_known and runtime_remaining(goal) != 0):
+        return False
+    if db.resolve_resume_session_id(key) != key:
+        return False
+    row = db.get_session(key)
+    if (not row or row.get("ended_at") is not None
+            and not _recovery_automatic_end_reason(row.get("end_reason"))):
+        return False
+    profile_home = None if Path(home).resolve() == _launch_home().resolve() else str(home)
+    with _session_profile_runtime_scope({"profile_home": profile_home}, hydrate_secrets=False):
+        if _find_live_session_by_key(key, profile_home) is not None:
+            return False  # a live runtime owns its existing deadline watcher
+        lease, refusal = _claim_active_session_slot(key, live_session_id="expiry-" + uuid.uuid4().hex,
+                                                   surface="desktop", profile_home=home)
+        if refusal is not None:
+            return False
+        try:
+            if (_find_live_session_by_key(key, profile_home) is not None
+                    or db.resolve_resume_session_id(key) != key):
+                return False
+            _, current, _ = read_context(db, key)
+            if (not current or current.status != "active" or current.pause_requested
+                    or runtime_identity(current) != runtime_identity(goal)):
+                return False
+            _, expired = enforce_goal_runtime(db, key, expected_goal_id=runtime_identity(goal))
+            return expired
+        finally:
+            if lease is not None:
+                lease.release()
+
+
 def _sweep_goal_recovery():
     """One callback on the existing periodic scheduler; no independent execution loop."""
     from hermes_state import SessionDB
@@ -242,8 +279,10 @@ def _sweep_goal_recovery():
                     _, goal, context = read_context(db, key)
                     progress=(goal.advisory_progress or {}) if goal else {}
                     review_wait=progress.get('status') in {'waiting','claimed','dispatched'}
-                    if (not goal or goal.status != "active" or goal.pause_requested
-                            or not review_wait and context.get("status") not in {"pending", "claimed", "dispatched"}):
+                    if not goal or goal.status != "active" or goal.pause_requested:
+                        continue
+                    if not review_wait and context.get("status") not in {"pending", "claimed", "dispatched"}:
+                        _settle_expired_ordinary_goal(db, key, home, goal)
                         continue
                     tip = db.resolve_resume_session_id(key)
                     if tip != key:

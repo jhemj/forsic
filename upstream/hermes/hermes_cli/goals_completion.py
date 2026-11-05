@@ -22,9 +22,12 @@ def loaded_fingerprint():
 
 
 
-def make_policy(budget, completion_contract=None):
+def make_policy(budget, completion_contract=None, *, ready_target_mode='strict'):
+    if ready_target_mode not in {'strict', 'soft'}:
+        raise ValueError('ready_target_mode must be strict or soft')
     return {"revision": POLICY_REVISION, "settlement_seconds": math.ceil(max(900., budget / 48) / 60) * 60,
             "cold_start_fraction": .25, "checkpoint_lateness_seconds": 300.,
+            "ready_target_mode": ready_target_mode, "target_contract_revision": 'ready-target-' + ready_target_mode + '-1',
             "completion_contract": dict(completion_contract or {}), "model_bound_seconds": 1800., "cancel_seconds": 15.}
 
 
@@ -33,7 +36,7 @@ def configured_policy(budget):
     cfg = (load_config_readonly() or {}).get("goals") or {}
     if budget is None or cfg.get("runtime_policy") != POLICY_REVISION:
         return {}
-    return make_policy(budget, cfg.get("completion_contract"))
+    return make_policy(budget, cfg.get("completion_contract"), ready_target_mode=cfg.get('ready_target_mode', 'strict'))
 
 
 def enabled(state):
@@ -53,7 +56,7 @@ def read_work_projection(session_id, state):
     work = dict(applicable[0])
     if work.get('status') == 'ready':
         work['domain_status'] = 'ready'
-        work['status'] = 'known' 
+        work['status'] = 'known'
     if work.get("digest") and work.get("basis") and work.get("identity"):
         work.setdefault("status", "known")
     else:
@@ -89,6 +92,7 @@ def control_projection(state, work=None, *, now=None):
     reserve = max(settlement, reserve)
     deadline = runtime_wall_deadline(state)
     ready_deadline = deadline - settlement
+    soft_target = policy.get('ready_target_mode') == 'soft'
     finish = any(r.get("decision") == "finish" for r in state.runtime_checkpoints)
     sticky = control.get("phase") == "closing" or finish
     slack = remaining - reserve
@@ -109,7 +113,7 @@ def control_projection(state, work=None, *, now=None):
             unknown_quota.append(name)
         else:
             infeasible |= required > available
-    phase = "settlement" if remaining <= settlement else "closing" if sticky or slack <= 0 or infeasible else "investigation"
+    phase = "settlement" if remaining <= settlement and not soft_target else "closing" if sticky or slack <= 0 or infeasible else "investigation"
     reason = "slack_available"
     if sticky:
         reason = control.get("reason") or "model_finish"
@@ -117,11 +121,13 @@ def control_projection(state, work=None, *, now=None):
         reason = "completion_resources_reserved"
     elif slack <= 0:
         reason = "report_reserve_enforced"
-    if phase == "settlement":
+    if remaining <= settlement:
         reason = "report_target_reached"
     return {**result, "phase": phase, "reason": reason, "reserve_seconds": reserve, "slack_seconds": slack,
             "estimate_source": "measured" if known else "cold_start", "settlement_seconds": settlement,
             "deadline": deadline, "ready_deadline": ready_deadline, "latest_safe_close": deadline - reserve,
+            "operation_deadline": deadline if soft_target else ready_deadline,
+            "ready_target_mode": 'soft' if soft_target else 'strict', "ready_target_reached": remaining <= settlement,
             "checkpoint_due": runtime_checkpoint_due(state, now=now), "work_digest": (work or {}).get("digest"),
             "quota_infeasible": infeasible, "unknown_quota": unknown_quota}
 
@@ -242,7 +248,7 @@ def admit_action(agent, *, purpose, max_seconds, operation_id=None, blocker=None
     if phase == "closing" and purpose == "targeted_verification":
         if not blocker or blocker not in (work.get("blockers") or []) or not scope:
             return {"allowed": False, "reason": "unbound_report_verification", "control": control}
-    deadline = control["ready_deadline"]
+    deadline = control["operation_deadline"]
     if purpose == "discovery":
         deadline = min(deadline, control["latest_safe_close"])
     due = control.get("checkpoint_due")
@@ -280,7 +286,7 @@ def operation_timeout(agent, configured):
         if state is not None:
             deadlines.append(runtime_wall_deadline(state))
             if enabled(state) and state.status == "active":
-                deadlines.append(control_projection(state).get("ready_deadline"))
+                deadlines.append(control_projection(state).get("operation_deadline"))
     from agent.deadline import native_operation_deadline
     deadlines.append(native_operation_deadline())
     valid = [x for x in deadlines if isinstance(x, (int, float)) and math.isfinite(x)]
@@ -294,26 +300,45 @@ def settle_native(db, sid, *, expected_identity, reason, work=None, pause=False)
     raw, state = _read(db, sid)
     if state is None or runtime_identity(state) != tuple(expected_identity):
         return {"status": "superseded"}
-    work = read_work_projection(sid, state) if work is None else work
+    if work is None:
+        try:
+            work = read_work_projection(sid, state)
+        except Exception as exc:
+            work = {"status": "unknown", "reason": "work_projection_unavailable",
+                    "projection_error": type(exc).__name__}
+    previous = state.runtime_settlement
+    fallback = (work.get("status") not in {"known", "ready"}
+                and previous.get("goal_identity") == list(expected_identity))
+    # An unavailable reader is not evidence that the saved files disappeared.
+    # Previous qualification/delivery is never borrowed: only verified bytes
+    # from this exact goal can survive as a draft preservation receipt.
+    candidates = previous.get("artifact_paths", []) if fallback else work.get("artifacts", [])
     artifact = work.get("artifact_status", "partial_checkpoint")
+    if fallback:
+        artifact = "partial_checkpoint"
     if artifact not in {"final_ready", "final_ready_with_limitations", "draft_preserved", "partial_checkpoint"}:
         artifact = "partial_checkpoint"
     receipt = {"schema": "native-goal-settlement-1", "goal_identity": list(expected_identity),
                "at": time.time(), "reason": reason, "artifact_status": artifact,
-               "delivery_status": work.get("delivery_status", "unconfirmed"), "goal_status": state.status,
+               "delivery_status": "unconfirmed" if fallback else work.get("delivery_status", "unconfirmed"), "goal_status": state.status,
                "work_digest": work.get("digest"), "basis": work.get("basis"), "blockers": work.get("blockers"),
                "artifact_paths": [], "elapsed_seconds": runtime_elapsed(state), "retained_native_rows": True}
     # Paths in a projection are advisory. Verify every claimed existing artifact.
     from pathlib import Path
-    for item in work.get("artifacts", []):
-        p = Path(item["path"])
+    if fallback:
+        receipt.update(preservation_origin="previous_native_settlement",
+                       projection_status=work.get("status"), projection_reason=work.get("reason"))
+    for item in candidates:
         try:
+            p = Path(item["path"])
             actual = hashlib.sha256(p.read_bytes()).hexdigest()
             if actual != item.get("sha256"):
                 raise ValueError("artifact_changed")
             receipt["artifact_paths"].append({"path": str(p), "sha256": actual, "bytes": p.stat().st_size})
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, TypeError, KeyError) as exc:
             receipt.update(artifact_status="draft_preserved", artifact_error=type(exc).__name__)
+    if fallback:
+        receipt["artifact_status"] = "draft_preserved" if receipt["artifact_paths"] else "partial_checkpoint"
     if artifact.startswith("final_ready") and not receipt["artifact_paths"]:
         receipt["artifact_status"] = "draft_preserved"
     if pause and state.status == "active" and not state.pause_requested:
@@ -513,4 +538,29 @@ def migrate_policy(db, sid, *, expected_identity, completion_contract, authoriza
     state.runtime_policy['migration'] = {'from': before.get('revision', 'legacy-v1'), 'at':time.time(),
         'authorization_ref':authorization_ref, 'elapsed_seconds':state.runtime_elapsed_seconds,
         'turns_used':state.turns_used, 'legacy_tool_cutoff_fraction': .95}
+    return db.compare_and_swap_meta(_meta_key(sid), raw, state.to_json())
+
+
+def amend_ready_target_mode(db, sid, *, expected_identity, mode, authorization_ref):
+    """Explicit paused-goal amendment; never resets time, calls or recovery bounds."""
+    from hermes_cli.goals import _meta_key
+    from hermes_cli.goals_runtime import runtime_identity, runtime_remaining
+    if mode not in {'strict', 'soft'} or not authorization_ref:
+        raise ValueError('target_mode_and_authorization_required')
+    raw, state = _read(db, sid)
+    if (state is None or not enabled(state) or state.status != 'paused' or state.pause_requested
+            or runtime_identity(state) != tuple(expected_identity) or runtime_remaining(state) is None):
+        raise ValueError('target_amendment_requires_verified_paused_goal')
+    if (any(v.get('status') in {'pending','claimed','dispatched'}
+            or v.get('delivery_status') in {'intent','unknown'} for v in state.runtime_recovery.values())
+            or (state.advisory_progress or {}).get('status') in {'waiting','claimed','dispatched'}):
+        raise ValueError('pending_recovery_requires_current_policy_reconciliation')
+    previous = state.runtime_policy.get('ready_target_mode', 'strict')
+    if previous == mode:
+        return True
+    history = list(state.runtime_policy.get('target_amendments') or [])
+    history.append({'from':previous, 'to':mode, 'at':time.time(), 'authorization_ref':authorization_ref,
+                    'elapsed_seconds':state.runtime_elapsed_seconds, 'turns_used':state.turns_used})
+    state.runtime_policy = {**state.runtime_policy, 'ready_target_mode':mode,
+        'target_contract_revision':'ready-target-' + mode + '-1', 'target_amendments':history}
     return db.compare_and_swap_meta(_meta_key(sid), raw, state.to_json())

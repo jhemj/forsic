@@ -416,7 +416,7 @@ def test_late_response_keeps_original_goal_identity_and_respects_new_control(run
     assert agent._runtime_turn_identity == original_identity
 
 
-@pytest.mark.parametrize("exit_kind", ["normal", "failed", "interrupted", "paused", "replacement", "settlement", "storage"])
+@pytest.mark.parametrize("exit_kind", ["normal", "failed", "interrupted", "paused", "replacement", "settlement", "storage", "native_expiry"])
 def test_v2_finalizer_records_actual_artifacts_without_model_or_control_override(runtime, monkeypatch, exit_kind):
     from agent import conversation_loop
     from agent.iteration_budget import IterationBudget
@@ -469,8 +469,13 @@ def test_v2_finalizer_records_actual_artifacts_without_model_or_control_override
         interrupted=exit_kind in {"interrupted", "paused"}, failed=exit_kind == "failed",
         messages=rows, conversation_history=None, effective_task_id="synthetic", turn_id="turn",
         user_message="Inspect", original_user_message="Inspect", _should_review_memory=False,
-        _turn_exit_reason="text_response(finish_reason=stop)")
+        _turn_exit_reason="native_operation_deadline_expired" if exit_kind == "native_expiry" else "text_response(finish_reason=stop)")
     forbidden.assert_not_called()
+    if exit_kind == "native_expiry":
+        from agent.turn_outcome import turn_outcome
+        assert result["failed"] and not result["interrupted"] and not result["completed"]
+        assert result["failure_reason"] == "native_operation_deadline" and result["failure_retryable"] is False
+        assert turn_outcome(result).kind == "terminal_error"
     state = goals.load_goal(agent.session_id)
     receipt = result["runtime_settlement"]
     if exit_kind == "replacement":
@@ -487,3 +492,39 @@ def test_v2_finalizer_records_actual_artifacts_without_model_or_control_override
             assert state.status == "paused" and state.paused_reason == "report_target_settlement"
             assert result["turn_exit_reason"] == "runtime_settlement_preserved" and not result["completed"]
             agent._sync_external_memory_for_turn.assert_not_called()
+
+
+@pytest.mark.parametrize("control", ["native_expiry", "user_interrupt", "expiry_with_user_interrupt"])
+def test_native_sdk_deadline_closes_checkpoint_once_but_human_stop_wins(runtime, monkeypatch, control):
+    from agent.deadline import NativeOperationExpired
+    clock, agent, _, db, rows = runtime
+    calls = []
+    def build(*args):
+        def call(_):
+            calls.append(clock.now)
+            if control == "expiry_with_user_interrupt":
+                agent._interrupt_requested = True
+            if control == "user_interrupt":
+                raise InterruptedError("Explicit user stop")
+            raise NativeOperationExpired("native_operation_deadline_expired")
+        return call
+    monkeypatch.setattr(helpers, "_checkpoint_summary_attempt", build)
+    text, reason, interrupted = turn_finalizer._resolve_runtime_checkpoint(
+        agent, None, "runtime_budget_handoff", False, False, rows, 1)
+    current = goals.load_goal(agent.session_id)
+    episode = deepcopy(current.runtime_recovery["checkpoint"])
+    assert len(calls) == 1 and episode["attempts_used"] == 1
+    assert episode["deadline"] == clock.now + checkpoint.CHECKPOINT_SECONDS
+    if control == "native_expiry":
+        assert not interrupted
+        agent._flush_messages_to_session_db(rows)
+        agent._runtime_checkpoint_row = rows[-1]
+        assert turn_finalizer._commit_runtime_checkpoint(agent, rows, text, reason, []) == "runtime_checkpoint_closing_due"
+        current = goals.load_goal(agent.session_id)
+        assert current.runtime_control["decision_origin"] == "native"
+        assert current.runtime_control["reason"] == "checkpoint_decision_unavailable"
+        assert current.runtime_checkpoints == []
+        assert current.runtime_recovery["checkpoint"] == episode
+    else:
+        assert interrupted and reason.startswith("interrupted_during_api_call")
+        assert not current.runtime_control and current.runtime_checkpoints == []

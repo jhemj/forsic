@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 PIN = 'bafb42b431fca313471958fdf77f9c30e455f86b'
 DEPENDENCIES = {'python-docx': '1.2.0', 'lxml': '6.1.3', 'python-telegram-bot': '22.8'}
 ROOT_FILES = (
-    'test_report_completion_work.py', 'test_review_completion_reservation.py', 'test_review_wait_owner.py',
+    'test_report_completion_work.py', 'test_report_completion_writes.py', 'test_review_completion_reservation.py', 'test_review_wait_owner.py',
     'test_runtime_completion_integration.py', 'docs/runtime-completion.md',
     'test_api_receipts.py',
     'test_audience_typography.py',
@@ -144,8 +144,11 @@ UPSTREAM_ADDITIONS = (
     'hermes_cli/goals_completion.py', 'hermes_cli/goals_recovery.py',
     'tui_gateway/goal_recovery.py',
     'tests/agent/test_native_completion_deadlines.py',
+    'tests/agent/test_native_operation_deadline_enforcement.py',
     'tests/agent/test_runtime_checkpoint_contract.py',
     'tests/hermes_cli/test_goal_completion_contract.py',
+    'tests/hermes_cli/test_goal_evaluation_native_deadline.py',
+    'tests/hermes_cli/test_runtime_expiry_settlement.py',
     'tests/hermes_cli/test_goal_completion_invariants.py',
     'tests/hermes_cli/test_goal_context_recovery.py',
     'tests/tui_gateway/test_goal_recovery_wakeup.py',
@@ -325,7 +328,7 @@ def initial_config(base_url, model, *, wizard=False):
                   'auto_recovery_budget_seconds': 600, 'auto_recovery_request_timeout_seconds': 180,
                   'coding_context': 'off', 'execution_guidance': False,
                   'run_budget_seconds': 86400, 'local_stream_stale_timeout': 1800},
-        'goals': {'max_turns': 32, 'runtime_policy': 'report-completion-v2',
+        'goals': {'max_turns': 32, 'runtime_policy': 'report-completion-v2', 'ready_target_mode': 'soft',
                   'completion_contract': {'required_formats': ['html'],
                       'layout_required': False, 'completion_target': 'final_ready'}},
         'clarify': {'background': True, 'ui_timeout': 3600},

@@ -94,9 +94,9 @@ def prepare_context_recovery(db, session_id, *, expected_scope, cause, source_tu
         deadline = previous.get("original_deadline") if same_episode else None
         from hermes_cli.goals_completion import enabled
         ready_deadline = runtime_wall_deadline(state)
-        if enabled(state):
+        if enabled(state) and state.runtime_policy.get('ready_target_mode') != 'soft':
             ready_deadline -= state.runtime_policy["settlement_seconds"]
-        else:
+        elif not enabled(state):
             ready_deadline -= state.runtime_budget_seconds * .05  # pinned legacy handoff cutoff
         deadline = min(float(deadline or now + CONTEXT_EPISODE_SECONDS), now + remaining,
                        ready_deadline, float(getattr(state, "wall_deadline", None) or float("inf")))

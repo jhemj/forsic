@@ -1408,6 +1408,7 @@ DEFAULT_CONFIG = {
     "goals": {
         # Opt-in, pinned per goal; legacy rows retain their original phase policy.
         "runtime_policy": "legacy-v1",
+        "ready_target_mode": "strict",
         "completion_contract": {},
         # Max continuation turns before auto-pause (/goal resume) — guards against judge false
         # negatives and unbounded spend.

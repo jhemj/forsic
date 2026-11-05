@@ -151,3 +151,47 @@ def test_H62_H63_generated_controls_preserve_usage_and_reject_all_late_dispatch(
         if state.status=='paused':
             with pytest.raises(completion.NativeAdmissionDenied):completion.admit_model_request(agent,f'request-{step}')
         assert state.runtime_budget_seconds==86400.
+
+
+def test_soft_preparation_target_allows_finishing_but_never_new_discovery_or_extra_time(native):
+    now, db, manager, agent, work = native
+    state = goals.load_goal('case-a')
+    state.runtime_policy = completion.make_policy(86400., ready_target_mode='soft')
+    state.runtime_elapsed_seconds = 86400.-600.
+    db.set_meta('goal:case-a',state.to_json())
+    control = completion.control_projection(state,work)
+    assert control['phase']=='closing' and control['ready_target_reached']
+    assert control['ready_deadline'] < now.value < control['operation_deadline']
+    grant = completion.admit_action(agent,purpose='report',max_seconds=1800.,work=work)
+    assert grant['allowed'] and grant['deadline']==now.value+600.
+    assert not completion.admit_action(agent,purpose='discovery',max_seconds=1.,work=work)['allowed']
+    now.value+=600.
+    assert not completion.admit_action(agent,purpose='report',max_seconds=1.,work=work)['allowed']
+    assert goals.load_goal('case-a').runtime_budget_seconds==86400.
+
+
+def test_target_amendment_preserves_pause_history_and_original_consumption(native):
+    now, db, manager, agent, work = native
+    manager.pause('owned maintenance')
+    state = goals.load_goal('case-a');before=json.loads(state.to_json())
+    assert completion.amend_ready_target_mode(db,'case-a',expected_identity=runtime.runtime_identity(state),
+        mode='soft',authorization_ref='explicit user permits approximate finishing target')
+    after = json.loads(goals.load_goal('case-a').to_json())
+    assert {k:v for k,v in after.items() if k!='runtime_policy'}=={k:v for k,v in before.items() if k!='runtime_policy'}
+    assert after['runtime_policy']['target_amendments'][0]['from']=='strict'
+    manager.resume(reset_budget=False)
+    with pytest.raises(ValueError):completion.amend_ready_target_mode(db,'case-a',
+        expected_identity=agent._runtime_turn_identity,mode='strict',authorization_ref='cannot alter active goal')
+
+
+@pytest.mark.parametrize('pending', [{'status':'pending'}, {'status':'claimed'},
+    {'status':'dispatched'}, {'delivery_status':'intent'}, {'delivery_status':'unknown'}])
+def test_target_amendment_rejects_unresolved_original_operation(native,pending):
+    now,db,manager,agent,work=native
+    manager.pause('owned maintenance')
+    state=goals.load_goal('case-a');state.runtime_recovery={'checkpoint':pending}
+    db.set_meta('goal:case-a',state.to_json());before=db.get_meta('goal:case-a')
+    with pytest.raises(ValueError,match='pending_recovery'):
+        completion.amend_ready_target_mode(db,'case-a',expected_identity=runtime.runtime_identity(state),
+            mode='soft',authorization_ref='explicit authorized target change')
+    assert db.get_meta('goal:case-a')==before

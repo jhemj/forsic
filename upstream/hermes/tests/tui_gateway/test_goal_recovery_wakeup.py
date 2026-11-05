@@ -75,6 +75,88 @@ def test_restart_with_no_ui_restores_stored_runtime_and_one_actual_turn_receipt(
     assert len(rt.calls)==1
 
 
+@pytest.mark.parametrize('accounting', ['expired', 'unknown'])
+def test_startup_sweep_settles_ordinary_v2_without_ui_or_recovery_intent(rt, monkeypatch, accounting):
+    from hermes_cli import goals_completion as completion
+    import hashlib
+    state = goals.load_goal(rt.manager.session_id)
+    state.runtime_recovery = {}
+    state.advisory_progress = None
+    state.runtime_policy = completion.make_policy(86400., {'required_formats':['html']})
+    if accounting == 'unknown':
+        state.runtime_accounting_known = False
+    else:
+        rt.clock.now = runtime.runtime_wall_deadline(state) + 1
+    rt.db.set_meta('goal:' + rt.manager.session_id, state.to_json())
+    draft = rt.home / 'synthetic-draft.html'
+    draft.write_text('<p>Preserved synthetic finding</p>')
+    digest = hashlib.sha256(draft.read_bytes()).hexdigest()
+    monkeypatch.setattr(completion, 'read_work_projection', lambda *a: {
+        'status':'known', 'artifact_status':'draft_preserved', 'delivery_status':'unconfirmed',
+        'artifacts':[{'path':str(draft), 'sha256':digest}]})
+    rt.server._start_agent_build = Mock(side_effect=AssertionError('expiry cannot create an agent'))
+    rt.server._restore_goal_recovery_owner = Mock(side_effect=AssertionError('ordinary expiry cannot restore execution'))
+    before_rows = rt.db.get_messages(rt.manager.session_id)
+    assert rt.server._sweep_goal_recovery()
+    saved = goals.load_goal(rt.manager.session_id)
+    assert saved.status == 'paused'
+    assert saved.runtime_settlement['artifact_status'] == 'draft_preserved'
+    assert saved.runtime_settlement['artifact_paths'][0]['sha256'] == digest
+    assert not rt.live and not rt.calls
+    assert rt.db.get_messages(rt.manager.session_id) == before_rows
+    assert saved.runtime_budget_seconds == 86400. and saved.turns_used == state.turns_used
+
+
+@pytest.mark.parametrize('barrier', ['before_deadline', 'legacy', 'manual_pause', 'pause_requested',
+    'explicit_close', 'foreign_lease', 'live_owner', 'lineage', 'pause_after_claim', 'replace_after_claim'])
+def test_ordinary_expiry_sweep_preserves_existing_authority_and_never_restarts(rt, barrier):
+    from hermes_cli import goals_completion as completion
+    state = goals.load_goal(rt.manager.session_id)
+    state.runtime_recovery = {}
+    state.advisory_progress = None
+    state.runtime_policy = completion.make_policy(86400., {'required_formats':['html']})
+    if barrier != 'before_deadline':
+        rt.clock.now = runtime.runtime_wall_deadline(state) + 1
+    if barrier == 'legacy':
+        state.runtime_policy = {}
+    elif barrier == 'manual_pause':
+        state.status, state.paused_reason = 'paused', 'explicit user stop'
+    elif barrier == 'pause_requested':
+        state.pause_requested = True
+    rt.db.set_meta('goal:' + rt.manager.session_id, state.to_json())
+    releases = []
+    def claim(*a, **kw):
+        if barrier == 'foreign_lease':
+            return None, 'foreign live owner'
+        if barrier in {'pause_after_claim','replace_after_claim'}:
+            current = goals.load_goal(rt.manager.session_id)
+            if barrier == 'pause_after_claim':
+                current.status, current.paused_reason = 'paused', 'user stop after claim'
+            else:
+                current.goal, current.created_at = 'New explicit scope', current.created_at + 1
+            rt.db.set_meta('goal:' + rt.manager.session_id, current.to_json())
+        return NS(release=lambda: releases.append(True)), None
+    rt.server._claim_active_session_slot = claim
+    if barrier == 'explicit_close':
+        rt.db.end_session(rt.manager.session_id, 'tui_close')
+    elif barrier == 'live_owner':
+        rt.live['live-ui'] = {'session_key':rt.manager.session_id, 'running':True}
+    elif barrier == 'lineage':
+        rt.db.create_session('ordinary-child', 'desktop', parent_session_id=rt.manager.session_id)
+        rt.db.end_session(rt.manager.session_id, 'compression')
+    rt.server._restore_goal_recovery_owner = Mock(side_effect=AssertionError('no ordinary restart'))
+    before = rt.db.get_meta('goal:' + rt.manager.session_id)
+    assert rt.server._sweep_goal_recovery()
+    after = goals.load_goal(rt.manager.session_id)
+    assert not rt.calls and not after.runtime_settlement
+    if barrier not in {'pause_after_claim','replace_after_claim'}:
+        assert rt.db.get_meta('goal:' + rt.manager.session_id) == before
+    elif barrier == 'pause_after_claim':
+        assert after.paused_reason == 'user stop after claim' and releases == [True]
+    else:
+        assert after.goal == 'New explicit scope' and releases == [True]
+
+
 def test_restart_honors_user_pause_and_never_constructs_owner(rt):
     rt.manager.pause("user stop")
     rt.server._sweep_goal_recovery()

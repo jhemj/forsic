@@ -72,6 +72,8 @@ class StreamingWaitMonitor:
         recovery_deadline_killed = False
         while not self._call_done.is_set():
             self._call_done.wait(timeout=0.3)
+            from agent.deadline import native_request_check
+            native_request_check()
             _hb_now = time.time()
             if self.agent._interrupt_requested:
                 self._abort_for_interrupt(_hb_now - self.last_chunk_time["t"])

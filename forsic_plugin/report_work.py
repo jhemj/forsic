@@ -424,6 +424,117 @@ def _verification_binding(projection, action, resolved):
         return None
 
 
+def _current_judgment_write(projection, action, resolved):
+    """Admit completion of a required owned judgment, not new investigation scope."""
+    if not resolved or action.get('tool') != 'forsic_question':return None
+    payload=action.get('arguments')
+    if not isinstance(payload,dict) or not payload.get('question_id'):return None
+    try:
+        from .report_driven.host import current,find
+        from .report_driven.investigation_state import check_question_revision,question_state_problems
+        state=current(resolved['case'])
+        question=find(state,'questions',payload['question_id'])
+        if question['id'] not in projection['identity']['question_scope']:return None
+        scope={'_goal_id':resolved['goal_id'],'_session_id':resolved['conversation_id']}
+        check_question_revision(question,payload,goal_id=scope['_goal_id'],session_id=scope['_session_id'])
+        if question_state_problems(payload,state,scope)[0]:return None
+        if any(key in payload and payload[key]!=question[key] for key in ('question','target_proposition','scope')):
+            return None
+        blocker=None
+        if ('current_judgment_review_required' in projection.get('blockers',[])
+                and question['id'] in projection['basis']['judgment_review_question_ids']
+                and question.get('judgment_review_required')):
+            blocker='current_judgment_review_required'
+        elif 'review_findings_pending' in projection.get('blockers',[]) and payload.get('review_responses'):
+            from .independent_review import review_state
+            pending={(f['review_id'],f['finding_id']) for f in review_state(resolved,state)['pending_findings']
+                     if f.get('impact')=='material'}
+            if any(isinstance(response,dict) and (response.get('review_id'),response.get('finding_id')) in pending
+                   for response in payload['review_responses']):
+                blocker='review_findings_pending'
+        if blocker is None:return None
+        return {'blocker':blocker,'scope':{'question_id':question['id'],
+                'expected_revision':question['revision'],'snapshot_id':state['meta']['snapshot_id']}}
+    except (KeyError,TypeError,ValueError):return None
+
+
+def _current_test_assessment(projection, action, resolved):
+    """Finish a returned, pre-existing discriminating test without new collection."""
+    if (not resolved or action.get('tool') != 'forsic_assess'
+            or 'current_judgment_review_required' not in projection.get('blockers', [])):
+        return None
+    try:
+        from .report_driven.host import current, find
+        from .report_driven.assessment_basis import expand_selected
+        state = current(resolved['case'])
+        payload = action['arguments']
+        selected = expand_selected(resolved['case'], state, payload,
+            goal_id=resolved['goal_id'], session_id=resolved['conversation_id'])
+        mission = find(state, 'missions', selected['mission_id'])
+        question = find(state, 'questions', mission['question_ref']['id'])
+        gap = find(state, 'gaps', mission['gap_ref']['id'])
+        if (question['id'] not in projection['basis']['judgment_review_question_ids']
+                or not question.get('judgment_review_required')
+                or gap['id'] not in question['remaining_gap_ids']
+                or gap['question_ref']['id'] != question['id']
+                or gap['version'] != mission['gap_ref']['version']
+                or gap['impact'] not in ('material', 'decision_critical')
+                or gap['disposition'] in ('resolved', 'not_applicable')
+                or mission['design_timing'] != 'before_result'
+                or selected['result_id'] not in mission['result_ids']
+                or not (mission.get('support_rule') or mission.get('refute_rule'))):
+            return None
+        test = find(state, 'tests', 'T-' + mission['id'])
+        if any(a['test_ref']['id'] == test['id'] and a['test_ref']['version'] == test['version']
+               and a['result_ref']['id'] == selected['result_id'] for a in state['assessments']):
+            return None
+        return {'blocker': 'current_judgment_review_required', 'scope': {
+            'question_id': question['id'], 'expected_revision': question['revision'],
+            'mission_id': mission['id'], 'mission_version': mission['version'],
+            'result_id': selected['result_id'], 'result_version': selected['result_version']}}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _current_report_correction(projection, args, resolved):
+    """A retained material finding can require editing an already reviewed body."""
+    if (not resolved or 'draft' not in args or 'review' in args
+            or 'review_findings_pending' not in projection.get('blockers', [])):
+        return None
+    try:
+        import hmac
+        from .independent_review import review_state
+        from .report_driven import narrative
+        from .report_driven.host import current, find
+        from .report_driven.investigation_state import check_question_revision
+        state = current(resolved['case'])
+        ids = projection['identity']['question_scope']
+        if narrative.selection(state, {**args, '_goal_id': resolved['goal_id'],
+                                       '_session_id': resolved['conversation_id']}) != ids:
+            return None
+        for qid in ids:
+            question = find(state, 'questions', qid)
+            check_question_revision(question, {'expected_revision': question['revision']},
+                goal_id=resolved['goal_id'], session_id=resolved['conversation_id'])
+        if not any(f.get('impact') == 'material' for f in review_state(resolved, state)['pending_findings']):
+            return None
+        progress = narrative.status(state, ids)
+        group = args.get('section')
+        if (group not in narrative.GROUP_IDS or not isinstance(args.get('edit_ref'), str)
+                or not (resolved['case'].output / '.report-authoring-key').is_file()
+                or 'basis_id' in args and args['basis_id'] != progress['basis_id']
+                or 'expected_revision' in args and args['expected_revision'] != progress['revision']):
+            return None
+        expected = narrative._edit_reference(resolved['case'], progress, group,
+            {'_goal_id': resolved['goal_id'], '_session_id': resolved['conversation_id']})
+        if not hmac.compare_digest(args['edit_ref'], expected):
+            return None
+        return {'blocker': 'review_findings_pending', 'scope': {'question_ids': ids,
+                'basis_id': progress['basis_id'], 'expected_revision': progress['revision'], 'section': group}}
+    except (KeyError, TypeError, ValueError, OSError):
+        return None
+
+
 def classify_action(projection, action, *, resolved=None):
     """Only canonical operations in the current scope get report/read purpose.
 
@@ -448,8 +559,15 @@ def classify_action(projection, action, *, resolved=None):
             result.update(purpose='read', blocker='current_report_state')
         elif verb == 'source' and args.get('source_id') in projection['basis']['source_ids']:
             result.update(purpose='read', blocker='selected_evidence')
-        elif verb == 'compose' and work.get('document_review') == 'pending':
-            result.update(purpose='report', blocker='document_review' if work.get('compose') == 'complete' else 'compose')
+        elif verb == 'compose':
+            if 'draft' not in args and 'review' not in args:
+                result.update(purpose='read', blocker='current_report_body')
+            elif work.get('document_review') == 'pending':
+                result.update(purpose='report', blocker='document_review' if work.get('compose') == 'complete' else 'compose')
+            else:
+                correction = _current_report_correction(projection, args, resolved)
+                if correction:
+                    result.update(purpose='report', **correction)
         elif verb == 'render' and projection['artifact_work']['render_needed']:
             result.update(purpose='report', blocker='render')
         elif (verb == 'finalize' and projection['artifact_work']['selection_needed'] and
@@ -462,6 +580,12 @@ def classify_action(projection, action, *, resolved=None):
             and payload.get('question_id') in ids and
             payload.get('finding_id') in projection['review_work']['unanswered_findings']):
         result.update(purpose='report', blocker=payload['finding_id'])
+    write_scope = _current_judgment_write(projection, action, resolved)
+    if write_scope:
+        result.update(purpose='report', **write_scope)
+    assessment_scope = _current_test_assessment(projection, action, resolved)
+    if assessment_scope:
+        result.update(purpose='report', **assessment_scope)
     binding = _verification_binding(projection, action, resolved)
     if binding:
         result.update(purpose='targeted_verification', blocker=binding['blocker'],

@@ -44,6 +44,7 @@ agent:
 goals:
   max_turns: 32
   runtime_policy: report-completion-v2
+  ready_target_mode: soft
   completion_contract: {required_formats: [html], layout_required: false, completion_target: final_ready}
 tool_loop_guardrails:
   hard_stop_enabled: true
